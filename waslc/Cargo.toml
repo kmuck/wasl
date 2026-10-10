@@ -1,0 +1,16 @@
+[package]
+name = "waslc"
+version = "0.1.0"
+edition = "2024"
+description = "Compiler library for the WaSL language"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+wasm-encoder = "0.261"
+wit-component = "0.261"
+wit-parser = "0.261"
+
+[dev-dependencies]
+wasmparser = "0.261"
+wasmtime = "49"

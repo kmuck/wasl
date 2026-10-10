@@ -1,0 +1,4 @@
+[package]
+namespace = "example"
+name = "calc"
+version = "0.1.0"

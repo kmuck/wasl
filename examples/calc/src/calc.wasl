@@ -1,0 +1,63 @@
+world calculator {
+  export math;
+}
+
+global pi: f64 = 3.14159;
+global calls: mut u32 = 0;
+
+interface math {
+
+  func fib(n: u32) -> u64 {
+    calls = calls + 1;
+    local a: u64 = 0;
+    local b: u64 = 1;
+    local i: u32;
+    while (i < n) {
+      local next: u64 = a + b;
+      a = b;
+      b = next;
+      i = i + 1;
+    }
+    return a;
+  }
+
+  func fib_rec(n: u32) -> u64 {
+    calls = calls + 1;
+    if (n <= 1) {
+      return u64(n);
+    }
+    return fib_rec(n - 1) + fib_rec(n - 2);
+  }
+
+  func circle_area(r: f64) -> f64 {
+    calls = calls + 1;
+    return pi * r * r;
+  }
+
+  func clamp(x: s32, lo: s32, hi: s32) -> s32 {
+    calls = calls + 1;
+    return util::clamp(x, lo, hi);
+  }
+
+  func get_calls() -> u32 {
+    return calls;
+  }
+
+  func reset() {
+    calls = 0;
+  }
+
+}
+
+interface util {
+
+  func clamp(x: s32, lo: s32, hi: s32) -> s32 {
+    if (x < lo) {
+      return lo;
+    } else if (x > hi) {
+      return hi;
+    }
+    return x;
+  }
+
+}

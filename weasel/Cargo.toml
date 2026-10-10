@@ -1,0 +1,17 @@
+[package]
+name = "weasel"
+version = "0.1.0"
+edition = "2024"
+description = "Build tool for the WaSL language"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+waslc = { version = "0.1.0", path = "../waslc" }
+wasmtime = "49"
+
+[dev-dependencies]
+tempfile = "3"
