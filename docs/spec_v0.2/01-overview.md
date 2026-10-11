@@ -36,6 +36,7 @@ v0.2 accepts every valid v0.1 program with the same behavior, with these excepti
 | Change | Effect on v0.1 programs |
 |---|---|
 | `match` and `case` become keywords (§ v2.3.2) | an identifier named `match` or `case` is now E0005 |
+| every keyword used as an identifier is E0005 (§ v2.3.2) | `local while: u32 = 1;` reports E0005 instead of E0100 |
 | `'` starts a char literal (§ v2.3.1) | `'` reports E0007 instead of E0001 |
 | the initial value of a global is a constant expression checked by the typing rules (§ v2.4.12) | `global g: u32 = 1 + 1;` reports E0409 instead of E0100 |
 | a lone `_` is a token (§ v2.3.1) | `local _: u32;` reports E0100 instead of E0004 |

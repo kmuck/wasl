@@ -61,6 +61,8 @@ static constructor include with as self
 
 `match` and `case` were not reserved in v0.1 (§ v2.1.3).
 
+Any keyword, type name or reserved word written where an identifier is expected is E0005: `local record: u32 = 1;`, `local while: u32 = 1;`, `func string() { }`. v0.1 reported some of these cases as E0100 (§ v2.1.3).
+
 The case names `some`, `none`, `ok` and `err` are **not** keywords: they are always written after `option::` or `result::`, or after `case` (§ v2.4.9), so they never collide with user names.
 
 ## v2.3.3 Complete grammar of v0.2

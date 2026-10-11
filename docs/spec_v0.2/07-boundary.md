@@ -13,6 +13,8 @@ The derivation by erasure of § 2.6 and § 13.1 is extended:
 
 **Which interfaces appear.** An interface appears in the WIT of the package if a world exports it (§ 13.1), or if an interface that appears uses one of its types. An interface of the second kind that no world exports is a **types-only interface** in WIT: the world that uses it imports it implicitly, as WIT requires, and the host has nothing to provide for it. This is only possible if it declares no function: an exported function that uses a type of an interface that has functions and is not exported by the same world is an error (E0209).
 
+**No cycle of `use`.** WIT forbids interfaces whose `use` form a cycle. Among the interfaces that appear, if `a` uses a type of `b` and `b`, directly or through other interfaces, uses a type of `a`, it is an error (E0213), reported on the first interface of the cycle in declaration order, with each step of the cycle. The fix is to move the shared types to an interface of their own. Interfaces that do not appear in the WIT can use each other's types freely.
+
 ```wasl
 world shop {
   export orders;
@@ -76,9 +78,9 @@ An exported function is lifted with these canonical options **only when its sign
 | `memory` | the memory of the core module, exported as `cm32p2_memory` |
 | `realloc` | the allocator of § v2.7.4, exported as `cm32p2_realloc` |
 | `string-encoding` | `utf8`, the encoding of WaSL strings |
-| `post-return` | the function that releases the result (§ v2.7.4), exported as `cm32p2|<interface>|<function>_post` |
+| `post-return` | the function that releases the result (§ v2.7.4), exported as `cm32p2|<interface>|<function>_post`, only for a function whose result goes through memory |
 
-The module has a memory and a `realloc` only if at least one of its exported functions needs them: a world whose exported functions only use scalars is built exactly as in v0.1 (§ 13.4), with no memory.
+A function whose result is returned as flat values (a scalar, or no result) has no post-return, even if its parameters go through memory: `func f(s: string) -> u32` needs the memory and `realloc`, but leaves nothing to release. The module has a memory and a `realloc` only if at least one of its exported functions needs them: a world whose exported functions only use scalars is built exactly as in v0.1 (§ 13.4), with no memory.
 
 Because parameters beyond 16 flat values now go through memory, exported functions have **no parameter limit**: E0205 (§ 6.5) is no longer reported.
 

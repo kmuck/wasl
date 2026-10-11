@@ -53,6 +53,27 @@ interface geo {
     branch(list<tree>),
   }
 
+  // Recursive without `option` or `list`: `lit` is a value (§ v2.2.5).
+  variant expr {
+    lit(s32),
+    neg(expr),
+    add(tuple<expr, expr>),
+  }
+
+  func eval(e: expr) -> s32 {
+    match (e) {
+      case lit(n) {
+        return n;
+      }
+      case neg(x) {
+        return 0 - eval(x);
+      }
+      case add(xy) {
+        return eval(xy.0) + eval(xy.1);
+      }
+    }
+  }
+
   func area(s: shape) -> u32 {
     match (s) {
       case circle(r) {
@@ -327,6 +348,14 @@ interface h {
       i = i + 1;
     }
     return sum;
+  }
+
+  func eval_expr() -> s32 {
+    // -(1 + (2 + -10)) = 7
+    return geo::eval(geo::expr::neg(geo::expr::add(tuple(
+      geo::expr::lit(1),
+      geo::expr::add(tuple(geo::expr::lit(2), geo::expr::neg(geo::expr::lit(10)))),
+    ))));
   }
 
   func chain_sum(n: u32) -> u32 {
@@ -654,6 +683,7 @@ fn variants() {
     assert_eq!(call("chain-sum", &[U32(1)]), U32(0));
     assert_eq!(call("chain-sum", &[U32(100)]), U32(4950));
     assert_eq!(call("tree-total", &[]), U32(6));
+    assert_eq!(call("eval-expr", &[]), S32(7));
 }
 
 #[test]

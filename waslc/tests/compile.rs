@@ -153,6 +153,8 @@ fn invalid_programs() {
         ("local record: u32 = 1;", Code::ReservedKeyword),
         ("local match: u32 = 1;", Code::ReservedKeyword),
         ("local import: u32 = 1;", Code::ReservedKeyword),
+        ("local while: u32 = 1;", Code::ReservedKeyword),
+        ("local string: u32 = 1;", Code::ReservedKeyword),
         ("local q: u32 = 1 @ 2;", Code::InvalidChar),
         ("local s: string = \"abc;", Code::InvalidString),
         ("local s: string = \"\\q\";", Code::InvalidString),

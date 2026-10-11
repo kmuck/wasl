@@ -13,6 +13,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- E0213: interfaces of the WIT that use each other's types in a cycle, which WIT forbids, are reported with the steps of the cycle. They used to stop the compiler with an internal error (E9999).
+
+### Changed
+
+- E0211 now only rejects types that have no value (§ v2.2.5): a variant has a value as soon as one of its cases has one, so `variant expr { lit(u32), neg(expr) }` is accepted (it used to need `neg(option<expr>)`), and `result<a>` has the value `err`. The message names the field without a value and the possible fixes.
+- The v0.2 specification states what `waslc` 0.2 already does: E0208 and E0209 also apply to the types of exported interfaces, E0005 to every keyword used as an identifier, one recursion group for all GC types, post-return only when the result goes through memory, long literals in global initializers, and the exact output and error messages of `weasel call`.
+
 ## [0.2.0] - 2026-10-11
 
 Data on the WasmGC heap, implementing the [v0.2 specification](docs/spec_v0.2/README.md) (provisional until v0.3). The target program, [`examples/invoice`](examples/invoice), builds and runs in the continuous integration.
