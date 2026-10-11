@@ -162,7 +162,13 @@ interface tree {
 }
 ```
 
-- Every cycle of types must go through an `option` or a `list`, which can be empty; otherwise no value of the type can be built, and the declaration is an error (E0211): `record a { next: a }`, `record b { pair: tuple<u32, b> }`.
+- Every declared type must have at least one value that a program can build; otherwise the declaration is an error (E0211). A type **has a value** when:
+  - a scalar, `string`, `list<T>` or `option<T>`: always (a list can be empty, an option can be `none`);
+  - a `record` or a `tuple`: all its fields or elements have a value;
+  - a `variant`: at least one of its cases has a value, a case without payload always having one; a `result` likewise (`result<a>` has the value `err`);
+  - an `enum` or a `flags` type: always.
+
+  Types that contain themselves are judged by this rule, computed from the types that obviously have a value. `variant expr { lit(u32), neg(expr) }` has a value (`lit(1)`, then `neg(lit(1))`), so it is valid. `record a { next: a }`, `record b { pair: tuple<u32, b> }` and `variant v { a(v), b(tuple<u32, v>) }` have none: building one would already need one. The error names the first field without a value of a record, and suggests the fixes: a case without payload, or an `option` or a `list` in the cycle.
 - The Component Model does not allow recursive types. A recursive type can therefore only be used **inside** a component: using it, directly or through another type, in the signature of an exported function is an error (E0208).
 
 ## v2.2.6 Immutable and mutable lists

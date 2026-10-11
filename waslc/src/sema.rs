@@ -231,14 +231,16 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         }
     }
     // Functions were pushed in interface order, which is the order of `funcs`.
+    let inhabited = inhabited_decls(&types);
     for (id, decl) in decls.iter().enumerate() {
-        if let Some(path) = empty_cycle(&types, id) {
+        if !inhabited[id] {
             return err(
                 Code::EmptyType,
                 decl.name.span,
                 format!(
-                    "type `{}` has no value: it contains itself through {path} without going through an `option` or a `list`",
-                    decl.name.name
+                    "type `{}` has no value: {}; add a case without payload, or go through an `option` or a `list`",
+                    decl.name.name,
+                    why_empty(&types, &inhabited, id)
                 ),
             );
         }
@@ -485,48 +487,72 @@ fn check_members(decl: &ast::TypeDecl) -> Result<()> {
     Ok(())
 }
 
-/// A cycle of types that does not go through an `option` or a `list` (§ v2.2.5): returns
-/// the path of the cycle, from the declared type back to itself.
-fn empty_cycle(types: &Types, id: DeclId) -> Option<String> {
-    fn visit(
-        types: &Types,
-        ty: Type,
-        target: DeclId,
-        path: &mut Vec<Type>,
-        seen: &mut Vec<Type>,
-    ) -> bool {
-        let children = match types.kind(ty) {
-            // A list or an option can be empty: the cycle stops here.
-            TypeKind::List { .. } | TypeKind::Option(_) => return false,
-            _ => types.children(ty),
-        };
-        for child in children {
-            if matches!(types.kind(child), TypeKind::Decl(d) if *d == target) {
-                path.push(child);
-                return true;
+/// Which declared types have a value (§ v2.2.5): a record has one if all its fields have
+/// one, a variant if at least one of its cases has one (a case without payload always
+/// has one), an enum and a flags type always. Among the other types, a tuple has a value
+/// if all its elements have one, a `result` if one of its cases has one, and the others
+/// (scalars, `string`, `list`, `option`) always. Computed as a least fixed point.
+fn inhabited_decls(types: &Types) -> Vec<bool> {
+    let mut inhabited = vec![false; types.decls.len()];
+    loop {
+        let mut changed = false;
+        for id in 0..types.decls.len() {
+            if !inhabited[id] && decl_has_value(types, &inhabited, id) {
+                inhabited[id] = true;
+                changed = true;
             }
-            if seen.contains(&child) {
-                continue;
-            }
-            seen.push(child);
-            path.push(child);
-            if visit(types, child, target, path, seen) {
-                return true;
-            }
-            path.pop();
         }
-        false
+        if !changed {
+            return inhabited;
+        }
     }
-    let start = types.decl_type_of(id);
-    let mut path = Vec::new();
-    if !visit(types, start, id, &mut path, &mut Vec::new()) {
-        return None;
+}
+
+fn decl_has_value(types: &Types, inhabited: &[bool], id: DeclId) -> bool {
+    match &types.decls[id].kind {
+        DeclKind::Record(fields) => fields.iter().all(|f| has_value(types, inhabited, f.ty)),
+        DeclKind::Variant(cases) => cases
+            .iter()
+            .any(|c| c.payload.is_none_or(|t| has_value(types, inhabited, t))),
+        DeclKind::Enum(_) | DeclKind::Flags(_) => true,
     }
-    let decls: Vec<String> = path
-        .iter()
-        .filter_map(|&t| types.decl(t).map(|(_, d)| format!("`{}`", d.name)))
-        .collect();
-    Some(decls.join(" → "))
+}
+
+fn has_value(types: &Types, inhabited: &[bool], ty: Type) -> bool {
+    match types.kind(ty) {
+        TypeKind::Prim(_)
+        | TypeKind::Char
+        | TypeKind::String
+        | TypeKind::List { .. }
+        | TypeKind::Option(_) => true,
+        TypeKind::Tuple(elems) => elems.iter().all(|&t| has_value(types, inhabited, t)),
+        TypeKind::Result { ok, err } => {
+            ok.is_none_or(|t| has_value(types, inhabited, t))
+                || err.is_none_or(|t| has_value(types, inhabited, t))
+        }
+        TypeKind::Decl(d) => inhabited[*d],
+    }
+}
+
+/// Why declared type `id`, which has no value, has none: its first field without a value,
+/// or the cases of a variant.
+fn why_empty(types: &Types, inhabited: &[bool], id: DeclId) -> String {
+    let display = |t: Type| format!("`{}`", types.display(t));
+    match &types.decls[id].kind {
+        DeclKind::Record(fields) => {
+            let field = fields
+                .iter()
+                .find(|f| !has_value(types, inhabited, f.ty))
+                .expect("a record without a value has a field without a value");
+            format!(
+                "its field `{}` of type {} has no value, so building one already needs one",
+                field.name,
+                display(field.ty)
+            )
+        }
+        _ => "each of its cases contains a type without a value, so building one already needs one"
+            .to_string(),
+    }
 }
 
 /// Types used at the boundary of a component by `world` (§ v2.2.7): no recursive type
@@ -866,9 +892,29 @@ mod tests {
             code("interface i { record b { pair: tuple<u32, b> } }"),
             Code::EmptyType
         );
+        // `result<a>` has the value `err`: `b` and `a` have values.
+        ok("interface i { record a { b: b } record b { r: result<a> } }");
         assert_eq!(
-            code("interface i { record a { b: b } record b { r: result<a> } }"),
+            code("interface i { record a { b: b } record b { r: result<a, a> } }"),
             Code::EmptyType
+        );
+        // A variant has a value as soon as one of its cases has one (§ v2.2.5).
+        ok("interface i { variant expr { lit(u32), neg(expr), add(tuple<expr, expr>) } }");
+        ok("interface i { variant v { a(v), b } }");
+        assert_eq!(
+            code("interface i { variant v { a(v), b(tuple<u32, v>) } }"),
+            Code::EmptyType
+        );
+        assert_eq!(
+            code("interface i { variant v { a(w) } record w { v: v } }"),
+            Code::EmptyType
+        );
+        let e = analyze_str("interface i { record node { value: u32, next: node } }").unwrap_err();
+        assert!(
+            e.message
+                .contains("its field `next` of type `i::node` has no value"),
+            "{}",
+            e.message
         );
         assert_eq!(
             code("interface i { func f(x: nope) { } }"),

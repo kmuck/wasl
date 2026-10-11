@@ -26,7 +26,7 @@ The order of § 11.2 becomes:
 | E0208 | recursive type in the signature of an exported function | `func root() -> node` with `record node { children: list<node> }` |
 | E0209 | exported function using a type of an interface that has functions and is not exported by the world | § v2.7.1 |
 | E0210 | type with the name of a top-level declaration | `record math { … }` with `interface math` |
-| E0211 | type without a value: a cycle that does not go through `option` or `list` | `record a { next: a }` |
+| E0211 | type without a value: no value of it can be built (§ v2.2.5) | `record a { next: a }`, `variant v { a(v) }` |
 | E0212 | flags type with more than 32 flags | |
 | E0213 | interfaces of the WIT that use each other's types in a cycle | `record r { s: b::s }` in `a` and `func f(r: a::r)` in `b`, both exported (§ v2.7.1) |
 | E0305 | unknown type | `local x: nope = …;`, `local x: invoices::fib = …;` with a function `fib` |
