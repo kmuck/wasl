@@ -1,7 +1,7 @@
 //! Syntax tree produced by the parser.
 
 use crate::source::Span;
-use crate::types::Type;
+use crate::types::Prim;
 
 #[derive(Debug, Clone)]
 pub struct Ident {
@@ -98,7 +98,7 @@ pub struct TypeExpr {
 
 #[derive(Debug, Clone)]
 pub enum TypeExprKind {
-    Prim(Type),
+    Prim(Prim),
     Char,
     String,
     List {

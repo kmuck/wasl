@@ -4,7 +4,7 @@
 //! typed and every language rule is checked. Code generation has nothing left to verify.
 
 use crate::ast::{BinOp, UnaryOp};
-use crate::types::Type;
+use crate::types::{DeclId, Type, Types};
 
 pub type GlobalId = usize;
 pub type FuncId = usize;
@@ -14,6 +14,7 @@ pub type LocalId = u32;
 
 #[derive(Debug, Default)]
 pub struct Program {
+    pub types: Types,
     pub globals: Vec<GlobalDef>,
     pub funcs: Vec<FuncDef>,
     pub interfaces: Vec<InterfaceDef>,
@@ -39,6 +40,8 @@ pub struct GlobalDef {
 pub struct InterfaceDef {
     pub name: String,
     pub funcs: Vec<FuncId>,
+    /// Declared types, in declaration order.
+    pub types: Vec<DeclId>,
 }
 
 #[derive(Debug)]
