@@ -6,20 +6,22 @@ use std::collections::HashMap;
 use wasm_encoder::{
     ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ExportKind, ExportSection, FieldType, Function, FunctionSection,
-    GlobalSection, GlobalType, HeapType, Ieee32, Ieee64, Instruction, Module, RefType, StorageType,
-    StructType, SubType, TypeSection, ValType,
+    GlobalSection, GlobalType, HeapType, Ieee32, Ieee64, Instruction, MemorySection, MemoryType,
+    Module, RefType, StorageType, StructType, SubType, TypeSection, ValType,
 };
 
 use crate::ast::{BinOp, UnaryOp};
-use crate::diag::{Code, Diagnostic, Result};
+use crate::diag::Result;
 use crate::hir::{
     Builtin, Const, Expr, ExprKind, FuncDef, FuncId, GlobalId, MatchArm, Place, Program, Stmt,
 };
 use crate::types::{DeclKind, Prim, Type, TypeKind, Types};
 use crate::wit::kebab;
 
+mod boundary;
 mod helpers;
 
+use boundary::Boundary;
 use helpers::Helper;
 
 /// String literals longer than this are built from a data segment rather than with
@@ -58,27 +60,16 @@ pub fn generate(
         mark_assigned_globals(&program.funcs[f].body, &mut used_globals);
     }
 
-    // Values that cross the boundary without an adapter: scalars (§ v2.7).
-    for &iface in &world.exports {
-        for &f in &program.interfaces[iface].funcs {
-            let func = &program.funcs[f];
-            let mut crossing = func.params.iter().map(|(_, t)| *t).chain(func.ret);
-            if let Some(ty) = crossing.find(|&t| !types.is_scalar(t)) {
-                return Err(Diagnostic::without_span(
-                    Code::Unsupported,
-                    format!(
-                        "exported function `{}::{}` takes or returns a `{}`, which cannot cross the component boundary yet",
-                        program.interfaces[iface].name,
-                        func.name,
-                        types.display(ty)
-                    ),
-                ));
-            }
-        }
-    }
-
     let func_index = index_map(&used_funcs);
-    let mut cx = ModuleCx::new(types, func_index);
+    let mut cx = ModuleCx::new(program, func_index);
+    let exported: Vec<FuncId> = world
+        .exports
+        .iter()
+        .flat_map(|&i| program.interfaces[i].funcs.iter().copied())
+        .collect();
+    let memory = exported
+        .iter()
+        .any(|&f| boundary::needs_memory(types, &program.funcs[f]));
 
     // Shared immutable values (§ v2.6.4, § v2.6.2): string literals and cases without
     // payload. Their globals come first, so that the initializers of the program's
@@ -103,6 +94,8 @@ pub fn generate(
             })
         })
         .collect();
+    // The top of the scratch buffer (§ v2.7.4) comes after the program's globals.
+    cx.scratch_top = memory.then_some(next);
 
     let mut bodies = Vec::new();
     let mut signatures = Vec::new();
@@ -115,6 +108,21 @@ pub fn generate(
         signatures.push(cx.signature(params, results));
         bodies.push(FuncGen::run(&mut cx, func));
     }
+    // Core exports (§ v2.7.5): an adapter for each function that takes or returns a heap
+    // value, the function itself otherwise.
+    let mut core_exports: Vec<(FuncId, u32, Option<u32>)> = Vec::new();
+    for &f in &exported {
+        let func = &program.funcs[f];
+        if boundary::needs_adapter(types, func) {
+            let adapter = cx.helper(Helper::Boundary(Boundary::Adapter(f)));
+            let post_return = boundary::result_in_memory(types, func)
+                .then(|| cx.helper(Helper::Boundary(Boundary::PostReturn)));
+            core_exports.push((f, adapter, post_return));
+        } else {
+            core_exports.push((f, cx.func_index[f].unwrap(), None));
+        }
+    }
+    let realloc = memory.then(|| cx.helper(Helper::Boundary(Boundary::Realloc)));
     // Helpers can request other helpers.
     let mut done = 0;
     while done < cx.helpers.len() {
@@ -151,18 +159,42 @@ pub fn generate(
             &ConstExpr::extended(init),
         );
     }
+    if let Some(top) = cx.scratch_top {
+        debug_assert_eq!(top as usize, globals.len() as usize);
+        globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(0),
+        );
+    }
 
-    // Standard Component Model export names: `cm32p2|<interface>|<function>`.
+    // Standard Component Model export names (§ 13.3, § v2.7.3).
     let mut exports = ExportSection::new();
-    for &iface in &world.exports {
-        let iface_def = &program.interfaces[iface];
-        let path = interface_names[iface]
+    for (f, index, post_return) in core_exports {
+        let func = &program.funcs[f];
+        let path = interface_names[func.interface]
             .as_deref()
             .expect("exported interface present in the WIT");
-        for &f in &iface_def.funcs {
-            let name = format!("cm32p2|{path}|{}", kebab(&program.funcs[f].name));
-            exports.export(&name, ExportKind::Func, cx.func_index[f].unwrap());
+        let name = format!("cm32p2|{path}|{}", kebab(&func.name));
+        exports.export(&name, ExportKind::Func, index);
+        if let Some(post_return) = post_return {
+            exports.export(&format!("{name}_post"), ExportKind::Func, post_return);
         }
+    }
+    let mut memories = MemorySection::new();
+    if let Some(realloc) = realloc {
+        memories.memory(MemoryType {
+            minimum: 0,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        });
+        exports.export("cm32p2_memory", ExportKind::Memory, 0);
+        exports.export("cm32p2_realloc", ExportKind::Func, realloc);
     }
 
     // Types: the GC types in one recursion group, then the function types (§ v2.6.5).
@@ -188,6 +220,9 @@ pub fn generate(
     let mut module = Module::new();
     module.section(&type_section);
     module.section(&functions);
+    if realloc.is_some() {
+        module.section(&memories);
+    }
     module.section(&globals);
     module.section(&exports);
     if !cx.data.is_empty() {
@@ -351,6 +386,7 @@ fn field(val: ValType, mutable: bool) -> FieldType {
 
 /// State shared by the functions of the module: types, helpers, shared globals.
 struct ModuleCx<'a> {
+    program: &'a Program,
     types: &'a Types,
     /// The GC types, in one recursion group (§ v2.6.1).
     rec: Vec<SubType>,
@@ -374,15 +410,18 @@ struct ModuleCx<'a> {
     strings: HashMap<String, u32>,
     shared_cases: HashMap<(Type, u32), u32>,
     global_index: Vec<Option<u32>>,
+    /// The global `$scratch_top` (§ v2.7.4), when the module has a memory.
+    scratch_top: Option<u32>,
     /// Passive data segments of the long string literals.
     data: Vec<Vec<u8>>,
     data_index: HashMap<String, u32>,
 }
 
 impl<'a> ModuleCx<'a> {
-    fn new(types: &'a Types, func_index: Vec<Option<u32>>) -> Self {
+    fn new(program: &'a Program, func_index: Vec<Option<u32>>) -> Self {
         ModuleCx {
-            types,
+            program,
+            types: &program.types,
             rec: Vec::new(),
             heap: HashMap::new(),
             arrays: HashMap::new(),
@@ -396,6 +435,7 @@ impl<'a> ModuleCx<'a> {
             strings: HashMap::new(),
             shared_cases: HashMap::new(),
             global_index: Vec::new(),
+            scratch_top: None,
             data: Vec::new(),
             data_index: HashMap::new(),
         }

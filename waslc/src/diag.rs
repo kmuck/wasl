@@ -23,7 +23,6 @@ pub enum Code {
     DuplicateFunc,
     UnknownExportedInterface,
     DuplicateExport,
-    TooManyParams,
     DuplicateName,
     DuplicateMember,
     RecursiveExport,
@@ -66,8 +65,6 @@ pub enum Code {
     // Input/output and internal errors (outside the specification)
     Io,
     UnknownWorld,
-    /// Construct of the v0.2 specification that the compiler does not implement yet.
-    Unsupported,
     Internal,
 }
 
@@ -87,7 +84,6 @@ impl Code {
             Code::DuplicateFunc => "E0202",
             Code::UnknownExportedInterface => "E0203",
             Code::DuplicateExport => "E0204",
-            Code::TooManyParams => "E0205",
             Code::DuplicateName => "E0206",
             Code::DuplicateMember => "E0207",
             Code::RecursiveExport => "E0208",
@@ -126,7 +122,6 @@ impl Code {
             Code::RedundantCase => "E0507",
             Code::Io => "E9000",
             Code::UnknownWorld => "E9001",
-            Code::Unsupported => "E9002",
             Code::Internal => "E9999",
         }
     }

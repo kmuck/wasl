@@ -268,9 +268,8 @@ fn invoice_example() {
     };
     assert_eq!(lines(&wit), lines(&spec[start..end]));
 
-    // Heap values cannot cross the component boundary yet.
-    let err = analysis.build("billing").unwrap_err();
-    assert_eq!(err.code, Code::Unsupported);
+    // It builds, with an adapter for each exported function (§ v2.7.5).
+    analysis.build("billing").unwrap();
 }
 
 /// Invalid programs of v0.2 (§ v2.10.2): each line in a function of the target program.

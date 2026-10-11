@@ -13,9 +13,6 @@ mod body;
 
 use body::{FnCx, always_returns};
 
-/// Maximum number of parameters of an exported function without linear memory (§ 6.5).
-const MAX_EXPORTED_PARAMS: usize = 16;
-
 /// Maximum number of flags of a flags type (§ v2.2.3).
 const MAX_FLAGS: usize = 32;
 
@@ -290,23 +287,12 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         });
     }
 
-    // 4. Exported functions: parameter limit (§ 6.5) and types that can cross the
-    //    boundary (§ v2.2.7).
+    // 4. Exported functions: types that can cross the boundary (§ v2.2.7). They have no
+    //    parameter limit (§ v2.7.3).
     for world in &program.worlds {
         for &iface_id in &world.exports {
             let iface = interfaces[iface_id];
             for func in iface.funcs() {
-                if func.params.len() > MAX_EXPORTED_PARAMS {
-                    return err(
-                        Code::TooManyParams,
-                        func.name.span,
-                        format!(
-                            "exported function `{}` has {} parameters, the maximum is {MAX_EXPORTED_PARAMS}",
-                            func.name.name,
-                            func.params.len()
-                        ),
-                    );
-                }
                 let def = &program.funcs[scopes[iface_id].funcs[func.name.name.as_str()]];
                 let signature: Vec<Type> =
                     def.params.iter().map(|(_, t)| *t).chain(def.ret).collect();
@@ -971,26 +957,6 @@ mod tests {
         );
         assert_eq!(code("global x: u8 = 300;"), Code::LiteralOutOfRange);
         assert_eq!(code("global x: u32 = -1;"), Code::InvalidOperator);
-        let params = (0..17)
-            .map(|i| {
-                format!(
-                    "p{}: u32",
-                    [
-                        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o",
-                        "p", "q"
-                    ][i]
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        assert_eq!(
-            code(&format!(
-                "world w {{ export a; }} interface a {{ func f({params}) {{ }} }}"
-            )),
-            Code::TooManyParams
-        );
-        // An internal interface may exceed the limit.
-        assert!(analyze_str(&format!("interface a {{ func f({params}) {{ }} }}")).is_ok());
     }
 
     fn const_init(p: &hir::Program, i: usize) -> Const {
