@@ -100,11 +100,10 @@ For an exported function `f` of the interface `i`, the core export `cm32p2|<i>|<
 
 | Type | Lifting |
 |---|---|
-| scalars | the value itself (§ 13.4) |
+| v0.1 scalars, `char`, enum, flags | the value itself (§ 13.4); for flags, the bit set; the Canonical ABI guarantees that a `char` is a Unicode scalar value |
 | `string` | `(ptr, len)`: a new `$bytes` of `len` bytes, copied from `ptr`. The Canonical ABI guarantees valid UTF-8. |
 | `list<T>` | `(ptr, len)`: a new `$list_T` whose element `k` is lifted from `ptr + k × size(T)` |
-| record | each field lifted in order, then `struct.new` |
-| enum | the discriminant |
+| record, tuple | each field or element lifted in order, then `struct.new` |
 | variant, `result` | the discriminant selects the case; its payload is lifted, then the case is created (§ v2.6.2) |
 | `option<T>` | discriminant 0: `ref.null`; 1: the payload, lifted and boxed if needed (§ v2.6.3) |
 

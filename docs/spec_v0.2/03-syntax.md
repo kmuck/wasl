@@ -9,19 +9,30 @@ This chapter amends chapter 4 (lexical structure) and replaces the grammar of ch
 ```ebnf
 string_literal = '"' { string_char | escape } '"' ;
 string_char    = (* any UTF-8 character except '"', '\', line feed and carriage return *) ;
-escape         = "\" ( '"' | "\" | "n" | "r" | "t" | "u{" hex_digit { hex_digit } "}" ) ;
+escape         = "\" ( '"' | "'" | "\" | "n" | "r" | "t" | "u{" hex_digit { hex_digit } "}" ) ;
 hex_digit      = digit | "a" | … | "f" | "A" | … | "F" ;
 ```
 
-- A string literal is the only place, with comments, where non-ASCII characters are allowed (amends § 4.1): `"Grüße"` is valid.
+- String and char literals are the only places, with comments, where non-ASCII characters are allowed (amends § 4.1): `"Grüße"` is valid.
 - `\u{…}` has one to six hexadecimal digits and designates a Unicode scalar value: at most `10FFFF`, and not a surrogate (`D800` to `DFFF`).
 - A literal cannot span several lines: a line feed or carriage return before the closing `"` is an error, like a missing closing `"`, an unknown escape (`\a`) or an invalid `\u{…}` (E0006).
 
+**Char literals.**
+
+```ebnf
+char_literal = "'" ( char_char | escape ) "'" ;
+char_char    = (* any UTF-8 character except "'", '\', line feed and carriage return *) ;
+```
+
+A char literal contains exactly one Unicode scalar value, written directly or as an escape: `'a'`, `'é'`, `'\''`, `'\u{1F600}'`. An empty literal `''`, several characters `'ab'`, a missing closing `'`, or an invalid escape is an error (E0007).
+
 **Punctuation.** `.`, `[` and `]` are new tokens (amends § 4.1 and § 4.8). `.` after the digits of a number still starts a float literal (§ 4.6), so `1.5` is a float and `inv.status` is a field access.
+
+**Tuple indexes.** Right after a `.` token, digits are always read as an integer literal, never as a float: `t.0.1` is `t`, `.`, `0`, `.`, `1`, the element 1 of the element 0 of `t`.
 
 **Wildcard.** A word made of a single `_` is the token `_`, used only in `result<_, E>` (§ v2.2.2). Any other identifier starting or ending with `_` remains E0004.
 
-The characters `@`, `#`, `$`, `?` and `'` remain invalid (E0001).
+The characters `@`, `#`, `$` and `?` remain invalid (E0001).
 
 ## v2.3.2 Keywords and reserved words
 
@@ -30,20 +41,20 @@ Keywords of v0.2 (amends § 4.4):
 ```
 world interface export global mut local func
 if else while break continue return true false
-record enum variant match case
+record enum variant flags match case
 ```
 
 Type names, also keywords:
 
 ```
 bool s8 s16 s32 s64 u8 u16 u32 u64 f32 f64
-string list option result
+char string list tuple option result
 ```
 
 Reserved words:
 
 ```
-import package use type flags resource tuple char map
+import package use type resource map
 own borrow stream future async await
 static constructor include with as self
 ```
@@ -65,13 +76,14 @@ world             = "world" identifier "{" { export } "}" ;
 export            = "export" identifier ";" ;
 
 interface         = "interface" identifier "{" { interface_item } "}" ;      (* v0.2 *)
-interface_item    = function | record | enum | variant ;                      (* v0.2 *)
+interface_item    = function | record | enum | variant | flags ;              (* v0.2 *)
 
 record            = "record" identifier "{" field { "," field } [ "," ] "}" ;           (* v0.2 *)
 field             = identifier ":" [ "mut" ] type ;                                       (* v0.2 *)
 enum              = "enum" identifier "{" identifier { "," identifier } [ "," ] "}" ;   (* v0.2 *)
 variant           = "variant" identifier "{" case { "," case } [ "," ] "}" ;            (* v0.2 *)
 case              = identifier [ "(" type ")" ] ;                                         (* v0.2 *)
+flags             = "flags" identifier "{" identifier { "," identifier } [ "," ] "}" ;  (* v0.2 *)
 
 global            = "global" identifier ":" [ "mut" ] type "=" expression ";" ;          (* v0.2 *)
 
@@ -81,7 +93,9 @@ parameter         = identifier ":" type ;
 
 (* Types *)
 type              = primitive_type                                                        (* v0.2 *)
+                  | "char"
                   | "string"
+                  | "tuple" "<" type { "," type } ">"
                   | "list" "<" [ "mut" ] type ">"
                   | "option" "<" type ">"
                   | "result" [ "<" result_args ">" ]
@@ -106,7 +120,8 @@ statement         = local_declaration
 
 local_declaration = "local" identifier ":" type [ "=" expression ] ";" ;
 assignment        = place "=" expression ";" ;                                            (* v0.2 *)
-place             = identifier { "." identifier | "[" expression "]" } ;                  (* v0.2 *)
+place             = identifier { selector } ;                                             (* v0.2 *)
+selector          = "." ( identifier | int_literal ) | "[" expression "]" ;              (* v0.2 *)
 if                = "if" "(" expression ")" block [ "else" ( if | block ) ] ;
 while             = "while" "(" expression ")" block ;
 match             = "match" "(" expression ")" "{" match_case { match_case }              (* v0.2 *)
@@ -126,27 +141,32 @@ shift             = additive { ( "<<" | ">>" ) additive } ;
 additive          = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative    = unary { ( "*" | "/" | "%" ) unary } ;
 unary             = ( "-" | "!" ) unary | postfix ;                                       (* v0.2 *)
-postfix           = primary { "." identifier | "[" expression "]" } ;                     (* v0.2 *)
+postfix           = primary { selector } ;                                                (* v0.2 *)
 primary           = int_literal
                   | float_literal
                   | string_literal                                                         (* v0.2 *)
+                  | char_literal                                                           (* v0.2 *)
                   | "true" | "false"
                   | identifier
                   | path                                                                   (* v0.2 *)
                   | call
                   | conversion
                   | record_literal                                                         (* v0.2 *)
+                  | flags_literal                                                          (* v0.2 *)
                   | list_literal                                                           (* v0.2 *)
+                  | tuple_literal                                                          (* v0.2 *)
                   | "(" expression ")" ;
 
 path              = path_head "::" identifier [ "::" identifier ] ;                       (* v0.2 *)
-path_head         = identifier | "string" | "list" | "option" | "result" ;               (* v0.2 *)
+path_head         = identifier | "char" | "string" | "list" | "option" | "result" ;       (* v0.2 *)
 call              = [ path_head "::" [ identifier "::" ] ] identifier "(" [ arguments ] ")" ;   (* v0.2 *)
 arguments         = expression { "," expression } ;
 conversion        = primitive_type "(" expression ")" ;                                   (* v0.2 *)
 record_literal    = type_name "{" field_value { "," field_value } [ "," ] "}" ;           (* v0.2 *)
 field_value       = identifier ":" expression ;                                           (* v0.2 *)
+flags_literal     = type_name "{" [ identifier { "," identifier } [ "," ] ] "}" ;          (* v0.2 *)
 list_literal      = "[" [ expression { "," expression } [ "," ] ] "]" ;                   (* v0.2 *)
+tuple_literal     = "tuple" "(" expression { "," expression } [ "," ] ")" ;               (* v0.2 *)
 ```
 
 ## v2.3.4 Syntactic rules
@@ -156,7 +176,7 @@ In addition to § 5.3. Breaking one of them is a syntax error (E0100).
 **Declarations**
 
 - An interface contains functions and type declarations, in any order. A type can be used before its declaration.
-- Records, enums and variants have at least one field or case: `record r { }` is invalid.
+- Records, enums, variants and flags have at least one field, case or flag: `record r { }` is invalid. Tuples have at least one element: `tuple<>` and `tuple()` are invalid.
 - A world still only contains `export` items: types are not declared in worlds.
 
 **Statements**
@@ -168,10 +188,10 @@ In addition to § 5.3. Breaking one of them is a syntax error (E0100).
 
 **Expressions**
 
-- A `{` directly after a type name starts a record literal. Because the conditions of `if`, `while` and `match` are always in parentheses (§ 5.3), `if (x) { … }` and `line { … }` are never confused.
+- A `{` directly after a type name starts a record literal or a flags literal: a record literal has a `:` after its first name (`line { label: … }`), a flags literal has none (`delivery { paper }`, `delivery { }`). Because the conditions of `if`, `while` and `match` are always in parentheses (§ 5.3), `if (x) { … }` and `line { … }` are never confused.
 - A path has at most two `::`: `status::paid`, `invoices::status::paid`, `invoices::discount::percent(10)`.
 - Field access and indexing apply to any expression of the right type, and chain from left to right: `all[i].customer`, `sample().lines[0]`.
-- Commas separate the fields of a record literal and the elements of a list literal; a trailing comma is allowed, which keeps multi-line literals uniform.
+- Commas separate the fields of a record literal, the flags of a flags literal and the elements of a list or a tuple; a trailing comma is allowed, which keeps multi-line literals uniform.
 
 ## v2.3.5 Precedence
 

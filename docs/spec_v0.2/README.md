@@ -2,7 +2,7 @@
 
 Status: **draft, not implemented**. This version is written from its target program, [`examples/invoice`](../../examples/invoice), following the example-driven rule of § 16.1 of v0.1. The v0.1 compiler rejects that program.
 
-Version 0.2 adds **data on the WasmGC heap**: `string`, `record`, `enum`, `variant`, `list<T>`, `option<T>` and `result<T, E>`. Values of these types live in the garbage-collected heap of the runtime, are shared by reference inside a component, and are copied through linear memory only when they cross the boundary of a component.
+Version 0.2 adds **data on the WasmGC heap**, and with it every WIT type except resources and async types: `char`, `string`, `list<T>`, `tuple<…>`, `option<T>`, `result<T, E>`, `record`, `enum`, `variant` and `flags`. Values of these types live in the garbage-collected heap of the runtime, are shared by reference inside a component, and are copied through linear memory only when they cross the boundary of a component.
 
 ```wasl
 world billing {
@@ -55,7 +55,7 @@ v0.2 **extends** [v0.1](../spec_v0.1/README.md). Everything v0.1 specifies still
 | v2.1 | [Overview](01-overview.md) | Scope, design decisions, what changes for v0.1 programs |
 | v2.2 | [Types](02-types.md) | The new types, type declarations in interfaces, recursion |
 | v2.3 | [Syntax](03-syntax.md) | New tokens and keywords, complete grammar of v0.2 |
-| v2.4 | [Typing](04-typing.md) | Literals, constructors, field access, indexing, `match`, equality, built-in functions |
+| v2.4 | [Typing](04-typing.md) | Literals, constructors, field access, indexing, `match`, operators, built-in functions |
 | v2.5 | [Runtime semantics](05-semantics.md) | References, aliasing, mutability, evaluation order, traps |
 | v2.6 | [Mapping to WasmGC](06-wasmgc-mapping.md) | Representation of each type, generated code |
 | v2.7 | [Component boundary](07-boundary.md) | Generated WIT, Canonical ABI, copies through linear memory |
@@ -66,4 +66,4 @@ v0.2 **extends** [v0.1](../spec_v0.1/README.md). Everything v0.1 specifies still
 
 ## Conventions
 
-Those of v0.1 (§ 1, *Conventions* of its README). In addition, a **heap type** is any type introduced by v0.2 except `enum` (§ v2.2.1); a **scalar type** is a v0.1 type or an enum.
+Those of v0.1 (§ 1, *Conventions* of its README). In addition, a **scalar type** is a v0.1 type, `char`, an enum or a flags type, and a **heap type** is any other type introduced by v0.2 (§ v2.2.1).

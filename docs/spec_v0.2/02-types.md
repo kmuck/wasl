@@ -2,39 +2,53 @@
 
 ## v2.2.1 Overview
 
-v0.2 adds seven kinds of types to the eleven primitive types of § 7.1. They are exactly the WIT types of the same name.
+v0.2 adds ten kinds of types to the eleven primitive types of § 7.1. They are exactly the WIT types of the same name.
 
 | Type | Values | Declared | WasmGC representation (chapter v2.6) |
 |---|---|---|---|
+| `char` | a Unicode scalar value | built in | `i32` |
 | `string` | an immutable sequence of Unicode scalar values, stored as UTF-8 | built in | `(ref $bytes)`, an array of bytes |
+| `list<T>`, `list<mut T>` | a sequence of a fixed number of values of type `T` | built in | `(ref $list_T)`, an array |
+| `tuple<T1, …, Tn>` | a fixed group of unnamed values | built in | `(ref $tuple_…)`, a struct |
+| `option<T>` | `none`, or `some` with a value of type `T` | built in | a nullable reference |
+| `result<T, E>` | `ok` with a value of type `T`, or `err` with a value of type `E` | built in | a variant with two cases |
 | `record r { … }` | a group of named fields | in an interface | `(ref $r)`, a struct |
 | `enum e { … }` | one of a list of named cases | in an interface | `i32` |
 | `variant v { … }` | one of a list of named cases, each with an optional payload | in an interface | `(ref $v)`, a struct per case |
-| `list<T>`, `list<mut T>` | a sequence of a fixed number of values of type `T` | built in | `(ref $list_T)`, an array |
-| `option<T>` | `none`, or `some` with a value of type `T` | built in | a nullable reference |
-| `result<T, E>` | `ok` with a value of type `T`, or `err` with a value of type `E` | built in | a variant with two cases |
+| `flags f { … }` | a set of named flags | in an interface | `i32`, one bit per flag |
 
 Categories used by the rules of this document:
 
-- **scalar types**: the primitive types of v0.1 and the enums;
-- **heap types**: every other type of this table;
-- **types with payload cases**: `variant`, `option` and `result`; together with `enum`, they are the **case types**, the types a `match` inspects (§ v2.4.9).
+- **scalar types**: the primitive types of v0.1, `char`, enums and flags. They are values, represented by a Wasm number;
+- **heap types**: every other type of this table. Their values are references to objects of the WasmGC heap (§ v2.5.1);
+- **case types**: enums, variants, options and results, the types a `match` inspects (§ v2.4.9).
 
-As in v0.1, all types are distinct (§ 7.3): two records with the same fields are two different types, and no type converts implicitly to another. The only exception is the read-only view of a mutable list (§ v2.2.6).
+As in v0.1, all types are distinct (§ 7.3): two records with the same fields are two different types, `list<T>` and `list<mut T>` are two different types, and no type converts implicitly to another.
 
 ## v2.2.2 Built-in types
+
+### `char`
+
+- A `char` is a Unicode scalar value: a code point from `U+0000` to `U+10FFFF`, surrogates (`U+D800` to `U+DFFF`) excluded. Every `char` value is valid.
+- It is written as a literal, `'a'`, `'é'`, `'\n'`, `'\u{1F600}'` (§ v2.3.1), compared with `==`, `!=`, `<`, `<=`, `>`, `>=` in code point order (§ v2.4.10), and converted to its code point with `u32(c)` (§ v2.4.11).
+- It is a scalar: a local of type `char` without initial value is `'\u{0}'`.
 
 ### `string`
 
 - A string is an immutable sequence of Unicode scalar values, encoded in UTF-8. Its length (`string::len`) is its number of **bytes**.
-- A string is always valid UTF-8: every way to build one (literals, `+`, `string::from_bytes`, the component boundary) guarantees it.
+- A string is always valid UTF-8: every way to build one (literals, `+`, `string::from_bytes`, `string::from_chars`, the component boundary) guarantees it.
 - Strings are compared by content with `==` and `!=`, and concatenated with `+` (§ v2.4.10).
 
 ### `list<T>` and `list<mut T>`
 
-- A list has a **fixed length**, chosen when it is created, like a WebAssembly array (§ v2.6.1).
-- `list<T>` gives read-only access to its elements; `list<mut T>` also allows `xs[i] = e;`.
+- A list has a **fixed length**, chosen when it is created, like a WebAssembly array: it never grows nor shrinks (§ v2.6.1).
+- A `list<T>` is **immutable**: once it is created, none of its elements ever changes, whoever holds it. A `list<mut T>` also allows `xs[i] = e;`. The two are distinct types (§ v2.2.6).
 - `T` is any type, including another list: `list<list<u8>>`. `mut` only applies to the elements of the list it is written on: in `list<mut list<u8>>` the outer list is mutable, the inner ones are not.
+
+### `tuple<T1, …, Tn>`
+
+- A tuple groups one or more values of fixed types, without names: `tuple<u32, u64>`.
+- It is created with `tuple(e1, …, en)` and its elements are read with `t.0`, `t.1`… (§ v2.4.6). Its elements are immutable, as in a record without `mut` field.
 
 ### `option<T>`
 
@@ -53,7 +67,7 @@ As in v0.1, all types are distinct (§ 7.3): two records with the same fields ar
 
 ## v2.2.3 Declared types
 
-`record`, `enum` and `variant` types are declared **inside an interface**, next to its functions, exactly as in WIT.
+`record`, `enum`, `variant` and `flags` types are declared **inside an interface**, next to its functions, exactly as in WIT.
 
 ```wasl
 interface invoices {
@@ -62,6 +76,12 @@ interface invoices {
     draft,
     sent,
     paid,
+  }
+
+  flags delivery {
+    email,
+    paper,
+    urgent,
   }
 
   record line {
@@ -80,6 +100,7 @@ interface invoices {
     customer: string,
     lines: list<line>,
     discount: option<discount>,
+    delivery: delivery,
     status: mut status,
   }
 
@@ -88,27 +109,32 @@ interface invoices {
 }
 ```
 
+In each kind of declaration, the fields, cases or flags are separated by commas; a trailing comma is allowed. There is at least one, and two of them cannot have the same name (E0207).
+
 ### `record`
 
-- A record has one or more **fields**, each with a name and a type, separated by commas; a trailing comma is allowed.
-- A field declared `mut` can be assigned (`inv.status = status::paid;`); a field without `mut` is set once, when the record is created.
-- Two fields of the same record cannot have the same name (E0207).
+- A record has one or more **fields**, each with a name and a type.
+- A field declared `mut` can be assigned (`inv.status = status::paid;`); a field without `mut` is set once, when the record is created. This is exactly the mutability of WasmGC struct fields (§ v2.6.1).
 
 ### `enum`
 
-- An enum has one or more **cases**, names without payload.
-- Two cases of the same enum cannot have the same name (E0207).
+An enum has one or more **cases**, names without payload.
 
 ### `variant`
 
-- A variant has one or more cases, each with an optional payload of **one** type: `percent(u8)`. To carry several values, the payload is a record.
-- Two cases of the same variant cannot have the same name (E0207).
+A variant has one or more cases, each with an optional payload of **one** type: `percent(u8)`. To carry several values, the payload is a record or a tuple.
+
+### `flags`
+
+- A flags type has one to 32 **flags** (E0212 beyond, the limit of the Component Model). A value is a set of these flags: any combination, including none or all of them.
+- It is written as a literal listing the flags it contains, `delivery { email, urgent }`, or `delivery { }` for the empty set; `f.paper` tells whether a flag is in the set; `|` and `&` give the union and the intersection (§ v2.4.10).
+- Flags values are scalars, like integers: they have no identity and are copied, never shared. A local of a flags type without initial value is the empty set.
 
 ### Names
 
 - The names of the types and functions of an interface form **one namespace**, as in WIT: a type and a function of the same interface cannot have the same name (E0206). Two functions with the same name remain E0202.
 - A type cannot have the name of a top-level declaration of the package (a world, an interface or a global, E0210). This keeps every path unambiguous: in `a::b`, `a` is either a type of the current interface or an interface, never both.
-- Field and case names live in their record, enum or variant. A field can have the name of a type (`status: mut status`).
+- Field, case and flag names live in their type. A field can have the name of a type (`status: mut status`).
 - Every name follows the identifier rules of § 4.3, and converts to WIT by replacing `_` with `-` (§ 13.2): `unit_price` → `unit-price`, `invoice_error` → `invoice-error`.
 
 ## v2.2.4 Naming a type
@@ -121,7 +147,7 @@ interface invoices {
 
 There is only one level of path, as for function calls (§ 9.1). Using an unknown type, or naming a function, an interface or a world where a type is expected, is an error (E0305).
 
-The built-in types are keywords and are written the same everywhere: `string`, `list<u8>`, `option<invoices::line>`.
+The built-in types are keywords and are written the same everywhere: `string`, `list<u8>`, `option<invoices::line>`, `tuple<char, u32>`.
 
 ## v2.2.5 Recursive types
 
@@ -136,28 +162,36 @@ interface tree {
 }
 ```
 
-- Every cycle of types must go through an `option` or a `list`, which can be empty; otherwise no value of the type can be built, and the declaration is an error (E0211): `record a { next: a }`.
+- Every cycle of types must go through an `option` or a `list`, which can be empty; otherwise no value of the type can be built, and the declaration is an error (E0211): `record a { next: a }`, `record b { pair: tuple<u32, b> }`.
 - The Component Model does not allow recursive types. A recursive type can therefore only be used **inside** a component: using it, directly or through another type, in the signature of an exported function is an error (E0208).
 
-## v2.2.6 The read-only view of a mutable list
+## v2.2.6 Immutable and mutable lists
 
-`list<mut T>` can be used wherever `list<T>` is expected, with the same `T`: as an argument, a returned value, an assigned value, a field value or an initial value. Nothing is converted or copied: the receiver gets the same list, with read-only access.
+`list<T>` and `list<mut T>` are two distinct types. Neither can be used where the other is expected (E0400); going from one to the other always creates a new list:
+
+| From | To | With |
+|---|---|---|
+| `list<mut T>` | `list<T>` | `list::freeze(xs)`: a new immutable list with the elements of `xs` |
+| `list<T>` or `list<mut T>` | `list<mut T>` | `list::copy(xs)`: a new mutable list with the elements of `xs` |
 
 ```wasl
 func digits() -> list<u8> {
   local d: list<mut u8> = list::filled(3, 0);
   d[0] = 1;
-  return d;          // valid: list<mut u8> is a read-only list<u8>
+  return list::freeze(d);    // `return d;` would be E0400
 }
 ```
 
-- This is the only relation between distinct types in v0.2. It does not apply inside other types: `option<list<mut u8>>` is not an `option<list<u8>>`.
-- `list<T>` means *read-only*, not *immutable*: the elements of a `list<u8>` can change if another part of the program holds the same list as a `list<mut u8>`. Use `list::copy` (§ v2.4.11) to get a list that nobody else can modify.
-- The opposite direction does not exist: a `list<T>` is never a `list<mut T>` (E0400). `list::copy` gives a new `list<mut T>` with the same elements.
+Why immutability is a guarantee and not a read-only view:
+
+- **A `list<T>` can be trusted.** A function that receives or stores a `list<T>` knows that its elements will never change, whatever the rest of the program does. Only `list<mut T>` values can be shared and modified at the same time.
+- **It prepares copy-free boundaries.** With the `gc` option of the Canonical ABI (§ v2.11), an immutable list can be handed to another component by reference, since nobody can modify it; a mutable one must still be copied. The language must therefore know, for every list, that it is really immutable.
+
+Most lists are built once, with a literal, `list::filled` or at the boundary, and need no `freeze`. The copy made by `list::freeze` is the price of building an immutable list element by element; the representation that makes it necessary today is explained in § v2.6.1.
 
 ## v2.2.7 Types in signatures
 
-Any type can be used for parameters, return values, locals, globals, fields, list elements and payloads. The restrictions only concern **exported** functions:
+Any type can be used for parameters, return values, locals, globals, fields, list and tuple elements and payloads. The restrictions only concern **exported** functions:
 
 - no recursive type (E0208, § v2.2.5);
 - every type they use must be declared in an interface that can appear in the WIT of the world (E0209, § v2.7.1).

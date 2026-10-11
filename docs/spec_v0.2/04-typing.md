@@ -1,6 +1,6 @@
 # v2.4 Typing
 
-This chapter extends chapters 8 and 9 to the new types. The general rule of § 8.1 is unchanged: every expression has one type, determined at compile time, and every value has exactly the type its context expects, with the single exception of § v2.2.6.
+This chapter extends chapters 8 and 9 to the new types. The general rule of § 8.1 is unchanged: every expression has one type, determined at compile time, and every value has exactly the type its context expects.
 
 ## v2.4.1 Expected types
 
@@ -10,13 +10,14 @@ The expected type of § 8.2 is extended to the new contexts:
 |---|---|
 | value of a field in a record literal | the type of the field |
 | element of a list literal | the element type of the expected list type, if any |
+| element of `tuple(…)` | the corresponding element type of the expected tuple type, if any |
 | payload of a constructor (`option::some(e)`, `shape::circle(e)`, `result::ok(e)`) | the payload type, when the constructor's type is known |
 | index `xs[e]` | `u32` |
 | `x.f = e;`, `xs[i] = e;` | the type of the field or of the element |
 | expression of `match` | none |
 | operand of `==`, `!=`, `+` | the rules of § 8.2 for binary operators |
 
-String literals, `true` and `false` are never literal-only (§ 8.2): a string literal always has type `string`.
+String and char literals, flags literals, `true` and `false` are never literal-only (§ 8.2): a string literal always has type `string`, a char literal type `char`.
 
 **Values whose type comes from the context.** `option::none`, `result::ok(…)`, `result::err(…)`, `result::ok`, `result::err` and the empty list `[]` cannot determine their own type: they take the expected type. Where there is none, or where the expected type is not of the right kind, it is an error: E0408 when there is no expected type (`match (option::none) { … }`), E0400 when the expected type is another type (`local x: u32 = option::none;`).
 
@@ -26,7 +27,7 @@ A path `a::b` or `a::b::c`, as an expression or before a call, is resolved by th
 
 | First name | Meaning | Examples |
 |---|---|---|
-| `string`, `list` | a built-in function (§ v2.4.11) | `string::len(s)`, `list::filled(3, 0)` |
+| `string`, `list`, `char` | a built-in function (§ v2.4.11) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)` |
 | `option`, `result` | a constructor of the built-in type | `option::none`, `result::ok(sum)` |
 | a type of the current interface | a case of that enum or variant | `status::paid`, `discount::fixed(500)` |
 | an interface of the package, followed by one name | a function of that interface (§ 9.1) | `pricing::apply(sum, d)` |
@@ -34,9 +35,11 @@ A path `a::b` or `a::b::c`, as an expression or before a call, is resolved by th
 
 An unknown first name is E0300 (§ 9.1); a path that names a type that is not an enum or a variant, or an unknown case, is E0307; a case written with the wrong payload is E0407 (§ v2.4.7).
 
-## v2.4.3 String literals
+## v2.4.3 String and char literals
 
 A string literal has type `string`. Its value is the UTF-8 encoding of its characters, after replacing the escapes (§ v2.3.1).
+
+A char literal has type `char`. Its value is its single Unicode scalar value.
 
 ## v2.4.4 Record literals
 
@@ -52,18 +55,24 @@ invoices::line { label: "pen", quantity: 3, unit_price: 150 }
 
 ## v2.4.5 Field access
 
-`e.f`, where `e` has a record type and `f` is one of its fields, has the type of the field. If `e` is not a record, or the record has no field `f`, it is an error (E0306).
+- `e.f`, where `e` has a record type and `f` is one of its fields, has the type of the field.
+- `e.f`, where `e` has a flags type and `f` is one of its flags, has type `bool`: `true` if the set contains `f`.
+- `e.k`, where `e` has a tuple type and `k` is an integer literal smaller than the number of its elements, has the type of element `k`, counting from 0: `t.0`, `t.1`.
+
+Any other field access is an error (E0306): an unknown field or flag, `t.2` on a tuple of two elements, `n.x` with `n: u32`.
 
 ## v2.4.6 Lists
 
 **Literals.** `[e1, e2, …]` creates a new list with these elements.
 
-- With an expected type `list<T>` or `list<mut T>`, every element has type `T` and the literal has the expected type.
+- With an expected type `list<T>` or `list<mut T>`, every element has type `T` and the literal has the expected type: the same literal builds an immutable or a mutable list.
 - Without an expected type, the element type is the type of the first element that is not literal-only (§ 8.2), and the literal has type `list<T>`; if every element is literal-only, or the list is empty, it is E0408.
 
 **Indexing.** `e[i]`, where `e` has type `list<T>` or `list<mut T>` and `i` has type `u32`, has type `T`. Indexing anything else is E0403. An index outside the list traps (§ v2.5.5).
 
-Strings cannot be indexed: their elements are bytes of an encoding, not characters. `string::bytes(s)[i]` reads the byte at position `i`.
+Strings cannot be indexed: their elements are bytes of an encoding, not characters. `string::bytes(s)[i]` reads the byte at position `i`, `string::chars(s)[i]` the character at position `i`.
+
+**Tuples.** `tuple(e1, …, en)` creates a new tuple. With an expected type `tuple<T1, …, Tn>`, each `ek` has type `Tk`, and the number of elements must match (E0400). Without an expected type, the tuple has the types of its elements (E0408 if one of them is literal-only).
 
 ## v2.4.7 Enum cases and variant constructors
 
@@ -73,6 +82,8 @@ Strings cannot be indexed: their elements are bytes of an encoding, not characte
 - Writing a payload for a case that has none, or omitting it for a case that has one, is E0407: `status::paid()`, `discount::percent`.
 
 The type is always written before the case, even when the expected type would determine it: `return status::paid;`, never `return paid;`.
+
+**Flags literals.** `f { a, b }`, where `f` is a flags type, is the set of the flags listed, written in declaration order, each at most once (E0412); `f { }` is the empty set. An unknown flag is E0307. A flags literal is written with its type, like a record literal: `invoices::delivery { paper }` from another interface.
 
 ## v2.4.8 `option` and `result` constructors
 
@@ -112,31 +123,41 @@ The table of § 8.3 is extended:
 | Operators | Operand type | Result type |
 |---|---|---|
 | `==` `!=` | enum, same type | `bool` |
+| `==` `!=` | flags, same type | `bool` |
+| `\|` `&` | flags, same type | same type |
+| `==` `!=` `<` `<=` `>` `>=` | `char` | `bool` |
 | `==` `!=` | `string` | `bool` |
 | `+` | `string` | `string` |
 
-- Two enum values are equal when they are the same case. Two strings are equal when they have the same bytes.
+- Two enum values are equal when they are the same case; two flags values when they contain the same flags; two chars when they are the same code point, and `<` compares code points. Two strings are equal when they have the same bytes.
+- `|` on flags is the union of two sets, `&` their intersection: `(d & delivery { paper, email }) == delivery { }` tells that `d` contains neither.
 - `+` on strings creates a new string, the concatenation of the two operands.
-- Every other operator on a heap type or an enum is E0403. In particular, records, variants, lists, options and results cannot be compared with `==` (§ v2.11): compare their fields, or use `match`.
+- Every other operator on a heap type, an enum, a flags type or a `char` is E0403. In particular, records, tuples, variants, lists, options and results cannot be compared with `==` (§ v2.11): compare their fields, or use `match`.
 - `<`, `<=`, `>` and `>=` do not apply to strings; ordering strings is the job of a library.
 
-## v2.4.11 Built-in functions
+## v2.4.11 Built-in functions and `char` conversions
 
-Six functions are part of the language. They are called like functions of an interface, with the name of the type as path; they are not values and cannot be redefined.
+Ten functions are part of the language. They are called like functions of an interface, with the name of the type as path; they are not values and cannot be redefined. In this table, `list<T>` in a parameter accepts both a `list<T>` and a `list<mut T>`.
 
 | Function | Type | Result |
 |---|---|---|
 | `string::len(s)` | `(string) -> u32` | the number of bytes of `s` |
 | `string::bytes(s)` | `(string) -> list<u8>` | the UTF-8 bytes of `s` |
 | `string::from_bytes(b)` | `(list<u8>) -> option<string>` | a new string with the bytes of `b` if they are valid UTF-8, `option::none` otherwise |
+| `string::chars(s)` | `(string) -> list<char>` | a new list with the characters of `s` |
+| `string::from_chars(cs)` | `(list<char>) -> string` | a new string with the characters of `cs` |
+| `char::from_u32(n)` | `(u32) -> option<char>` | the char whose code point is `n`, `option::none` if `n` is not a Unicode scalar value |
 | `list::len(xs)` | `(list<T>) -> u32` | the number of elements of `xs` |
-| `list::filled(n, x)` | `(u32, T) -> list<mut T>` | a new list of `n` elements, all equal to `x` |
-| `list::copy(xs)` | `(list<T>) -> list<mut T>` | a new list with the elements of `xs` |
+| `list::filled(n, x)` | `(u32, T) -> list<T>` or `list<mut T>` | a new list of `n` elements, all equal to `x` |
+| `list::copy(xs)` | `(list<T>) -> list<mut T>` | a new mutable list with the elements of `xs` |
+| `list::freeze(xs)` | `(list<mut T>) -> list<T>` | a new immutable list with the elements of `xs` |
 
-- `list::len` and `list::copy` accept a `list<mut T>` through § v2.2.6; `string::from_bytes` accepts a `list<mut u8>`.
-- The `T` of `list::filled` is the element type of the expected list type, or else the type of `x` (E0408 if `x` is literal-only and nothing else gives the type): `local d: list<mut u8> = list::filled(3, 0);`.
-- `string::bytes` does not copy: the result is a read-only view of the bytes of the string, which never change.
-- `list::filled` and `list::copy` are shallow: the elements that are references are shared, not copied (§ v2.5.1).
+- `list::filled` has the expected list type, immutable or mutable; without an expected type, it is a `list<T>`. Its `T` is the element type of the expected list type, or else the type of `x` (E0408 if `x` is literal-only and nothing else gives the type): `local d: list<mut u8> = list::filled(3, 0);`.
+- `list::freeze` only accepts a `list<mut T>`: freezing a list that is already immutable would be a useless copy (E0400).
+- `string::bytes` does not copy: a string never changes, so its bytes are already an immutable `list<u8>`.
+- `list::filled`, `list::copy` and `list::freeze` are shallow: the elements that are references are shared, not copied (§ v2.5.1).
+
+**`char` conversions.** `u32(c)` with `c: char` gives the code point of `c`; it is the only conversion from a `char` (amends § 8.5). A conversion to `char`, or from `char` to any other type, is E0404: not every number is a `char`, and conversions never fail (§ 10.5), so a number becomes a `char` with `char::from_u32`.
 
 This set is deliberately minimal: it is what libraries written in WaSL need to build everything else (number formatting, search, slicing, sorting), following § 1.2, principle 7.
 
@@ -144,9 +165,9 @@ This set is deliberately minimal: it is what libraries written in WaSL need to b
 
 A global can have any type. Its initial value is a **constant expression** (amends § 6.4), which Wasm can evaluate when the instance starts:
 
-- a literal, optionally preceded by `-` (as in v0.1), or a string literal;
-- an enum case, or a constructor of a variant, `option` or `result`, whose payload is a constant expression;
-- a record literal or a list literal whose values are constant expressions.
+- a literal, optionally preceded by `-` (as in v0.1), a string literal or a char literal;
+- an enum case, a flags literal, or a constructor of a variant, `option` or `result` whose payload is a constant expression;
+- a record literal, a list literal or a tuple whose values are constant expressions.
 
 Anything else, such as an operator, a call, a local or another global, is E0409.
 
@@ -162,6 +183,8 @@ A global that is not `mut` always designates the same value, but that value can 
 
 A local of a **heap type** must have an initial value (E0410): there is no zero value for a string, a record or a list, and no `null` (§ v2.1.2). A local of an enum type without initial value is not allowed either (E0410): no case is more of a default than the others.
 
+The other scalar types have a zero value, as numbers do (§ 9.4): `'\u{0}'` for a `char`, the empty set for a flags type.
+
 ## v2.4.14 Assignment
 
 The target of an assignment (§ v2.3.4) is:
@@ -170,7 +193,7 @@ The target of an assignment (§ v2.3.4) is:
 - `e.f`, where `f` is a `mut` field of the record `e`;
 - `e[i]`, where `e` has type `list<mut T>`.
 
-Assigning a field that is not `mut`, or an element of a `list<T>`, is E0505. Assigning a field of a record stored in an immutable global is allowed when the field is `mut`: the global designates the record, not its contents.
+Assigning a field that is not `mut`, an element of a `list<T>`, an element of a tuple or a flag of a flags value is E0505. To change flags, assign the whole value: `d = d | delivery { urgent };`. Assigning a field of a record stored in an immutable global is allowed when the field is `mut`: the global designates the record, not its contents.
 
 ## v2.4.15 Every path returns
 

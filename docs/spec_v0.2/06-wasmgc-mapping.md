@@ -11,9 +11,12 @@ The core module of a world that uses heap types requires the WebAssembly **GC** 
 | WaSL type | `T'` | Type definition |
 |---|---|---|
 | v0.1 types | as in § 7.1 | |
+| `char` | `i32` | the code point |
 | enum | `i32` | the index of the case, in declaration order from 0 |
+| flags | `i32` | bit `k` set when the flag `k` (in declaration order, from 0) is in the set |
 | `string` | `(ref $bytes)` | `$bytes = (array (mut i8))` |
 | `list<T>`, `list<mut T>` | `(ref $list_T)` | `$list_T = (array (mut E))`, with `E` below |
+| `tuple<T1, …, Tn>` | `(ref $tuple)` | `$tuple = (struct (field T1') … (field Tn'))`, immutable fields |
 | record `r` | `(ref $r)` | `$r = (struct (field F1) …)`, one field per WaSL field, in declaration order; a `mut` field is `(mut T')` |
 | variant `v` | `(ref $v)` | see § v2.6.2 |
 | `result<…>` | `(ref $v)` | a variant with the cases `ok` (0) and `err` (1) |
@@ -21,7 +24,9 @@ The core module of a world that uses heap types requires the WebAssembly **GC** 
 
 **List elements.** `E` is `i8` for `bool`, `s8` and `u8`; `i16` for `s16` and `u16`; `T'` otherwise. Packed elements are read with `array.get_s` for signed types and `array.get_u` otherwise, which gives the normalized `i32` of § 12.2.
 
-**Same representation, distinct types.** `string`, `list<u8>`, `list<s8>` and `list<bool>` share `$bytes`; `list<T>` and `list<mut T>` share `$list_T`. Every list is a mutable Wasm array because WebAssembly can only fill an immutable array from a constant or a data segment, not from values computed at run time; read-only access is enforced by the type checker. This is also why `string::bytes` and the view of § v2.2.6 cost nothing.
+**Same representation, distinct types.** `string`, `list<u8>`, `list<s8>` and `list<bool>` share `$bytes`; `list<T>` and `list<mut T>` share `$list_T`.
+
+**Why immutable lists are mutable Wasm arrays today.** WasmGC can only create an immutable array (`(array T)`) with `array.new` (one value repeated), `array.new_fixed` (a number of values fixed in the code) or `array.new_data` / `array.new_elem` (the contents of a segment of the binary). Filling an array element by element, with `array.set` or `array.copy`, requires a mutable array, and a mutable array cannot be turned into an immutable one: `(array (mut T))` is not a subtype of `(array T)`. A list received at the component boundary, the result of `list::freeze` or of `string::chars`, has contents known only at run time, so it can only be built in a mutable array. Every list is therefore an `(array (mut E))`, and the immutability of `list<T>` (§ v2.2.6) is enforced by the type checker: no code that writes to a `list<T>` is ever generated. When WasmGC can build an immutable array from values computed at run time, `list<T>` becomes an `(array E)` without any change to the language. Strings follow the same rule and are never written after they are built; this is why `string::bytes` costs nothing.
 
 **Record fields** use the representation of § 7.1 for scalars (an `i32` for a `u8` field), not packed fields: struct fields are few, and normalized `i32`s need no extension on reads.
 
@@ -70,14 +75,24 @@ A variant `v` is a small family of struct types:
 | `v::c` (no payload) | `global.get` of its shared instance |
 | `option::some(x)` | `x`, or `x` `struct.new $box_T` |
 | `option::none` | `ref.null $X` |
-| `==`, `!=` on enums | `i32.eq`, `i32.ne` |
+| `==`, `!=` on enums, flags, chars | `i32.eq`, `i32.ne` |
+| `<`, `<=`, `>`, `>=` on chars | `i32.lt_u`, `i32.le_u`, `i32.gt_u`, `i32.ge_u` |
+| char literal | `i32.const` of its code point |
+| flags literal `f { a, c }` | `i32.const` with the bits of `a` and `c` |
+| `f.a` on flags | `f` `i32.const (1 << k)` `i32.and` then `i32.const 0` `i32.ne` |
+| `\|`, `&` on flags | `i32.or`, `i32.and` |
+| `tuple(a, b)` | `a` `b` `struct.new $tuple` |
+| `t.k` | `t` `struct.get $tuple k` |
+| `u32(c)` on a char | nothing |
 | `==`, `!=` on strings | a call to a generated helper that compares the lengths, then the bytes |
 | `a + b` on strings | a helper: `array.new_default $bytes` of the total length, then two `array.copy` |
 | `string::len(s)`, `list::len(xs)` | `array.len` |
 | `string::bytes(s)` | nothing: the same reference |
 | `string::from_bytes(b)` | a helper that validates UTF-8, then copies the bytes into a new `$bytes` with `array.copy`; `ref.null` if invalid |
 | `list::filled(n, x)` | `x` `n` `array.new $list_T` |
-| `list::copy(xs)` | `array.new` of the same length, filled with the first element (or `array.new_fixed $list_T 0` if empty), then `array.copy` |
+| `list::copy(xs)`, `list::freeze(xs)` | `array.new` of the same length, filled with the first element (or `array.new_fixed $list_T 0` if empty), then `array.copy` |
+| `string::chars(s)`, `string::from_chars(cs)` | helpers that decode or encode UTF-8 |
+| `char::from_u32(n)` | a helper that checks the range and the surrogates, then boxes the value |
 
 - **Locals of heap types** are non-nullable Wasm locals. This is valid in Wasm because every WaSL local of a heap type is set by its declaration (§ v2.4.13) before any use in the same block, and a match binding is set at the start of its case block.
 - **Long string literals**: Wasm implementations limit the number of operands of `array.new_fixed`. A literal longer than 1,000 bytes is placed in a passive data segment and built with `array.new_data $bytes` each time it is evaluated, which § v2.5.3 allows.

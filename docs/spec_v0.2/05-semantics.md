@@ -15,20 +15,20 @@ local b: invoice = a;
 b.status = status::paid;      // a.status is now paid as well: a and b are the same record
 ```
 
-Sharing is only observable through what can change: `mut` fields and the elements of `list<mut T>`. Strings never change, so whether two strings are the same object cannot be observed; the language has no identity comparison (§ v2.11).
+Sharing is only observable through what can change: `mut` fields and the elements of `list<mut T>`. Strings, tuples and `list<T>` never change, so whether two of them are the same object cannot be observed; the language has no identity comparison (§ v2.11).
 
 `list::filled(n, x)` shares `x` between all the elements: with a record `x` that has `mut` fields, changing the field through one element changes it for all of them.
 
 **Lifetime.** An object lives as long as it is reachable. The runtime's garbage collector reclaims it afterwards; a WaSL program never frees memory and cannot observe when an object is reclaimed.
 
-**Enums** are values, not references: they are copied like numbers.
+**Chars, enums and flags** are values, not references: they are copied like numbers.
 
 ## v2.5.2 Evaluation order
 
 In addition to § 10.1, always from left to right:
 
 - the fields of a record literal, in declaration order (which is the written order, § v2.4.4), then the record is created;
-- the elements of a list literal, then the list is created;
+- the elements of a list literal or of `tuple(…)`, then the list or tuple is created;
 - the payload of a constructor, then the value is created;
 - in `e.f`, `e`; in `e[i]`, `e` then `i`, then the bounds are checked;
 - in an assignment `p = v;`, the object and index designated by `p` first (from left to right), then `v`, then the bounds are checked and the value is stored;
@@ -37,9 +37,9 @@ In addition to § 10.1, always from left to right:
 
 ## v2.5.3 Creation
 
-Each evaluation of a record literal, a non-empty list literal, a constructor with a payload, `+` on strings, `list::filled`, `list::copy` and `string::from_bytes` (when it returns `some`) creates a **new** object. Two evaluations of the same literal create two distinct objects.
+Each evaluation of a record literal, a non-empty list literal, a tuple, a constructor with a payload, `+` on strings, `list::filled`, `list::copy`, `list::freeze`, `string::chars`, `string::from_chars` and `string::from_bytes` (when it returns `some`) creates a **new** object. Two evaluations of the same literal create two distinct objects.
 
-String literals, enum cases, constructors without payload and empty lists may be shared by the implementation: nothing can modify them, so the difference cannot be observed.
+String literals, constructors without payload and empty lists may be shared by the implementation: nothing can modify them, so the difference cannot be observed.
 
 ## v2.5.4 Values at the component boundary
 

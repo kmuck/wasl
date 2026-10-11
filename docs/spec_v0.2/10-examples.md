@@ -33,6 +33,12 @@ interface invoices {
     paid,
   }
 
+  flags delivery {
+    email,
+    paper,
+    urgent,
+  }
+
   record line {
     label: string,
     quantity: u32,
@@ -49,6 +55,7 @@ interface invoices {
     customer: string,
     lines: list<line>,
     discount: option<discount>,
+    delivery: delivery,
     status: mut status,
   }
 
@@ -68,6 +75,7 @@ interface invoices {
         line { label: "notebook", quantity: 2, unit_price: 425 },
       ],
       discount: option::some(discount::percent(10)),
+      delivery: delivery { email, urgent },
       status: status::draft,
     };
   }
@@ -131,6 +139,36 @@ interface invoices {
         return "paid";
       }
     }
+  }
+
+  func needs_printing(inv: invoice) -> bool {
+    return inv.delivery.paper;
+  }
+
+  // First letter of the customer's name.
+  func initial(inv: invoice) -> option<char> {
+    local chars: list<char> = string::chars(inv.customer);
+    if (list::len(chars) == 0) {
+      return option::none;
+    }
+    return option::some(chars[0]);
+  }
+
+  // Number of invoices, and sum of the totals that are valid.
+  func stats(all: list<invoice>) -> tuple<u32, u64> {
+    local sum: u64;
+    local i: u32;
+    while (i < list::len(all)) {
+      match (total(all[i])) {
+        case ok(t) {
+          sum = sum + t;
+        }
+        case err {
+        }
+      }
+      i = i + 1;
+    }
+    return tuple(list::len(all), sum);
   }
 
   func find(all: list<invoice>, customer: string) -> option<invoice> {
@@ -213,9 +251,11 @@ interface text {
 
 What this program shows:
 
-- `invoices` declares five types next to its functions, as a WIT interface does; `pricing` names them with a path (`invoices::discount`).
+- `invoices` declares six types next to its functions, as a WIT interface does; `pricing` names them with a path (`invoices::discount`).
 - `line` and `invoice` are records; `status` is the only `mut` field, so `mark_paid` can change it and nothing else.
 - `discount` is a variant whose cases both carry a payload; `invoice.discount` is optional.
+- `delivery` is a flags type: `sample` builds the set `delivery { email, urgent }`, and `needs_printing` tests one flag with `inv.delivery.paper`.
+- `initial` decodes the customer's name with `string::chars` and returns an `option<char>`; `stats` returns two values in a `tuple<u32, u64>`.
 - `total` returns a `result`; `match` is the only way to look inside an option, a result or a variant.
 - `company` is a global string, initialized with a constant (§ v2.4.12).
 - `find` compares strings with `==` and returns an `option`; `count_unpaid` compares enums with `!=`.
@@ -234,6 +274,12 @@ interface invoices {
     paid,
   }
 
+  flags delivery {
+    email,
+    paper,
+    urgent,
+  }
+
   record line {
     label: string,
     quantity: u32,
@@ -250,6 +296,7 @@ interface invoices {
     customer: string,
     lines: list<line>,
     discount: option<discount>,
+    delivery: delivery,
     status: status,
   }
 
@@ -265,6 +312,9 @@ interface invoices {
   mark-paid: func(inv: invoice) -> result<invoice, invoice-error>;
   summary: func(inv: invoice) -> string;
   status-name: func(s: status) -> string;
+  needs-printing: func(inv: invoice) -> bool;
+  initial: func(inv: invoice) -> option<char>;
+  stats: func(all: list<invoice>) -> tuple<u32, u64>;
   find: func(all: list<invoice>, customer: string) -> option<invoice>;
   count-unpaid: func(all: list<invoice>) -> u32;
 }
@@ -282,20 +332,26 @@ Session (the invoice `$INV` is the result of `sample`):
 $ weasel build billing
 Built `build/billing.wasm`
 $ weasel call invoices::sample
-{number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), status: draft}
-$ INV='{number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), status: draft}'
+{number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: draft}
+$ INV='{number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: draft}'
 $ weasel call invoices::total "$INV"
 ok(1170)
 $ weasel call invoices::summary "$INV"
 "Weasel & Co: invoice 42 for ACME (draft)"
 $ weasel call invoices::mark_paid "$INV"
-ok({number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), status: paid})
-$ weasel call invoices::total '{number: 7, customer: "", lines: [], discount: none, status: draft}'
+ok({number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: paid})
+$ weasel call invoices::total '{number: 7, customer: "", lines: [], discount: none, delivery: {}, status: draft}'
 err(empty-customer)
-$ weasel call invoices::total '{number: 7, customer: "Zed", lines: [{label: "x", quantity: 1, unit-price: 100}], discount: some(fixed(500)), status: sent}'
+$ weasel call invoices::total '{number: 7, customer: "Zed", lines: [{label: "x", quantity: 1, unit-price: 100}], discount: some(fixed(500)), delivery: {paper}, status: sent}'
 err(discount-too-large)
 $ weasel call invoices::count_unpaid "[$INV]"
 1
+$ weasel call invoices::initial "$INV"
+some('A')
+$ weasel call invoices::needs_printing "$INV"
+false
+$ weasel call invoices::stats "[$INV, $INV]"
+(2, 2340)
 $ weasel call invoices::find "[$INV]" '"Zed"'
 none
 ```
@@ -339,5 +395,13 @@ Each line is placed in a valid context, with the types of the target program, an
 | `if (inv.customer < "M") { }` | E0403: strings have no order |
 | `local c: u8 = inv.customer[0];` | E0403: strings cannot be indexed; use `string::bytes(inv.customer)[0]` |
 | `local xs: list<mut u8> = string::bytes(s);` | E0400: a `list<u8>` is not a `list<mut u8>`; use `list::copy` |
+| `return d;` with `d: list<mut u8>` in `func f() -> list<u8>` | E0400: a `list<mut u8>` is not a `list<u8>`; use `list::freeze(d)` |
+| `local c: char = '';` | E0007: a char literal holds exactly one character |
+| `local c: char = char(n);` | E0404: use `char::from_u32(n)`, which can fail |
+| `local n: u64 = u64(c);` with `c: char` | E0404: a `char` only converts to `u32` |
+| `local d: delivery = delivery { urgent, email };` | E0412: flags in declaration order |
+| `inv.delivery.paper = true;` | E0505: write `d = d \| delivery { paper };` on a local |
+| `local t: tuple<u32, u64> = tuple(1, 2, 3);` | E0400: three elements for a tuple of two |
+| `stats(all).2` | E0306: the tuple has two elements |
 | `return paid;` | E0300: write `status::paid` |
 | `f().number = 1;` | E0100: an assignment target starts with a name |

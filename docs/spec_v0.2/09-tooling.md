@@ -10,11 +10,14 @@ The commands of chapter 14 are unchanged, except for the values that `weasel cal
 |---|---|---|
 | `bool`, integers | as in § 14.2 | `true`, `-5`, `42` |
 | floats | as in § 14.2, with `nan` for NaN | `1.5`, `-inf`, `nan` |
+| `char` | a char literal | `'A'`, `'\n'` |
 | `string` | a quoted string with the escapes of § v2.3.1 | `"ACME"`, `"a\"b"` |
 | record | fields in braces | `{label: "pen", quantity: 3, unit-price: 150}` |
 | enum | the case | `paid`, `empty-customer` |
 | variant | the case, with its payload in parentheses | `percent(10)`, `fixed(500)` |
 | `list<T>` | elements in brackets | `[1, 2, 3]`, `[]` |
+| `tuple<…>` | elements in parentheses | `(2, 1170)` |
+| flags | the flags of the set in braces | `{email, urgent}`, `{}` |
 | `option<T>` | `some(…)` or `none` | `some(percent(10))`, `none` |
 | `result<…>` | `ok(…)`, `err(…)`, or `ok` / `err` without payload | `ok(1170)`, `err(no-lines)` |
 

@@ -15,6 +15,12 @@ interface invoices {
     paid,
   }
 
+  flags delivery {
+    email,
+    paper,
+    urgent,
+  }
+
   record line {
     label: string,
     quantity: u32,
@@ -31,6 +37,7 @@ interface invoices {
     customer: string,
     lines: list<line>,
     discount: option<discount>,
+    delivery: delivery,
     status: mut status,
   }
 
@@ -50,6 +57,7 @@ interface invoices {
         line { label: "notebook", quantity: 2, unit_price: 425 },
       ],
       discount: option::some(discount::percent(10)),
+      delivery: delivery { email, urgent },
       status: status::draft,
     };
   }
@@ -113,6 +121,36 @@ interface invoices {
         return "paid";
       }
     }
+  }
+
+  func needs_printing(inv: invoice) -> bool {
+    return inv.delivery.paper;
+  }
+
+  // First letter of the customer's name.
+  func initial(inv: invoice) -> option<char> {
+    local chars: list<char> = string::chars(inv.customer);
+    if (list::len(chars) == 0) {
+      return option::none;
+    }
+    return option::some(chars[0]);
+  }
+
+  // Number of invoices, and sum of the totals that are valid.
+  func stats(all: list<invoice>) -> tuple<u32, u64> {
+    local sum: u64;
+    local i: u32;
+    while (i < list::len(all)) {
+      match (total(all[i])) {
+        case ok(t) {
+          sum = sum + t;
+        }
+        case err {
+        }
+      }
+      i = i + 1;
+    }
+    return tuple(list::len(all), sum);
   }
 
   func find(all: list<invoice>, customer: string) -> option<invoice> {
