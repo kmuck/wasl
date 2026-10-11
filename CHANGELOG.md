@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-11
+
+Data on the WasmGC heap, implementing the [v0.2 specification](docs/spec_v0.2/README.md) (provisional until v0.3). The target program, [`examples/invoice`](examples/invoice), builds and runs in the continuous integration.
+
 ### Added
 
 - `ROADMAP.md`: the direction of WaSL from 0.2 to 1.0, with the target program of each version.
@@ -29,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `match`, `case`, `record`, `enum`, `variant`, `flags`, `char`, `string`, `list`, `tuple`, `option` and `result` are keywords; using a keyword as an identifier reports E0005.
 - The initial value of a global that is not a literal reports E0409 instead of E0100.
 
+- `waslc` and `weasel` 0.2.0.
 - `weasel` creates its wasmtime engine with WasmGC enabled explicitly (§ v2.9.2).
 - `weasel call` prints NaN as `nan`, as WAVE requires.
 

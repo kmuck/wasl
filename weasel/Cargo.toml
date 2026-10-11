@@ -1,6 +1,6 @@
 [package]
 name = "weasel"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Build tool for the WaSL language"
 license = "Apache-2.0"
@@ -10,7 +10,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
-waslc = { version = "0.1.0", path = "../waslc" }
+waslc = { version = "0.2.0", path = "../waslc" }
 wasmtime = { version = "49", features = ["wave"] }
 
 [dev-dependencies]

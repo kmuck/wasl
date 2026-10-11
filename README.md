@@ -2,7 +2,7 @@
 
 **WaSL** (*WebAssembly Super Langage*) is a programming language for the WebAssembly era of the cloud. It sits **one-to-one on top of WebAssembly, the Component Model and WasmGC**, and compiles programs into small, standard WebAssembly components that start in microseconds and plug into any runtime or any other component.
 
-> **Status**: early stage. Version 0.1 (numbers, functions, globals, control flow, interfaces and worlds) is specified and implemented. See the [specification](docs/spec_v0.1/README.md). Version 0.2 (data on the WasmGC heap) is [specified](docs/spec_v0.2/README.md), provisionally until v0.3, and not implemented yet.
+> **Status**: early stage. Version 0.1 (numbers, functions, globals, control flow, interfaces and worlds) is specified and implemented. See the [specification](docs/spec_v0.1/README.md). Version 0.2 (data on the WasmGC heap) is [specified](docs/spec_v0.2/README.md), provisionally until v0.3, and implemented.
 
 ```wasl
 world calculator {
@@ -68,7 +68,7 @@ The road there:
 | Version | Content |
 |---|---|
 | **0.1** (done) | Numbers, functions, globals, control flow, interfaces and worlds; components callable with `weasel call` |
-| **0.2** (specified) | Data on the WasmGC heap: strings, chars, records, tuples, enums, variants, flags, lists, options, results ([spec](docs/spec_v0.2/README.md)) |
+| **0.2** (done) | Data on the WasmGC heap: strings, chars, records, tuples, enums, variants, flags, lists, options, results ([spec](docs/spec_v0.2/README.md)) |
 | **0.3** | Composing with other components: imports, WIT dependencies with `wkg`, resources |
 | **0.4** | Async and WASI 0.3: `async func`, streams, futures; CLI programs (`wasi:cli/run`) and HTTP services (`wasi:http/handler`); `weasel run`, `serve` |
 | **0.5** | Standard library (text, console, HTTP, JSON); `weasel test`, `fmt`, `publish` |

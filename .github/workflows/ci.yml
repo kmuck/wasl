@@ -31,3 +31,14 @@ jobs:
           workspaces: ${{ matrix.crate }}
       - run: cargo build --locked --all-targets
       - run: cargo test --locked
+      # The target program of the version (ROADMAP.md): built and called with weasel.
+      - name: Run examples/invoice
+        if: matrix.crate == 'weasel'
+        working-directory: examples/invoice
+        run: |
+          weasel() { cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- "$@"; }
+          weasel build billing
+          sample=$(weasel call invoices::sample)
+          echo "sample: $sample"
+          test "$(weasel call invoices::total "$sample")" = "ok(1170)"
+          test "$(weasel call invoices::summary "$sample")" = '"Weasel & Co: invoice 42 for ACME (draft)"'
