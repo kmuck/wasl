@@ -43,12 +43,12 @@ string list option result
 Reserved words:
 
 ```
-import package use type flags resource tuple char map vec
+import package use type flags resource tuple char map
 own borrow stream future async await
 static constructor include with as self
 ```
 
-`match`, `case` and `vec` were not reserved in v0.1 (§ v2.1.3).
+`match` and `case` were not reserved in v0.1 (§ v2.1.3).
 
 The case names `some`, `none`, `ok` and `err` are **not** keywords: they are always written after `option::` or `result::`, or after `case` (§ v2.4.9), so they never collide with user names.
 

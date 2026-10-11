@@ -32,7 +32,7 @@ As in v0.1, all types are distinct (§ 7.3): two records with the same fields ar
 
 ### `list<T>` and `list<mut T>`
 
-- A list has a **fixed length**, chosen when it is created, like a WebAssembly array. Growable sequences (`vec<T>`) come later (chapter 16).
+- A list has a **fixed length**, chosen when it is created, like a WebAssembly array (§ v2.6.1).
 - `list<T>` gives read-only access to its elements; `list<mut T>` also allows `xs[i] = e;`.
 - `T` is any type, including another list: `list<list<u8>>`. `mut` only applies to the elements of the list it is written on: in `list<mut list<u8>>` the outer list is mutable, the inner ones are not.
 
