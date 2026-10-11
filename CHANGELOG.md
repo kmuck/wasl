@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `ROADMAP.md`: the direction of WaSL from 0.2 to 1.0, with the target program of each version.
 - `waslc` parses the whole v0.2 syntax: string and char literals, type declarations in interfaces, composite types, `match`, field accesses, indexes, record, flags, list and tuple literals. Constructs that the compiler cannot compile yet are reported as `E9002`.
+- `record`, `enum`, `variant` and `flags` declarations in interfaces, and the built-in types `char`, `string`, `list`, `tuple`, `option` and `result` in signatures and declarations, with their errors (E0206 to E0212, E0305).
+- The WIT of a package contains the types of its interfaces, and types-only interfaces used through `use`.
 
 ### Changed
 

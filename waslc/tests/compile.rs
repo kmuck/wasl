@@ -189,3 +189,57 @@ fn invalid_programs() {
         .unwrap();
     assert!(global_init.contains("E0409"), "{global_init}");
 }
+
+/// Types in the WIT: declarations, `use` of types-only interfaces, erased `mut`
+/// (§ v2.7.1).
+#[test]
+fn wit_of_types() {
+    let analysis = analyze_files(&[(
+        "src/shop.wasl",
+        "world shop { export orders; }
+         interface types {
+           record item { name: string, price: u64 }
+         }
+         interface orders {
+           enum status { draft, paid_late }
+           flags delivery { email, paper }
+           variant discount { percent(u8), fixed(u64), none }
+           record order {
+             items: list<mut types::item>,
+             status: mut status,
+             delivery: delivery,
+             discount: option<discount>,
+             totals: tuple<u32, u64>,
+             check: result<_, status>,
+             done: result,
+             first: char,
+           }
+           record item { label: string }
+           func cheapest(items: list<types::item>) -> u32 { return 0; }
+           func mine(i: item, j: types::item) -> result<order, status> { return mine(i, j); }
+         }
+         interface internal { record hidden { a: u32 } }",
+    )])
+    .unwrap();
+    let wit = analysis.wit().unwrap();
+    for expected in [
+        "interface types {\n  record item {\n    name: string,\n    price: u64,\n  }\n}",
+        "use types.{item as types-item};",
+        "enum status {\n    draft,\n    paid-late,\n  }",
+        "flags delivery {\n    email,\n    paper,\n  }",
+        "variant discount {\n    percent(u8),\n    fixed(u64),\n    none,\n  }",
+        "items: list<types-item>,",
+        "status: status,",
+        "discount: option<discount>,",
+        "totals: tuple<u32, u64>,",
+        "check: result<_, status>,",
+        "done: result,",
+        "first: char,",
+        "cheapest: func(items: list<types-item>) -> u32;",
+        "mine: func(i: item, j: types-item) -> result<order, status>;",
+        "world shop {\n  export orders;\n}",
+    ] {
+        assert!(wit.contains(expected), "{expected}\n{wit}");
+    }
+    assert!(!wit.contains("hidden"), "{wit}");
+}

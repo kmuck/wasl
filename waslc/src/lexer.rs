@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::diag::{Code, Result, err};
 use crate::source::{FileId, Span};
-use crate::types::Type;
+use crate::types::Prim;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -18,7 +18,7 @@ pub enum TokenKind {
     /// Char literal.
     Char(char),
     /// Primitive type name (`u32`, `f64`…).
-    Type(Type),
+    Type(Prim),
 
     // Keywords
     World,
@@ -256,7 +256,7 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "tuple" => TokenKind::KwTuple,
         "option" => TokenKind::KwOption,
         "result" => TokenKind::KwResult,
-        _ => return Type::from_keyword(word).map(TokenKind::Type),
+        _ => return Prim::from_keyword(word).map(TokenKind::Type),
     })
 }
 
@@ -730,7 +730,7 @@ mod tests {
                 Ident("calls".into()),
                 Colon,
                 Mut,
-                Type(crate::types::Type::U32),
+                Type(crate::types::Prim::U32),
                 Eq,
                 Int(0),
                 Semi,

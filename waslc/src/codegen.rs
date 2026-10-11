@@ -6,6 +6,7 @@ use wasm_encoder::{
 };
 
 use crate::ast::{BinOp, UnaryOp};
+use crate::diag::{Code, Diagnostic, Result};
 use crate::hir::{Const, Expr, ExprKind, FuncDef, FuncId, GlobalId, Place, Program, Stmt};
 use crate::types::Type;
 use crate::wit::kebab;
@@ -14,7 +15,11 @@ use crate::wit::kebab;
 /// call transitively and the globals they use.
 ///
 /// `interface_names` gives the canonical WIT name of each exported interface.
-pub fn generate(program: &Program, world: usize, interface_names: &[Option<String>]) -> Vec<u8> {
+pub fn generate(
+    program: &Program,
+    world: usize,
+    interface_names: &[Option<String>],
+) -> Result<Vec<u8>> {
     let world = &program.worlds[world];
 
     // Functions and globals reachable from the exports.
@@ -35,6 +40,23 @@ pub fn generate(program: &Program, world: usize, interface_names: &[Option<Strin
             _ => {}
         });
         mark_assigned_globals(&program.funcs[f].body, &mut used_globals);
+    }
+    for (id, func) in program.funcs.iter().enumerate() {
+        let scalar = func
+            .locals
+            .iter()
+            .chain(&func.ret)
+            .all(|t| t.as_prim().is_some())
+            && func.params.iter().all(|(_, t)| t.as_prim().is_some());
+        if used_funcs[id] && !scalar {
+            return Err(Diagnostic::without_span(
+                Code::Unsupported,
+                format!(
+                    "function `{}::{}` uses types other than numbers and `bool`, which cannot be compiled yet",
+                    program.interfaces[func.interface].name, func.name
+                ),
+            ));
+        }
     }
     let func_index = index_map(&used_funcs);
     let global_index = index_map(&used_globals);
@@ -102,7 +124,7 @@ pub fn generate(program: &Program, world: usize, interface_names: &[Option<Strin
     module.section(&globals);
     module.section(&exports);
     module.section(&code);
-    module.finish()
+    Ok(module.finish())
 }
 
 /// Maps each used item to its index in the module.

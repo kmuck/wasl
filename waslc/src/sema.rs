@@ -8,10 +8,13 @@ use crate::ast::{self, BinOp, ExprKind, Ident, Item, StmtKind, UnaryOp};
 use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, Const, FuncId, InterfaceId, LocalId, Place};
 use crate::source::Span;
-use crate::types::Type;
+use crate::types::{CaseDef, DeclId, DeclKind, FieldDef, Type, TypeDecl, TypeKind, Types};
 
 /// Maximum number of parameters of an exported function without linear memory (§ 6.5).
 const MAX_EXPORTED_PARAMS: usize = 16;
+
+/// Maximum number of flags of a flags type (§ v2.2.3).
+const MAX_FLAGS: usize = 32;
 
 /// Top-level declaration.
 #[derive(Clone, Copy)]
@@ -65,51 +68,180 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         names.insert(&name.name, entry);
     }
 
-    // 2. Interface functions (§ 6.3).
+    // 2. Items of the interfaces (§ 6.3, § v2.2.3).
     let mut program = hir::Program::default();
+    let mut types = Types::default();
+    types.interface_names = interfaces.iter().map(|i| i.name.name.clone()).collect();
     let mut funcs: Vec<&ast::Func> = Vec::new();
-    let mut func_names: Vec<HashMap<&str, FuncId>> = Vec::new();
+    let mut decls: Vec<&ast::TypeDecl> = Vec::new();
+    let mut scopes: Vec<InterfaceScope> = Vec::new();
     for (iface_id, iface) in interfaces.iter().enumerate() {
-        let mut by_name = HashMap::new();
-        let mut ids = Vec::new();
-        if let Some(decl) = iface.types().next() {
-            return unsupported(decl.name.span, "type declarations");
-        }
-        for func in iface.funcs() {
-            if by_name.contains_key(func.name.name.as_str()) {
-                return err(
-                    Code::DuplicateFunc,
-                    func.name.span,
-                    format!(
-                        "function `{}` is already declared in interface `{}`",
-                        func.name.name, iface.name.name
-                    ),
-                );
+        let mut scope = InterfaceScope::default();
+        let mut func_ids = Vec::new();
+        let mut decl_ids = Vec::new();
+        for item in &iface.items {
+            let name = match item {
+                ast::InterfaceItem::Func(f) => &f.name,
+                ast::InterfaceItem::Type(t) => &t.name,
+            };
+            let previous = if scope.funcs.contains_key(name.name.as_str()) {
+                Some("a function")
+            } else if scope.types.contains_key(name.name.as_str()) {
+                Some("a type")
+            } else {
+                None
+            };
+            match (item, previous) {
+                (ast::InterfaceItem::Func(_), Some("a function")) => {
+                    return err(
+                        Code::DuplicateFunc,
+                        name.span,
+                        format!(
+                            "function `{}` is already declared in interface `{}`",
+                            name.name, iface.name.name
+                        ),
+                    );
+                }
+                (_, Some(previous)) => {
+                    return err(
+                        Code::DuplicateName,
+                        name.span,
+                        format!(
+                            "`{}` is already declared as {previous} in interface `{}`: types and functions of an interface share one namespace",
+                            name.name, iface.name.name
+                        ),
+                    );
+                }
+                (_, None) => {}
             }
-            let id = funcs.len();
-            funcs.push(func);
-            by_name.insert(func.name.name.as_str(), id);
-            ids.push(id);
-            let params = func
-                .params
-                .iter()
-                .map(|p| Ok((p.name.name.clone(), prim(&p.ty)?)))
-                .collect::<Result<_>>()?;
-            let ret = func.ret.as_ref().map(prim).transpose()?;
-            program.funcs.push(hir::FuncDef {
-                name: func.name.name.clone(),
-                interface: iface_id,
-                params,
-                ret,
-                locals: Vec::new(),
-                body: Vec::new(),
-            });
+            match item {
+                ast::InterfaceItem::Func(func) => {
+                    let id = funcs.len();
+                    funcs.push(func);
+                    scope.funcs.insert(&func.name.name, id);
+                    func_ids.push(id);
+                }
+                ast::InterfaceItem::Type(decl) => {
+                    if let Some(top) = names.get(decl.name.name.as_str()) {
+                        return err(
+                            Code::TypeNamedLikeTopLevel,
+                            decl.name.span,
+                            format!(
+                                "type `{}` has the name of {} of the package",
+                                decl.name.name,
+                                top.describe()
+                            ),
+                        );
+                    }
+                    check_members(decl)?;
+                    let id = decls.len();
+                    decls.push(decl);
+                    scope.types.insert(&decl.name.name, id);
+                    decl_ids.push(id);
+                    // The members are resolved in step 3; the names are known now.
+                    types.decls.push(TypeDecl {
+                        name: decl.name.name.clone(),
+                        interface: iface_id,
+                        kind: match &decl.kind {
+                            ast::TypeDeclKind::Enum(cases) => {
+                                DeclKind::Enum(cases.iter().map(|c| c.name.clone()).collect())
+                            }
+                            ast::TypeDeclKind::Flags(flags) => {
+                                DeclKind::Flags(flags.iter().map(|c| c.name.clone()).collect())
+                            }
+                            ast::TypeDeclKind::Record(_) => DeclKind::Record(Vec::new()),
+                            ast::TypeDeclKind::Variant(_) => DeclKind::Variant(Vec::new()),
+                        },
+                    });
+                    types.decl_type(id);
+                }
+            }
         }
-        func_names.push(by_name);
+        scopes.push(scope);
         program.interfaces.push(hir::InterfaceDef {
             name: iface.name.name.clone(),
-            funcs: ids,
+            funcs: func_ids,
+            types: decl_ids,
         });
+    }
+
+    // 3. Types: fields, payloads and signatures, interface by interface (§ v2.8.1).
+    let resolver = Resolver {
+        names: &names,
+        scopes: &scopes,
+    };
+    for (iface_id, iface) in interfaces.iter().enumerate() {
+        for item in &iface.items {
+            match item {
+                ast::InterfaceItem::Type(decl) => {
+                    let id = scopes[iface_id].types[decl.name.name.as_str()];
+                    match &decl.kind {
+                        ast::TypeDeclKind::Record(fields) => {
+                            let mut defs = Vec::new();
+                            for f in fields {
+                                defs.push(FieldDef {
+                                    name: f.name.name.clone(),
+                                    mutable: f.mutable,
+                                    ty: resolver.resolve(&mut types, &f.ty, Some(iface_id))?,
+                                });
+                            }
+                            types.decls[id].kind = DeclKind::Record(defs);
+                        }
+                        ast::TypeDeclKind::Variant(cases) => {
+                            let mut defs = Vec::new();
+                            for c in cases {
+                                let payload = match &c.payload {
+                                    Some(ty) => {
+                                        Some(resolver.resolve(&mut types, ty, Some(iface_id))?)
+                                    }
+                                    None => None,
+                                };
+                                defs.push(CaseDef {
+                                    name: c.name.name.clone(),
+                                    payload,
+                                });
+                            }
+                            types.decls[id].kind = DeclKind::Variant(defs);
+                        }
+                        ast::TypeDeclKind::Enum(_) | ast::TypeDeclKind::Flags(_) => {}
+                    }
+                }
+                ast::InterfaceItem::Func(func) => {
+                    let mut params = Vec::new();
+                    for p in &func.params {
+                        params.push((
+                            p.name.name.clone(),
+                            resolver.resolve(&mut types, &p.ty, Some(iface_id))?,
+                        ));
+                    }
+                    let ret = match &func.ret {
+                        Some(ty) => Some(resolver.resolve(&mut types, ty, Some(iface_id))?),
+                        None => None,
+                    };
+                    program.funcs.push(hir::FuncDef {
+                        name: func.name.name.clone(),
+                        interface: iface_id,
+                        params,
+                        ret,
+                        locals: Vec::new(),
+                        body: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+    // Functions were pushed in interface order, which is the order of `funcs`.
+    for (id, decl) in decls.iter().enumerate() {
+        if let Some(path) = empty_cycle(&types, id) {
+            return err(
+                Code::EmptyType,
+                decl.name.span,
+                format!(
+                    "type `{}` has no value: it contains itself through {path} without going through an `option` or a `list`",
+                    decl.name.name
+                ),
+            );
+        }
     }
 
     // 3. Worlds (§ 6.2).
@@ -155,30 +287,54 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         });
     }
 
-    // 4. Parameter limit of exported functions (§ 6.5).
-    for (iface_id, iface) in interfaces.iter().enumerate() {
-        if !program.is_exported(iface_id) {
-            continue;
-        }
-        for func in iface.funcs() {
-            if func.params.len() > MAX_EXPORTED_PARAMS {
-                return err(
-                    Code::TooManyParams,
-                    func.name.span,
-                    format!(
-                        "exported function `{}` has {} parameters, the maximum is {MAX_EXPORTED_PARAMS}",
-                        func.name.name,
-                        func.params.len()
-                    ),
-                );
+    // 4. Exported functions: parameter limit (§ 6.5) and types that can cross the
+    //    boundary (§ v2.2.7).
+    for world in &program.worlds {
+        for &iface_id in &world.exports {
+            let iface = interfaces[iface_id];
+            for func in iface.funcs() {
+                if func.params.len() > MAX_EXPORTED_PARAMS {
+                    return err(
+                        Code::TooManyParams,
+                        func.name.span,
+                        format!(
+                            "exported function `{}` has {} parameters, the maximum is {MAX_EXPORTED_PARAMS}",
+                            func.name.name,
+                            func.params.len()
+                        ),
+                    );
+                }
+                let def = &program.funcs[scopes[iface_id].funcs[func.name.name.as_str()]];
+                let signature: Vec<Type> =
+                    def.params.iter().map(|(_, t)| *t).chain(def.ret).collect();
+                check_boundary_types(
+                    &types,
+                    &program,
+                    world,
+                    &signature,
+                    &func.name,
+                    "exported function",
+                )?;
+            }
+            // The types of an exported interface all appear in the WIT (§ v2.7.1).
+            for decl in iface.types() {
+                let ty = types.decl_type_of(scopes[iface_id].types[decl.name.name.as_str()]);
+                check_boundary_types(
+                    &types,
+                    &program,
+                    world,
+                    &[ty],
+                    &decl.name,
+                    "type of an exported interface",
+                )?;
             }
         }
     }
 
-    // 5. Globals (§ 6.4).
+    // 5. Globals (§ 6.4, § v2.4.12).
     let mut global_ids = HashMap::new();
     for global in &globals {
-        let ty = prim(&global.ty)?;
+        let ty = resolver.resolve(&mut types, &global.ty, None)?;
         if !is_constant(&global.init) {
             return err(
                 Code::NonConstGlobal,
@@ -186,7 +342,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                 "the initial value of a global must be a constant expression, such as a literal",
             );
         }
-        let mut cx = FnCx::new(&program, &names, &func_names, &global_ids, usize::MAX, None);
+        let mut cx = FnCx::new(&program, &mut types, &resolver, &global_ids, None, None);
         let init = cx.expr(&global.init, Some(ty))?;
         let hir::ExprKind::Const(init) = init.kind else {
             unreachable!("a constant expression evaluates to a constant")
@@ -204,7 +360,14 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
     for (id, func) in funcs.iter().enumerate() {
         let iface = program.funcs[id].interface;
         let ret = program.funcs[id].ret;
-        let mut cx = FnCx::new(&program, &names, &func_names, &global_ids, iface, ret);
+        let mut cx = FnCx::new(
+            &program,
+            &mut types,
+            &resolver,
+            &global_ids,
+            Some(iface),
+            ret,
+        );
         cx.scopes.push(Vec::new());
         for (param, (_, ty)) in func.params.iter().zip(&program.funcs[id].params) {
             cx.declare(&param.name, *ty)?;
@@ -226,15 +389,8 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         def.body = body;
     }
 
+    program.types = types;
     Ok(program)
-}
-
-/// Type of the v0.1 subset; the other types are not implemented yet.
-fn prim(ty: &ast::TypeExpr) -> Result<Type> {
-    match ty.kind {
-        ast::TypeExprKind::Prim(t) => Ok(t),
-        _ => unsupported(ty.span, "types other than numbers and `bool`"),
-    }
 }
 
 fn unsupported<T>(span: Span, what: &str) -> Result<T> {
@@ -254,6 +410,256 @@ fn is_constant(e: &ast::Expr) -> bool {
             expr,
         } => matches!(expr.kind, ExprKind::Int(_) | ExprKind::Float(_)),
         _ => false,
+    }
+}
+
+/// Functions and types of an interface, by name.
+#[derive(Default)]
+struct InterfaceScope<'a> {
+    funcs: HashMap<&'a str, FuncId>,
+    types: HashMap<&'a str, DeclId>,
+}
+
+/// Fields, cases or flags declared twice (E0207), more than 32 flags (E0212).
+fn check_members(decl: &ast::TypeDecl) -> Result<()> {
+    let (what, names): (&str, Vec<&Ident>) = match &decl.kind {
+        ast::TypeDeclKind::Record(fields) => ("field", fields.iter().map(|f| &f.name).collect()),
+        ast::TypeDeclKind::Variant(cases) => ("case", cases.iter().map(|c| &c.name).collect()),
+        ast::TypeDeclKind::Enum(cases) => ("case", cases.iter().collect()),
+        ast::TypeDeclKind::Flags(flags) => ("flag", flags.iter().collect()),
+    };
+    for (i, name) in names.iter().enumerate() {
+        if names[..i].iter().any(|n| n.name == name.name) {
+            return err(
+                Code::DuplicateMember,
+                name.span,
+                format!(
+                    "{what} `{}` is already declared in `{}`",
+                    name.name, decl.name.name
+                ),
+            );
+        }
+    }
+    if what == "flag" && names.len() > MAX_FLAGS {
+        return err(
+            Code::TooManyFlags,
+            decl.name.span,
+            format!(
+                "flags type `{}` has {} flags, the maximum is {MAX_FLAGS}",
+                decl.name.name,
+                names.len()
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// A cycle of types that does not go through an `option` or a `list` (§ v2.2.5): returns
+/// the path of the cycle, from the declared type back to itself.
+fn empty_cycle(types: &Types, id: DeclId) -> Option<String> {
+    fn visit(
+        types: &Types,
+        ty: Type,
+        target: DeclId,
+        path: &mut Vec<Type>,
+        seen: &mut Vec<Type>,
+    ) -> bool {
+        let children = match types.kind(ty) {
+            // A list or an option can be empty: the cycle stops here.
+            TypeKind::List { .. } | TypeKind::Option(_) => return false,
+            _ => types.children(ty),
+        };
+        for child in children {
+            if matches!(types.kind(child), TypeKind::Decl(d) if *d == target) {
+                path.push(child);
+                return true;
+            }
+            if seen.contains(&child) {
+                continue;
+            }
+            seen.push(child);
+            path.push(child);
+            if visit(types, child, target, path, seen) {
+                return true;
+            }
+            path.pop();
+        }
+        false
+    }
+    let start = types.decl_type_of(id);
+    let mut path = Vec::new();
+    if !visit(types, start, id, &mut path, &mut Vec::new()) {
+        return None;
+    }
+    let decls: Vec<String> = path
+        .iter()
+        .filter_map(|&t| types.decl(t).map(|(_, d)| format!("`{}`", d.name)))
+        .collect();
+    Some(decls.join(" → "))
+}
+
+/// Types used at the boundary of a component by `world` (§ v2.2.7): no recursive type
+/// (E0208), and only types of interfaces that the world exports or that have no
+/// function (E0209).
+fn check_boundary_types(
+    types: &Types,
+    program: &hir::Program,
+    world: &hir::WorldDef,
+    used: &[Type],
+    at: &Ident,
+    what: &str,
+) -> Result<()> {
+    for &ty in used {
+        for id in types.reachable_decls(ty) {
+            let decl = &types.decls[id];
+            if types.is_recursive(id) {
+                return err(
+                    Code::RecursiveExport,
+                    at.span,
+                    format!(
+                        "{what} `{}` uses the recursive type `{}`: recursive types cannot cross the boundary of a component",
+                        at.name,
+                        types.display(types.decl_type_of(id))
+                    ),
+                );
+            }
+            let iface = &program.interfaces[decl.interface];
+            if !world.exports.contains(&decl.interface) && !iface.funcs.is_empty() {
+                return err(
+                    Code::UnexportedTypeInterface,
+                    at.span,
+                    format!(
+                        "{what} `{}` uses the type `{}`, but world `{}` does not export interface `{}`, which has functions: export it, or move the type to an interface without functions",
+                        at.name,
+                        types.display(types.decl_type_of(id)),
+                        world.name,
+                        iface.name
+                    ),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolves the types written in the source (§ v2.2.4).
+struct Resolver<'a> {
+    names: &'a HashMap<&'a str, TopLevel>,
+    scopes: &'a [InterfaceScope<'a>],
+}
+
+impl Resolver<'_> {
+    /// The type designated by `ty`, written in interface `iface` (`None` for a global).
+    fn resolve(
+        &self,
+        types: &mut Types,
+        ty: &ast::TypeExpr,
+        iface: Option<InterfaceId>,
+    ) -> Result<Type> {
+        use ast::TypeExprKind as K;
+        let kind = match &ty.kind {
+            K::Prim(p) => return Ok(Type::prim(*p)),
+            K::Char => return Ok(Type::CHAR),
+            K::String => return Ok(Type::STRING),
+            K::List { mutable, elem } => TypeKind::List {
+                mutable: *mutable,
+                elem: self.resolve(types, elem, iface)?,
+            },
+            K::Tuple(elems) => TypeKind::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.resolve(types, e, iface))
+                    .collect::<Result<_>>()?,
+            ),
+            K::Option(inner) => TypeKind::Option(self.resolve(types, inner, iface)?),
+            K::Result { ok, err } => TypeKind::Result {
+                ok: ok
+                    .as_ref()
+                    .map(|t| self.resolve(types, t, iface))
+                    .transpose()?,
+                err: err
+                    .as_ref()
+                    .map(|t| self.resolve(types, t, iface))
+                    .transpose()?,
+            },
+            K::Named(name) => TypeKind::Decl(self.decl(name, iface)?),
+        };
+        Ok(types.intern(kind))
+    }
+
+    /// The declared type named `name`.
+    fn decl(&self, name: &ast::TypeName, current: Option<InterfaceId>) -> Result<DeclId> {
+        let unknown = |message: String| err(Code::UnknownType, name.span(), message);
+        let iface = match &name.iface {
+            Some(iface) => match self.names.get(iface.name.as_str()) {
+                Some(TopLevel::Interface(id)) => *id,
+                Some(other) => {
+                    return unknown(format!(
+                        "`{}` is {}, not an interface",
+                        iface.name,
+                        other.describe()
+                    ));
+                }
+                None => {
+                    return err(
+                        Code::UnknownName,
+                        iface.span,
+                        format!("unknown interface `{}`", iface.name),
+                    );
+                }
+            },
+            None => match current {
+                Some(id) => id,
+                None => {
+                    let hint = self
+                        .names
+                        .iter()
+                        .filter_map(|(n, t)| match t {
+                            TopLevel::Interface(i)
+                                if self.scopes[*i].types.contains_key(name.name.name.as_str()) =>
+                            {
+                                Some(*n)
+                            }
+                            _ => None,
+                        })
+                        .min()
+                        .map(|i| format!(": write `{i}::{}`", name.name.name))
+                        .unwrap_or_default();
+                    return unknown(format!(
+                        "unknown type `{}` (outside an interface, a type is named with its interface){hint}",
+                        name.name.name
+                    ));
+                }
+            },
+        };
+        let scope = &self.scopes[iface];
+        if let Some(&id) = scope.types.get(name.name.name.as_str()) {
+            return Ok(id);
+        }
+        if scope.funcs.contains_key(name.name.name.as_str()) {
+            return unknown(format!("`{}` is a function, not a type", name.name.name));
+        }
+        let mut message = format!("unknown type `{}`", name.name.name);
+        if name.iface.is_none()
+            && let Some(other) = self
+                .names
+                .iter()
+                .filter_map(|(n, t)| match t {
+                    TopLevel::Interface(i)
+                        if self.scopes[*i].types.contains_key(name.name.name.as_str()) =>
+                    {
+                        Some(*n)
+                    }
+                    _ => None,
+                })
+                .min()
+        {
+            message += &format!(
+                "; to use the one of another interface, write `{other}::{}`",
+                name.name.name
+            );
+        }
+        unknown(message)
     }
 }
 
@@ -286,21 +692,14 @@ fn is_logical(op: BinOp) -> bool {
     matches!(op, BinOp::And | BinOp::Or)
 }
 
-fn mismatch<T>(span: Span, expected: Type, found: Type) -> Result<T> {
-    err(
-        Code::TypeMismatch,
-        span,
-        format!("mismatched types: expected `{expected}`, found `{found}`"),
-    )
-}
-
 /// Analysis context of a function (or of the initial value of a global).
 struct FnCx<'a> {
     program: &'a hir::Program,
-    names: &'a HashMap<&'a str, TopLevel>,
-    func_names: &'a [HashMap<&'a str, FuncId>],
+    types: &'a mut Types,
+    resolver: &'a Resolver<'a>,
     globals: &'a HashMap<&'a str, hir::GlobalId>,
-    iface: InterfaceId,
+    /// Interface of the function; `None` for the initial value of a global.
+    iface: Option<InterfaceId>,
     ret: Option<Type>,
     locals: Vec<Type>,
     /// Nested scopes: visible names and their variable.
@@ -311,16 +710,16 @@ struct FnCx<'a> {
 impl<'a> FnCx<'a> {
     fn new(
         program: &'a hir::Program,
-        names: &'a HashMap<&'a str, TopLevel>,
-        func_names: &'a [HashMap<&'a str, FuncId>],
+        types: &'a mut Types,
+        resolver: &'a Resolver<'a>,
         globals: &'a HashMap<&'a str, hir::GlobalId>,
-        iface: InterfaceId,
+        iface: Option<InterfaceId>,
         ret: Option<Type>,
     ) -> Self {
         FnCx {
             program,
-            names,
-            func_names,
+            types,
+            resolver,
             globals,
             iface,
             ret,
@@ -328,6 +727,32 @@ impl<'a> FnCx<'a> {
             scopes: Vec::new(),
             loop_depth: 0,
         }
+    }
+
+    /// A type, as written in messages.
+    fn show(&self, ty: Type) -> String {
+        self.types.display(ty)
+    }
+
+    fn mismatch<T>(&self, span: Span, expected: Type, found: Type) -> Result<T> {
+        err(
+            Code::TypeMismatch,
+            span,
+            format!(
+                "mismatched types: expected `{}`, found `{}`",
+                self.show(expected),
+                self.show(found)
+            ),
+        )
+    }
+
+    /// Type of a local, which can only be a primitive type for now.
+    fn local_type(&mut self, ty: &ast::TypeExpr) -> Result<Type> {
+        let resolved = self.resolver.resolve(self.types, ty, self.iface)?;
+        if resolved.as_prim().is_none() {
+            return unsupported(ty.span, "locals of types other than numbers and `bool`");
+        }
+        Ok(resolved)
     }
 
     // ---- Variables ----
@@ -342,7 +767,10 @@ impl<'a> FnCx<'a> {
     }
 
     fn declare(&mut self, name: &Ident, ty: Type) -> Result<LocalId> {
-        if matches!(self.names.get(name.name.as_str()), Some(TopLevel::Global)) {
+        if matches!(
+            self.resolver.names.get(name.name.as_str()),
+            Some(TopLevel::Global)
+        ) {
             return err(
                 Code::ShadowsGlobal,
                 name.span,
@@ -380,7 +808,7 @@ impl<'a> FnCx<'a> {
     fn stmt(&mut self, stmt: &ast::Stmt) -> Result<hir::Stmt> {
         Ok(match &stmt.kind {
             StmtKind::Local { name, ty, init } => {
-                let ty = prim(ty)?;
+                let ty = self.local_type(ty)?;
                 // The initial value does not see the local yet (§ 9.4).
                 let init = match init {
                     Some(e) => Some(self.expr(e, Some(ty))?),
@@ -404,7 +832,9 @@ impl<'a> FnCx<'a> {
                             target.span,
                             format!(
                                 "global `{}` is not mutable: declare it as `global {}: mut {}`",
-                                global.name, global.name, global.ty
+                                global.name,
+                                global.name,
+                                self.show(global.ty)
                             ),
                         );
                     }
@@ -450,7 +880,7 @@ impl<'a> FnCx<'a> {
                     return err(
                         Code::MissingReturnValue,
                         stmt.span,
-                        format!("`return` must return a value of type `{ty}`"),
+                        format!("`return` must return a value of type `{}`", self.show(ty)),
                     );
                 }
                 (Some(e), None) => {
@@ -491,8 +921,8 @@ impl<'a> FnCx<'a> {
         }
         let e = self.expr(cond, None)?;
         let ty = e.value_ty();
-        if ty != Type::Bool {
-            return Err(non_bool(&format!("`{ty}`")));
+        if ty != Type::BOOL {
+            return Err(non_bool(&format!("`{}`", self.show(ty))));
         }
         Ok(e)
     }
@@ -505,7 +935,7 @@ impl<'a> FnCx<'a> {
         let result = match &e.kind {
             ExprKind::Int(v) => return self.int_literal(*v, false, e.span, expected),
             ExprKind::Float(s) => return self.float_literal(s, e.span, expected),
-            ExprKind::Bool(b) => typed(hir::ExprKind::Const(Const::bool(*b)), Type::Bool),
+            ExprKind::Bool(b) => typed(hir::ExprKind::Const(Const::bool(*b)), Type::BOOL),
             ExprKind::Paren(inner) => return self.expr(inner, expected),
             ExprKind::Name(name) => {
                 if let Some(id) = self.lookup_local(name) {
@@ -547,7 +977,7 @@ impl<'a> FnCx<'a> {
         };
         let ty = result.value_ty();
         match expected {
-            Some(exp) if exp != ty => mismatch(e.span, exp, ty),
+            Some(exp) if exp != ty => self.mismatch(e.span, exp, ty),
             _ => Ok(result),
         }
     }
@@ -574,7 +1004,8 @@ impl<'a> FnCx<'a> {
                     Code::TypeMismatch,
                     span,
                     format!(
-                        "integer literal used for the float type `{ty}`: write for example `{}.0`",
+                        "integer literal used for the float type `{}`: write for example `{}.0`",
+                        self.show(ty),
                         if negative {
                             format!("-{value}")
                         } else {
@@ -583,7 +1014,7 @@ impl<'a> FnCx<'a> {
                     ),
                 );
             }
-            Some(Type::Bool) => {
+            Some(Type::BOOL) => {
                 return err(
                     Code::TypeMismatch,
                     span,
@@ -596,7 +1027,10 @@ impl<'a> FnCx<'a> {
             return err(
                 Code::InvalidOperator,
                 span,
-                format!("`-` cannot be applied to the unsigned type `{ty}`"),
+                format!(
+                    "`-` cannot be applied to the unsigned type `{}`",
+                    self.show(ty)
+                ),
             );
         }
         let (min, max) = ty.int_range();
@@ -610,7 +1044,10 @@ impl<'a> FnCx<'a> {
             _ => err(
                 Code::LiteralOutOfRange,
                 span,
-                format!("literal out of range for type `{ty}` ({min} … {max})"),
+                format!(
+                    "literal out of range for type `{}` ({min} … {max})",
+                    self.show(ty)
+                ),
             ),
         }
     }
@@ -630,7 +1067,7 @@ impl<'a> FnCx<'a> {
                 return err(
                     Code::TypeMismatch,
                     span,
-                    format!("float literal used for type `{ty}`"),
+                    format!("float literal used for type `{}`", self.show(ty)),
                 );
             }
         };
@@ -643,7 +1080,7 @@ impl<'a> FnCx<'a> {
             return err(
                 Code::LiteralOutOfRange,
                 span,
-                format!("literal out of range for type `{ty}`"),
+                format!("literal out of range for type `{}`", self.show(ty)),
             );
         }
         Ok(typed(hir::ExprKind::Const(konst), ty))
@@ -668,7 +1105,7 @@ impl<'a> FnCx<'a> {
                     return err(
                         Code::InvalidOperator,
                         span,
-                        format!("`-` cannot be applied to type `{ty}`"),
+                        format!("`-` cannot be applied to type `{}`", self.show(ty)),
                     );
                 }
                 // Constant folding: the initial value of a global must stay constant.
@@ -694,24 +1131,24 @@ impl<'a> FnCx<'a> {
             UnaryOp::Not => {
                 let inner = self.expr(operand, None)?;
                 let ty = inner.value_ty();
-                if ty != Type::Bool {
+                if ty != Type::BOOL {
                     return err(
                         Code::InvalidOperator,
                         span,
-                        format!("`!` only applies to type `bool`, found `{ty}`"),
+                        format!("`!` only applies to type `bool`, found `{}`", self.show(ty)),
                     );
                 }
                 if let Some(exp) = expected
-                    && exp != Type::Bool
+                    && exp != Type::BOOL
                 {
-                    return mismatch(span, exp, Type::Bool);
+                    return self.mismatch(span, exp, Type::BOOL);
                 }
                 Ok(typed(
                     hir::ExprKind::Unary {
                         op,
                         expr: Box::new(inner),
                     },
-                    Type::Bool,
+                    Type::BOOL,
                 ))
             }
         }
@@ -734,7 +1171,7 @@ impl<'a> FnCx<'a> {
                     lhs: Box::new(l),
                     rhs: Box::new(r),
                 },
-                Type::Bool,
+                Type::BOOL,
             ));
         }
 
@@ -775,12 +1212,13 @@ impl<'a> FnCx<'a> {
                 Code::InvalidOperator,
                 span,
                 format!(
-                    "operator `{}` cannot be applied to type `{ty}`{hint}",
-                    op.symbol()
+                    "operator `{}` cannot be applied to type `{}`{hint}",
+                    op.symbol(),
+                    self.show(ty)
                 ),
             );
         }
-        let result_ty = if op.is_comparison() { Type::Bool } else { ty };
+        let result_ty = if op.is_comparison() { Type::BOOL } else { ty };
         Ok(typed(
             hir::ExprKind::Binary {
                 op,
@@ -794,13 +1232,14 @@ impl<'a> FnCx<'a> {
     fn logical_operand(&mut self, op: BinOp, e: &ast::Expr) -> Result<hir::Expr> {
         let operand = self.expr(e, None)?;
         let ty = operand.value_ty();
-        if ty != Type::Bool {
+        if ty != Type::BOOL {
             return err(
                 Code::InvalidOperator,
                 e.span,
                 format!(
-                    "operator `{}` only applies to type `bool`, found `{ty}`",
-                    op.symbol()
+                    "operator `{}` only applies to type `bool`, found `{}`",
+                    op.symbol(),
+                    self.show(ty)
                 ),
             );
         }
@@ -834,17 +1273,21 @@ impl<'a> FnCx<'a> {
                 Code::InvalidConversion,
                 arg.span,
                 format!(
-                    "cannot convert `{source}` to `{target}`: only conversions between numeric types exist"
+                    "cannot convert `{}` to `{target}`: only conversions between numeric types exist",
+                    self.show(source)
                 ),
             );
         }
-        Ok(typed(hir::ExprKind::Convert(Box::new(inner)), target))
+        Ok(typed(
+            hir::ExprKind::Convert(Box::new(inner)),
+            Type::prim(target),
+        ))
     }
 
     /// Analyzes a call. The result has `ty: None` if the function returns nothing.
     fn call(&mut self, call: &ast::Call) -> Result<hir::Expr> {
         let iface = match call.path.as_slice() {
-            [] => self.iface,
+            [] => self.iface.expect("calls are in functions"),
             [name]
                 if matches!(
                     name.name.as_str(),
@@ -859,7 +1302,7 @@ impl<'a> FnCx<'a> {
             [first, ..] if call.path.len() > 1 => {
                 return unsupported(first.span.to(call.name.span), "constructors");
             }
-            [.., name] => match self.names.get(name.name.as_str()) {
+            [.., name] => match self.resolver.names.get(name.name.as_str()) {
                 Some(TopLevel::Interface(id)) => *id,
                 Some(other) => {
                     return err(
@@ -878,16 +1321,16 @@ impl<'a> FnCx<'a> {
             },
         };
         let iface_name = &self.program.interfaces[iface].name;
-        let Some(&func_id) = self.func_names[iface].get(call.name.name.as_str()) else {
+        let scopes = self.resolver.scopes;
+        let Some(&func_id) = scopes[iface].funcs.get(call.name.name.as_str()) else {
             let mut message = format!(
                 "interface `{iface_name}` has no function `{}`",
                 call.name.name
             );
             if call.path.is_empty()
-                && let Some(other) = self
-                    .func_names
+                && let Some(other) = scopes
                     .iter()
-                    .position(|f| f.contains_key(call.name.name.as_str()))
+                    .position(|s| s.funcs.contains_key(call.name.name.as_str()))
             {
                 message += &format!(
                     "; to call the one from another interface, write `{}::{}(…)`",
@@ -1028,6 +1471,176 @@ mod tests {
     #[test]
     fn sibling_blocks_reuse_names() {
         ok("if (b) { local t: u32 = 1; } else { local t: u32 = 2; } return 0;");
+    }
+
+    #[test]
+    fn type_declarations() {
+        let code = |t: &str| match analyze_str(t) {
+            Ok(_) => panic!("accepted: {t}"),
+            Err(e) => e.code,
+        };
+        let ok = |t: &str| {
+            if let Err(e) = analyze_str(t) {
+                panic!("{t}: {:?} {}", e.code, e.message);
+            }
+        };
+        ok("interface i {
+              record node { value: u32, children: list<node> }
+              variant v { a(option<v>), b }
+              record r { s: string, c: char, t: tuple<u8, list<mut r>>, o: option<i::r>, e: result<_, e>, f: f, x: result }
+              enum e { a, b }
+              flags f { a, b }
+              func status() { }
+              record status_line { status: e }
+            }");
+        assert_eq!(
+            code("interface i { record line { a: u32 } func line() { } }"),
+            Code::DuplicateName
+        );
+        assert_eq!(
+            code("interface i { func line() { } enum line { a } }"),
+            Code::DuplicateName
+        );
+        assert_eq!(
+            code("interface i { enum e { a } flags e { a } }"),
+            Code::DuplicateName
+        );
+        assert_eq!(
+            code("interface i { func f() { } func f() { } }"),
+            Code::DuplicateFunc
+        );
+        assert_eq!(
+            code("interface i { record r { a: u32, a: u64 } }"),
+            Code::DuplicateMember
+        );
+        assert_eq!(
+            code("interface i { enum e { x, x } }"),
+            Code::DuplicateMember
+        );
+        assert_eq!(
+            code("interface i { variant v { x(u8), x } }"),
+            Code::DuplicateMember
+        );
+        assert_eq!(
+            code("interface math { record math { a: u32 } }"),
+            Code::TypeNamedLikeTopLevel
+        );
+        assert_eq!(
+            code("global g: u32 = 1; interface i { enum g { a } }"),
+            Code::TypeNamedLikeTopLevel
+        );
+        let flags: Vec<String> = (0..33)
+            .map(|i| format!("f{}", ["a", "b", "c"][i % 3].repeat(i / 3 + 1)))
+            .collect();
+        assert_eq!(
+            code(&format!(
+                "interface i {{ flags f {{ {} }} }}",
+                flags.join(", ")
+            )),
+            Code::TooManyFlags
+        );
+        ok(&format!(
+            "interface i {{ flags f {{ {} }} }}",
+            flags[..32].join(", ")
+        ));
+        assert_eq!(
+            code("interface i { record a { next: a } }"),
+            Code::EmptyType
+        );
+        assert_eq!(
+            code("interface i { record b { pair: tuple<u32, b> } }"),
+            Code::EmptyType
+        );
+        assert_eq!(
+            code("interface i { record a { b: b } record b { r: result<a> } }"),
+            Code::EmptyType
+        );
+        assert_eq!(
+            code("interface i { func f(x: nope) { } }"),
+            Code::UnknownType
+        );
+        assert_eq!(
+            code("interface i { func fib() { } func f(x: fib) { } }"),
+            Code::UnknownType
+        );
+        assert_eq!(
+            code("interface i { func f(x: j::t) { } } interface j { func t() { } }"),
+            Code::UnknownType
+        );
+        assert_eq!(
+            code("interface i { func f(x: j::t) { } } interface j { }"),
+            Code::UnknownType
+        );
+        assert_eq!(
+            code("interface i { func f(x: w::t) { } } world w { }"),
+            Code::UnknownType
+        );
+        assert_eq!(
+            code("interface i { func f(x: nope::t) { } }"),
+            Code::UnknownName
+        );
+        assert_eq!(
+            code("interface i { func f(x: t) { } } interface j { enum t { a } }"),
+            Code::UnknownType
+        );
+        assert_eq!(
+            code("interface i { enum t { a } } global g: t = 1;"),
+            Code::UnknownType
+        );
+    }
+
+    #[test]
+    fn boundary_types() {
+        let code = |t: &str| match analyze_str(t) {
+            Ok(_) => panic!("accepted: {t}"),
+            Err(e) => e.code,
+        };
+        let tree = "interface tree { record node { value: u32, children: list<node> } }";
+        assert_eq!(
+            code(&format!(
+                "world w {{ export a; }} interface a {{ func root(n: tree::node) {{ }} }} {tree}"
+            )),
+            Code::RecursiveExport
+        );
+        assert_eq!(
+            code(&format!(
+                "world w {{ export a; }} interface a {{ func f(n: option<list<tree::node>>) {{ }} }} {tree}"
+            )),
+            Code::RecursiveExport
+        );
+        assert_eq!(
+            code(&format!("world w {{ export tree; }} {tree}")),
+            Code::RecursiveExport
+        );
+        // Inside a component, recursive types are fine.
+        assert!(
+            analyze_str(&format!(
+                "world w {{ }} interface a {{ func root(n: tree::node) {{ }} }} {tree}"
+            ))
+            .is_ok()
+        );
+
+        let types = "interface types { enum color { red } }";
+        let with_funcs = "interface paint { enum color { red } func f() { } }";
+        assert!(
+            analyze_str(&format!(
+                "world w {{ export a; }} interface a {{ func f(c: types::color) {{ }} }} {types}"
+            ))
+            .is_ok()
+        );
+        assert_eq!(
+            code(&format!(
+                "world w {{ export a; }} interface a {{ func f(c: paint::color) {{ }} }} {with_funcs}"
+            )),
+            Code::UnexportedTypeInterface
+        );
+        assert_eq!(
+            code(&format!(
+                "world w {{ export a; }} interface a {{ record r {{ c: paint::color }} }} {with_funcs}"
+            )),
+            Code::UnexportedTypeInterface
+        );
+        assert!(analyze_str(&format!("world w {{ export a; export paint; }} interface a {{ func f(c: paint::color) {{ }} }} {with_funcs}")).is_ok());
     }
 
     #[test]

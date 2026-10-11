@@ -124,7 +124,7 @@ impl Analysis {
                 },
             ));
         };
-        let module = codegen::generate(&self.program, id, &self.interface_names);
+        let module = codegen::generate(&self.program, id, &self.interface_names)?;
         component::build(module, &self.wit, world)
     }
 }
