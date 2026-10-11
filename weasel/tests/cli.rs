@@ -115,7 +115,7 @@ fn call() {
     );
     assert_eq!(
         fails(dir, &["call", "math::div", "200", "1"]),
-        "error: invalid value `200` for parameter `a` of type `s8`\n"
+        "error: invalid value `200` for parameter `a` of type `s8`: invalid value\n"
     );
     let err = fails(dir, &["call", "math::sub", "1", "2"]);
     assert!(err.contains("no exported function `math::sub`"), "{err}");
@@ -209,4 +209,44 @@ fn calc_example() {
     assert_eq!(ok(&calc, &["call", "math::fib", "10"]), "55\n");
     assert_eq!(ok(&calc, &["call", "fib_rec", "20"]), "6765\n");
     assert_eq!(ok(&calc, &["call", "math::clamp", "-50", "0", "10"]), "0\n");
+}
+
+/// The invoice returned by `invoices::sample`, in WAVE.
+const SAMPLE: &str = r#"{number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: draft}"#;
+
+#[test]
+fn invoice_example() {
+    let invoice = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/invoice");
+    let call = |args: &[&str]| {
+        let mut all = vec!["call"];
+        all.extend(args);
+        ok(&invoice, &all)
+    };
+    assert_eq!(call(&["invoices::sample"]), format!("{SAMPLE}\n"));
+    assert_eq!(call(&["total", SAMPLE]), "ok(1170)\n");
+    assert_eq!(
+        call(&["summary", SAMPLE]),
+        "\"Weasel & Co: invoice 42 for ACME (draft)\"\n"
+    );
+    assert_eq!(call(&["initial", SAMPLE]), "some('A')\n");
+    assert_eq!(
+        call(&["stats", &format!("[{SAMPLE}, {SAMPLE}]")]),
+        "(2, 2340)\n"
+    );
+    assert_eq!(
+        call(&["mark_paid", SAMPLE]),
+        format!("ok({})\n", SAMPLE.replace("draft", "paid"))
+    );
+    // An `err` is a result like any other: printed, with success.
+    let empty = r#"{number: 1, customer: "B", lines: [], delivery: {}, status: sent}"#;
+    assert_eq!(call(&["total", empty]), "err(no-lines)\n");
+
+    assert_eq!(
+        fails(&invoice, &["call", "total", "{number: 1}"]),
+        "error: invalid value `{number: 1}` for parameter `inv` of type `invoice`: missing field \"customer\"\n"
+    );
+    assert_eq!(
+        fails(&invoice, &["call", "total"]),
+        "error: `invoices::total` expects 1 argument(s) (inv: invoice), 0 given\n"
+    );
 }

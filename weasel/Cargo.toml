@@ -11,7 +11,7 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 waslc = { version = "0.1.0", path = "../waslc" }
-wasmtime = "49"
+wasmtime = { version = "49", features = ["wave"] }
 
 [dev-dependencies]
 tempfile = "3"

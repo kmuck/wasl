@@ -1,8 +1,10 @@
 //! `weasel call`: calls a function exported by a component of the project, with wasmtime.
 
+use std::fmt::Write;
+
 use wasmtime::component::types::ComponentItem;
-use wasmtime::component::{Component, Linker, Type, Val};
-use wasmtime::{Engine, Store};
+use wasmtime::component::{Component, Linker, Type, Val, wasm_wave};
+use wasmtime::{Config, Engine, Store};
 
 use crate::error::{Error, Result};
 use crate::project::Project;
@@ -19,7 +21,8 @@ struct Export {
 }
 
 /// Calls `function` (`interface::function`, or `function` if unambiguous) with the given
-/// textual arguments. Returns the formatted result, or `None` for a function without one.
+/// arguments, written in WAVE (§ v2.9.1). Returns the result in WAVE, or `None` for a
+/// function without one.
 ///
 /// The function is looked up in every world of the project: an interface has a single
 /// implementation per package, so every world that exports it runs the same code. Only the
@@ -29,7 +32,7 @@ pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option
     let (world, display) = resolve(analysis.worlds(), function)?;
     let bytes = project.build(&analysis, world)?;
 
-    let engine = Engine::default();
+    let engine = engine()?;
     let loaded = Component::new(&engine, &bytes).map_err(|e| {
         Error::new(format!(
             "cannot load the component of world `{world}`: {e:#}"
@@ -45,23 +48,30 @@ pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option
             ))
         })?;
 
+    // Parameter types as written in WaSL, for messages.
+    let (interface, name) = display.split_once("::").expect("interface::function");
+    let wasl_params = analysis.params(interface, name).unwrap_or_default();
     if args.len() != export.params.len() {
+        let signature = wasl_params
+            .iter()
+            .map(|(name, ty)| format!("{name}: {ty}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(Error::new(format!(
-            "`{}` expects {} argument(s) ({}), {} given",
+            "`{}` expects {} argument(s) ({signature}), {} given",
             export.display,
             export.params.len(),
-            signature(&export.params),
             args.len()
         )));
     }
     let params = args
         .iter()
         .zip(&export.params)
-        .map(|(arg, (name, ty))| {
-            parse_value(arg, ty).ok_or_else(|| {
+        .zip(&wasl_params)
+        .map(|((arg, (name, ty)), (_, wasl_ty))| {
+            parse_value(arg, ty).map_err(|reason| {
                 Error::new(format!(
-                    "invalid value `{arg}` for parameter `{name}` of type `{}`",
-                    type_name(ty)
+                    "invalid value `{arg}` for parameter `{name}` of type `{wasl_ty}`: {reason}"
                 ))
             })
         })
@@ -92,6 +102,16 @@ pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option
         )));
     }
     Ok(results.first().map(format_value))
+}
+
+/// The wasmtime engine, with WasmGC and its prerequisites (§ v2.9.2).
+fn engine() -> Result<Engine> {
+    let mut config = Config::new();
+    config
+        .wasm_reference_types(true)
+        .wasm_function_references(true)
+        .wasm_gc(true);
+    Engine::new(&config).map_err(|e| Error::new(format!("cannot create the engine: {e:#}")))
 }
 
 /// Every function exported by an interface of a loaded component.
@@ -169,70 +189,106 @@ fn snake(name: &str) -> String {
     name.replace('-', "_")
 }
 
-fn signature(params: &[(String, Type)]) -> String {
-    params
-        .iter()
-        .map(|(name, ty)| format!("{name}: {}", type_name(ty)))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// WaSL name of a component type.
-fn type_name(ty: &Type) -> String {
-    match ty {
-        Type::Bool => "bool".into(),
-        Type::S8 => "s8".into(),
-        Type::S16 => "s16".into(),
-        Type::S32 => "s32".into(),
-        Type::S64 => "s64".into(),
-        Type::U8 => "u8".into(),
-        Type::U16 => "u16".into(),
-        Type::U32 => "u32".into(),
-        Type::U64 => "u64".into(),
-        Type::Float32 => "f32".into(),
-        Type::Float64 => "f64".into(),
-        other => format!("{other:?}"),
-    }
-}
-
-/// Parses a command-line argument as a value of type `ty`.
-fn parse_value(text: &str, ty: &Type) -> Option<Val> {
-    Some(match ty {
-        Type::Bool => match text {
-            "true" => Val::Bool(true),
-            "false" => Val::Bool(false),
-            _ => return None,
-        },
-        Type::S8 => Val::S8(text.parse().ok()?),
-        Type::S16 => Val::S16(text.parse().ok()?),
-        Type::S32 => Val::S32(text.parse().ok()?),
-        Type::S64 => Val::S64(text.parse().ok()?),
-        Type::U8 => Val::U8(text.parse().ok()?),
-        Type::U16 => Val::U16(text.parse().ok()?),
-        Type::U32 => Val::U32(text.parse().ok()?),
-        Type::U64 => Val::U64(text.parse().ok()?),
-        Type::Float32 => Val::Float32(text.parse().ok()?),
-        Type::Float64 => Val::Float64(text.parse().ok()?),
-        _ => return None,
+/// Parses a command-line argument, written in WAVE, as a value of type `ty`.
+fn parse_value(text: &str, ty: &Type) -> std::result::Result<Val, String> {
+    Val::from_wave(ty, text).map_err(|e| {
+        // `wasm-wave` ends its messages with the position of the error (`at 0..3`), which
+        // is noise for a single argument.
+        let reason = e.to_string();
+        let reason = match reason.rsplit_once(" at ") {
+            Some((reason, span)) if span.contains("..") => reason,
+            _ => &reason,
+        };
+        reason
+            .trim_start_matches("error converting Wasm value: ")
+            .to_string()
     })
 }
 
-/// Formats a result value.
+/// Formats a result in WAVE, on one line. Floats keep the format of v0.1 (`3.0`, a valid
+/// WAVE float), except NaN, written `nan` (§ v2.9.1). Every field of a record is
+/// written, `none` included.
 fn format_value(value: &Val) -> String {
+    let mut out = String::new();
+    write_value(&mut out, value);
+    out
+}
+
+/// WAVE keywords, written with a `%` when they name a case.
+const KEYWORDS: [&str; 8] = ["true", "false", "some", "none", "ok", "err", "inf", "nan"];
+
+fn write_name(out: &mut String, name: &str) {
+    if KEYWORDS.contains(&name) {
+        out.push('%');
+    }
+    out.push_str(name);
+}
+
+fn write_list<'a>(out: &mut String, open: &str, items: impl Iterator<Item = &'a Val>, close: &str) {
+    out.push_str(open);
+    for (i, item) in items.enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_value(out, item);
+    }
+    out.push_str(close);
+}
+
+fn write_payload(out: &mut String, payload: Option<&Val>) {
+    if let Some(value) = payload {
+        out.push('(');
+        write_value(out, value);
+        out.push(')');
+    }
+}
+
+fn write_value(out: &mut String, value: &Val) {
     match value {
-        Val::Bool(v) => v.to_string(),
-        Val::S8(v) => v.to_string(),
-        Val::S16(v) => v.to_string(),
-        Val::S32(v) => v.to_string(),
-        Val::S64(v) => v.to_string(),
-        Val::U8(v) => v.to_string(),
-        Val::U16(v) => v.to_string(),
-        Val::U32(v) => v.to_string(),
-        Val::U64(v) => v.to_string(),
         // Debug formatting always shows a decimal point: `3.0` rather than `3`.
-        Val::Float32(v) => format!("{v:?}"),
-        Val::Float64(v) => format!("{v:?}"),
-        other => format!("{other:?}"),
+        Val::Float32(v) if !v.is_nan() => write!(out, "{v:?}").unwrap(),
+        Val::Float64(v) if !v.is_nan() => write!(out, "{v:?}").unwrap(),
+        Val::List(items) => write_list(out, "[", items.iter(), "]"),
+        Val::Tuple(items) => write_list(out, "(", items.iter(), ")"),
+        Val::Record(fields) => {
+            out.push('{');
+            for (i, (name, value)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(name);
+                out.push_str(": ");
+                write_value(out, value);
+            }
+            out.push('}');
+        }
+        Val::Variant(case, payload) => {
+            write_name(out, case);
+            write_payload(out, payload.as_deref());
+        }
+        Val::Enum(case) => write_name(out, case),
+        Val::Option(None) => out.push_str("none"),
+        Val::Option(Some(value)) => {
+            out.push_str("some");
+            write_payload(out, Some(value));
+        }
+        Val::Result(Ok(payload)) => {
+            out.push_str("ok");
+            write_payload(out, payload.as_deref());
+        }
+        Val::Result(Err(payload)) => {
+            out.push_str("err");
+            write_payload(out, payload.as_deref());
+        }
+        Val::Flags(flags) => {
+            out.push('{');
+            out.push_str(&flags.join(", "));
+            out.push('}');
+        }
+        // Integers, booleans, NaN, chars and strings, with the escapes of WAVE.
+        other => {
+            out.push_str(&wasm_wave::to_string(other).unwrap_or_else(|_| format!("{other:?}")))
+        }
     }
 }
 
@@ -242,12 +298,34 @@ mod tests {
 
     #[test]
     fn values() {
-        assert_eq!(parse_value("-5", &Type::S8), Some(Val::S8(-5)));
-        assert_eq!(parse_value("300", &Type::U8), None);
-        assert_eq!(parse_value("-1", &Type::U32), None);
-        assert_eq!(parse_value("true", &Type::Bool), Some(Val::Bool(true)));
-        assert_eq!(parse_value("2.5", &Type::Float64), Some(Val::Float64(2.5)));
+        let parse = |text, ty| parse_value(text, ty).ok();
+        assert_eq!(parse("-5", &Type::S8), Some(Val::S8(-5)));
+        assert_eq!(parse("300", &Type::U8), None);
+        assert_eq!(parse("-1", &Type::U32), None);
+        assert_eq!(parse("true", &Type::Bool), Some(Val::Bool(true)));
+        assert_eq!(parse("2.5", &Type::Float64), Some(Val::Float64(2.5)));
         assert_eq!(format_value(&Val::Float64(3.0)), "3.0");
+        assert_eq!(format_value(&Val::Float64(f64::NAN)), "nan");
+        assert_eq!(format_value(&Val::Float64(f64::NEG_INFINITY)), "-inf");
         assert_eq!(format_value(&Val::U64(u64::MAX)), "18446744073709551615");
+        assert_eq!(format_value(&Val::String("a\"b\n".into())), r#""a\"b\n""#);
+        assert_eq!(format_value(&Val::Char('\'')), r"'\''");
+        assert_eq!(
+            format_value(&Val::Record(vec![
+                ("label".into(), Val::String("pen".into())),
+                ("discount".into(), Val::Option(None)),
+            ])),
+            r#"{label: "pen", discount: none}"#
+        );
+        assert_eq!(
+            format_value(&Val::Tuple(vec![
+                Val::Result(Ok(None)),
+                Val::Result(Err(Some(Box::new(Val::Enum("no-lines".into()))))),
+                Val::Variant("none".into(), None),
+                Val::Flags(vec![]),
+                Val::List(vec![Val::Option(Some(Box::new(Val::U8(1))))]),
+            ])),
+            "(ok, err(no-lines), %none, {}, [some(1)])"
+        );
     }
 }

@@ -99,6 +99,27 @@ impl Analysis {
         &self.worlds
     }
 
+    /// The parameters of the function `function` of interface `interface`, with their
+    /// types as written in that interface: `[("inv", "invoice")]`.
+    pub fn params(&self, interface: &str, function: &str) -> Option<Vec<(String, String)>> {
+        let program = &self.program;
+        let iface = program
+            .interfaces
+            .iter()
+            .position(|i| i.name == interface)?;
+        let func = program.interfaces[iface]
+            .funcs
+            .iter()
+            .map(|&f| &program.funcs[f])
+            .find(|f| f.name == function)?;
+        Some(
+            func.params
+                .iter()
+                .map(|(name, ty)| (name.clone(), program.types.display_in(*ty, Some(iface))))
+                .collect(),
+        )
+    }
+
     /// WIT of the package: its exported interfaces and its worlds.
     pub fn wit(&self) -> Result<String> {
         self.wit.to_text()
