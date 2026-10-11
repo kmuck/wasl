@@ -151,7 +151,13 @@ fn invalid_programs() {
         ("local q: f64 = 1.;", Code::InvalidFloatLiteral),
         ("local Q: u32 = 1;", Code::InvalidIdent),
         ("local record: u32 = 1;", Code::ReservedKeyword),
+        ("local match: u32 = 1;", Code::ReservedKeyword),
+        ("local import: u32 = 1;", Code::ReservedKeyword),
         ("local q: u32 = 1 @ 2;", Code::InvalidChar),
+        ("local s: string = \"abc;", Code::InvalidString),
+        ("local s: string = \"\\q\";", Code::InvalidString),
+        ("local c: char = '';", Code::InvalidCharLiteral),
+        ("local c: u32 = u32(char(n));", Code::InvalidConversion),
         ("continue;", Code::BreakOutsideLoop),
         ("return 1;", Code::UnexpectedReturnValue),
         ("unknown();", Code::UnknownFunc),
@@ -181,5 +187,5 @@ fn invalid_programs() {
     let global_init = analyze_files(&[("src/t.wasl", "global g: u32 = 1 + 1;")])
         .err()
         .unwrap();
-    assert!(global_init.contains("E0100"), "{global_init}");
+    assert!(global_init.contains("E0409"), "{global_init}");
 }

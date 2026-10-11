@@ -72,7 +72,10 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
     for (iface_id, iface) in interfaces.iter().enumerate() {
         let mut by_name = HashMap::new();
         let mut ids = Vec::new();
-        for func in &iface.funcs {
+        if let Some(decl) = iface.types().next() {
+            return unsupported(decl.name.span, "type declarations");
+        }
+        for func in iface.funcs() {
             if by_name.contains_key(func.name.name.as_str()) {
                 return err(
                     Code::DuplicateFunc,
@@ -87,15 +90,17 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
             funcs.push(func);
             by_name.insert(func.name.name.as_str(), id);
             ids.push(id);
+            let params = func
+                .params
+                .iter()
+                .map(|p| Ok((p.name.name.clone(), prim(&p.ty)?)))
+                .collect::<Result<_>>()?;
+            let ret = func.ret.as_ref().map(prim).transpose()?;
             program.funcs.push(hir::FuncDef {
                 name: func.name.name.clone(),
                 interface: iface_id,
-                params: func
-                    .params
-                    .iter()
-                    .map(|p| (p.name.name.clone(), p.ty))
-                    .collect(),
-                ret: func.ret,
+                params,
+                ret,
                 locals: Vec::new(),
                 body: Vec::new(),
             });
@@ -155,7 +160,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         if !program.is_exported(iface_id) {
             continue;
         }
-        for func in &iface.funcs {
+        for func in iface.funcs() {
             if func.params.len() > MAX_EXPORTED_PARAMS {
                 return err(
                     Code::TooManyParams,
@@ -173,15 +178,23 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
     // 5. Globals (§ 6.4).
     let mut global_ids = HashMap::new();
     for global in &globals {
+        let ty = prim(&global.ty)?;
+        if !is_constant(&global.init) {
+            return err(
+                Code::NonConstGlobal,
+                global.init.span,
+                "the initial value of a global must be a constant expression, such as a literal",
+            );
+        }
         let mut cx = FnCx::new(&program, &names, &func_names, &global_ids, usize::MAX, None);
-        let init = cx.expr(&global.init, Some(global.ty))?;
+        let init = cx.expr(&global.init, Some(ty))?;
         let hir::ExprKind::Const(init) = init.kind else {
-            unreachable!("the grammar only allows literals")
+            unreachable!("a constant expression evaluates to a constant")
         };
         global_ids.insert(global.name.name.as_str(), program.globals.len());
         program.globals.push(hir::GlobalDef {
             name: global.name.name.clone(),
-            ty: global.ty,
+            ty,
             mutable: global.mutable,
             init,
         });
@@ -190,10 +203,11 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
     // 6. Function bodies.
     for (id, func) in funcs.iter().enumerate() {
         let iface = program.funcs[id].interface;
-        let mut cx = FnCx::new(&program, &names, &func_names, &global_ids, iface, func.ret);
+        let ret = program.funcs[id].ret;
+        let mut cx = FnCx::new(&program, &names, &func_names, &global_ids, iface, ret);
         cx.scopes.push(Vec::new());
-        for param in &func.params {
-            cx.declare(&param.name, param.ty)?;
+        for (param, (_, ty)) in func.params.iter().zip(&program.funcs[id].params) {
+            cx.declare(&param.name, *ty)?;
         }
         let body = cx.block(&func.body)?;
         if func.ret.is_some() && !always_returns(&body) {
@@ -213,6 +227,34 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
     }
 
     Ok(program)
+}
+
+/// Type of the v0.1 subset; the other types are not implemented yet.
+fn prim(ty: &ast::TypeExpr) -> Result<Type> {
+    match ty.kind {
+        ast::TypeExprKind::Prim(t) => Ok(t),
+        _ => unsupported(ty.span, "types other than numbers and `bool`"),
+    }
+}
+
+fn unsupported<T>(span: Span, what: &str) -> Result<T> {
+    err(
+        Code::Unsupported,
+        span,
+        format!("{what} are not implemented yet"),
+    )
+}
+
+/// Constant expression, the only initial value of a global (§ v2.4.12).
+fn is_constant(e: &ast::Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => matches!(expr.kind, ExprKind::Int(_) | ExprKind::Float(_)),
+        _ => false,
+    }
 }
 
 /// A block always returns if one of its statements always returns (§ 8.8).
@@ -338,15 +380,20 @@ impl<'a> FnCx<'a> {
     fn stmt(&mut self, stmt: &ast::Stmt) -> Result<hir::Stmt> {
         Ok(match &stmt.kind {
             StmtKind::Local { name, ty, init } => {
+                let ty = prim(ty)?;
                 // The initial value does not see the local yet (§ 9.4).
                 let init = match init {
-                    Some(e) => Some(self.expr(e, Some(*ty))?),
+                    Some(e) => Some(self.expr(e, Some(ty))?),
                     None => None,
                 };
-                let local = self.declare(name, *ty)?;
+                let local = self.declare(name, ty)?;
                 hir::Stmt::Local { local, init }
             }
             StmtKind::Assign { target, value } => {
+                if !target.selectors.is_empty() {
+                    return unsupported(stmt.span, "assignments to fields and elements");
+                }
+                let target = &target.name;
                 let (place, ty) = if let Some(id) = self.lookup_local(&target.name) {
                     (Place::Local(id), self.locals[id as usize])
                 } else if let Some(&id) = self.globals.get(target.name.as_str()) {
@@ -369,6 +416,7 @@ impl<'a> FnCx<'a> {
                 hir::Stmt::Assign { place, value }
             }
             StmtKind::If(if_) => self.if_(if_)?,
+            StmtKind::Match(_) => return unsupported(stmt.span, "`match` statements"),
             StmtKind::While { cond, body } => {
                 let cond = self.condition(cond)?;
                 self.loop_depth += 1;
@@ -482,7 +530,18 @@ impl<'a> FnCx<'a> {
                 }
                 result
             }
-            ExprKind::Convert { ty, arg } => self.convert(*ty, arg)?,
+            ExprKind::Convert { ty, arg } => self.convert(ty, arg)?,
+            ExprKind::Str(_) => return unsupported(e.span, "string literals"),
+            ExprKind::Char(_) => return unsupported(e.span, "char literals"),
+            ExprKind::Path(_) => return unsupported(e.span, "paths to cases"),
+            ExprKind::Record { .. } => return unsupported(e.span, "record literals"),
+            ExprKind::Flags { .. } => return unsupported(e.span, "flags literals"),
+            ExprKind::List(_) => return unsupported(e.span, "list literals"),
+            ExprKind::Tuple(_) => return unsupported(e.span, "tuples"),
+            ExprKind::Field { .. } | ExprKind::Elem { .. } => {
+                return unsupported(e.span, "field accesses");
+            }
+            ExprKind::Index { .. } => return unsupported(e.span, "indexes"),
             ExprKind::Unary { op, expr } => return self.unary(*op, expr, e.span, expected),
             ExprKind::Binary { op, lhs, rhs } => self.binary(*op, lhs, rhs, e.span, expected)?,
         };
@@ -748,7 +807,17 @@ impl<'a> FnCx<'a> {
         Ok(operand)
     }
 
-    fn convert(&mut self, target: Type, arg: &ast::Expr) -> Result<hir::Expr> {
+    fn convert(&mut self, target: &ast::TypeExpr, arg: &ast::Expr) -> Result<hir::Expr> {
+        let target = match target.kind {
+            ast::TypeExprKind::Prim(t) => t,
+            _ => {
+                return err(
+                    Code::InvalidConversion,
+                    target.span,
+                    "only numeric types have conversions; a number becomes a `char` with `char::from_u32`",
+                );
+            }
+        };
         if needs_type_context(arg) {
             return err(
                 Code::UntypedLiteral,
@@ -774,9 +843,23 @@ impl<'a> FnCx<'a> {
 
     /// Analyzes a call. The result has `ty: None` if the function returns nothing.
     fn call(&mut self, call: &ast::Call) -> Result<hir::Expr> {
-        let iface = match &call.iface {
-            None => self.iface,
-            Some(name) => match self.names.get(name.name.as_str()) {
+        let iface = match call.path.as_slice() {
+            [] => self.iface,
+            [name]
+                if matches!(
+                    name.name.as_str(),
+                    "string" | "list" | "char" | "option" | "result"
+                ) =>
+            {
+                return unsupported(
+                    name.span.to(call.name.span),
+                    "built-in functions and constructors",
+                );
+            }
+            [first, ..] if call.path.len() > 1 => {
+                return unsupported(first.span.to(call.name.span), "constructors");
+            }
+            [.., name] => match self.names.get(name.name.as_str()) {
                 Some(TopLevel::Interface(id)) => *id,
                 Some(other) => {
                     return err(
@@ -800,7 +883,7 @@ impl<'a> FnCx<'a> {
                 "interface `{iface_name}` has no function `{}`",
                 call.name.name
             );
-            if call.iface.is_none()
+            if call.path.is_empty()
                 && let Some(other) = self
                     .func_names
                     .iter()
