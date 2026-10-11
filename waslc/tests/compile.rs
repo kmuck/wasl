@@ -243,3 +243,223 @@ fn wit_of_types() {
     }
     assert!(!wit.contains("hidden"), "{wit}");
 }
+
+const INVOICE: &str = include_str!("../../examples/invoice/src/invoice.wasl");
+
+/// The target program of v0.2 and its WIT (§ v2.10.1).
+#[test]
+fn invoice_example() {
+    let sources = sources(&[("src/invoice.wasl", INVOICE)]);
+    let package = Package::new("example", "invoice", "0.1.0").unwrap();
+    let analysis = match analyze(&package, &sources) {
+        Ok(a) => a,
+        Err(e) => panic!("{}", e.display(&sources)),
+    };
+    let wit = analysis.wit().unwrap();
+    let spec = include_str!("../../docs/spec_v0.2/10-examples.md");
+    let start = spec.find("package example:invoice@0.1.0;").unwrap();
+    let end = start + spec[start..].find("```").unwrap();
+    // The printer separates functions with blank lines; the specification does not.
+    let lines = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(lines(&wit), lines(&spec[start..end]));
+}
+
+/// Invalid programs of v0.2 (§ v2.10.2): each line in a function of the target program.
+#[test]
+fn invalid_v2_programs() {
+    let cases: &[(&str, Code)] = &[
+        ("local s: string = \"abc;", Code::InvalidString),
+        ("local s: string = \"\\q\";", Code::InvalidString),
+        ("local x: lines = l;", Code::UnknownType),
+        ("local t: u32 = inv.total;", Code::UnknownField),
+        ("local t: u32 = n.x;", Code::UnknownField),
+        ("local t: status = status::lost;", Code::UnknownCase),
+        ("local t: status = line::x;", Code::UnknownCase),
+        (
+            "local m: line = line { quantity: 1, label: \"pen\", unit_price: 5 };",
+            Code::RecordFields,
+        ),
+        (
+            "local m: line = line { label: \"pen\", quantity: 1 };",
+            Code::RecordFields,
+        ),
+        (
+            "local m: line = line { label: \"pen\", label: \"x\", quantity: 1 };",
+            Code::RecordFields,
+        ),
+        ("local t: status = status::paid();", Code::Payload),
+        ("local t: discount = discount::percent;", Code::Payload),
+        (
+            "match (inv.discount) { case none(x) { } case some { } }",
+            Code::Payload,
+        ),
+        ("local d: u8 = option::none;", Code::TypeMismatch),
+        (
+            "match (option::none) { case none { } else { } }",
+            Code::CannotInfer,
+        ),
+        ("local m: u32 = list::len([]);", Code::CannotInfer),
+        ("local m: u32 = list::len([1, 2]);", Code::CannotInfer),
+        ("local s: string;", Code::Uninitialized),
+        ("local t: status;", Code::Uninitialized),
+        ("local t: tuple<u32, u32>;", Code::Uninitialized),
+        ("match (n) { case a { } }", Code::NotMatchable),
+        ("inv.number = 7;", Code::AssignReadOnly),
+        ("inv.lines[0] = l;", Code::AssignReadOnly),
+        ("inv.delivery.paper = true;", Code::AssignReadOnly),
+        (
+            "match (s) { case draft { } case sent { } }",
+            Code::NonExhaustive,
+        ),
+        (
+            "match (s) { case draft { } case sent { } case paid { } else { } }",
+            Code::RedundantCase,
+        ),
+        (
+            "match (s) { case draft { } case draft { } else { } }",
+            Code::RedundantCase,
+        ),
+        ("match (s) { case lost { } else { } }", Code::UnknownCase),
+        ("if (inv == other) { }", Code::InvalidOperator),
+        ("if (inv.customer < \"M\") { }", Code::InvalidOperator),
+        ("local c: u8 = inv.customer[0];", Code::InvalidOperator),
+        (
+            "local xs: list<mut u8> = string::bytes(inv.customer);",
+            Code::TypeMismatch,
+        ),
+        (
+            "local xs: list<u8> = list::freeze(string::bytes(inv.customer));",
+            Code::TypeMismatch,
+        ),
+        ("local c: char = '';", Code::InvalidCharLiteral),
+        ("local c: char = char(n);", Code::InvalidConversion),
+        ("local c: u8 = u8('a');", Code::InvalidConversion),
+        (
+            "local f: delivery = delivery { urgent, email };",
+            Code::FlagsOrder,
+        ),
+        (
+            "local f: delivery = delivery { paper, paper };",
+            Code::FlagsOrder,
+        ),
+        ("local f: delivery = delivery { fax };", Code::UnknownCase),
+        (
+            "local t: tuple<u32, u32> = tuple(1, 2, 3);",
+            Code::TypeMismatch,
+        ),
+        ("local t: u32 = tuple(n, n).2;", Code::UnknownField),
+        ("local r: result<u32, status> = result::ok;", Code::Payload),
+        ("local r: result<_, status> = result::ok(1);", Code::Payload),
+        ("local o: option<u32> = option::some;", Code::Payload),
+        (
+            "local o: option<u32> = option::maybe(1);",
+            Code::UnknownCase,
+        ),
+        ("result::ok(1);", Code::Syntax),
+        ("local m: u32 = invoices::status;", Code::UnknownCase),
+        (
+            "local m: u32 = string::nope(inv.customer);",
+            Code::UnknownFunc,
+        ),
+        ("local m: u32 = string::len;", Code::UnknownName),
+        (
+            "local m: u32 = string::len(inv.customer, n);",
+            Code::ArgCount,
+        ),
+        (
+            "local t: discount = discount::percent(1, 2);",
+            Code::ArgCount,
+        ),
+        ("local m: list<u8> = list::copy(d);", Code::TypeMismatch),
+    ];
+    for (body, code) in cases {
+        let program = INVOICE.replace(
+            "  func sample() -> invoice {",
+            &format!(
+                "  func probe(inv: invoice, other: invoice, s: status, n: u32, d: list<mut u8>, l: line) {{\n    {body}\n  }}\n\n  func sample() -> invoice {{"
+            ),
+        );
+        let sources = sources(&[("src/invoice.wasl", &program)]);
+        match analyze(&package(), &sources) {
+            Ok(_) => panic!("accepted: {body}"),
+            Err(e) => assert_eq!(e.code, *code, "{body}: {}", e.display(&sources)),
+        }
+    }
+
+    let others: &[(&str, Code)] = &[
+        ("global s: string = \"a\" + \"b\";", Code::NonConstGlobal),
+        (
+            "global s: u32 = invoices::count_unpaid([]);",
+            Code::NonConstGlobal,
+        ),
+        (
+            "interface p { func f() -> u32 { local l: line = invoices::sample().lines[0]; return 0; } }",
+            Code::UnknownType,
+        ),
+        (
+            "interface p { func f() -> list<u8> { local d: list<mut u8> = list::filled(3, 0); return d; } }",
+            Code::TypeMismatch,
+        ),
+    ];
+    for (extra, code) in others {
+        let program = format!("{INVOICE}\n{extra}\n");
+        let sources = sources(&[("src/invoice.wasl", &program)]);
+        match analyze(&package(), &sources) {
+            Ok(_) => panic!("accepted: {extra}"),
+            Err(e) => assert_eq!(e.code, *code, "{extra}: {}", e.display(&sources)),
+        }
+    }
+}
+
+/// Valid uses of the v0.2 expressions, in a function of the target program.
+#[test]
+fn valid_v2_bodies() {
+    let bodies = [
+        "local c: char = 'é'; local k: u32 = u32(c); if (c < 'z' && c != '\\n') { }",
+        "local t: tuple<u32, list<char>> = tuple(1, ['a']); local u: char = t.1[0];",
+        "local x: tuple<u32, string> = tuple(n, \"a\"); local y: string = x.1 + inv.customer;",
+        "local f: delivery = delivery { email, urgent } | inv.delivery & delivery { }; if (f == delivery { } || f.paper) { }",
+        "local o: option<option<u32>> = option::some(option::none); local p: option<u32> = option::some(n);",
+        "local q: option<u32> = option::some(1);",
+        "local r: result = result::ok; local e: result<u32> = result::err; local g: result<_, status> = result::err(status::sent);",
+        "local v: discount = invoices::discount::fixed(1); local w: status = invoices::status::paid;",
+        "local xs: list<mut u8> = [1, 2]; xs[0] = 3; d[n] = xs[1]; local ys: list<u8> = list::freeze(xs);",
+        "local zs: list<mut string> = list::filled(n, \"\"); local ws: list<string> = list::filled(n, \"\"); local m: list<u8> = list::filled(2, 0);",
+        "local cs: list<char> = string::chars(inv.customer); local t: string = string::from_chars(cs); local b: option<string> = string::from_bytes(d);",
+        "local e: option<char> = char::from_u32(65); local k: u32 = list::len(list::copy(string::chars(inv.customer)));",
+        "inv.status = status::paid; other = inv; other.status = s;",
+        "match (inv.discount) { case some(x) { match (x) { case percent(p) { n = u32(p); } case fixed { } } } case none { } }",
+        "while (true) { match (s) { case draft { break; } else { continue; } } }",
+        "local g: list<list<u8>> = [[1], [], string::bytes(\"x\")];",
+        "local h: list<line> = [l, line { label: \"x\", quantity: 1, unit_price: 2, }];",
+        "string::len(inv.customer);",
+    ];
+    for body in bodies {
+        let program = INVOICE.replace(
+            "  func sample() -> invoice {",
+            &format!(
+                "  func probe(inv: invoice, other: invoice, s: status, n: u32, d: list<mut u8>, l: line) {{\n    {body}\n  }}\n\n  func sample() -> invoice {{"
+            ),
+        );
+        let sources = sources(&[("src/invoice.wasl", &program)]);
+        if let Err(e) = analyze(&package(), &sources) {
+            panic!("{body}: {}", e.display(&sources));
+        }
+    }
+    let globals = "global ga: invoices::line = invoices::line { label: \"item\", quantity: 1, unit_price: 0 };
+        global gb: option<invoices::discount> = option::none;
+        global gc: list<tuple<char, u8>> = [tuple('a', 1)];
+        global gd: invoices::delivery = invoices::delivery { paper };
+        global ge: result<invoices::discount, u8> = result::ok(invoices::discount::percent(5));
+        global gf: mut s8 = -1;";
+    let program = format!("{INVOICE}\n{globals}\n");
+    let sources = sources(&[("src/invoice.wasl", &program)]);
+    if let Err(e) = analyze(&package(), &sources) {
+        panic!("{}", e.display(&sources));
+    }
+}
