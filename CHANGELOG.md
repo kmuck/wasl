@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `ROADMAP.md`: the direction of WaSL from 0.2 to 1.0, with the target program of each version.
+- `waslc` parses the whole v0.2 syntax: string and char literals, type declarations in interfaces, composite types, `match`, field accesses, indexes, record, flags, list and tuple literals. Constructs that the compiler cannot compile yet are reported as `E9002`.
+
+### Changed
+
+- `match`, `case`, `record`, `enum`, `variant`, `flags`, `char`, `string`, `list`, `tuple`, `option` and `result` are keywords; using a keyword as an identifier reports E0005.
+- The initial value of a global that is not a literal reports E0409 instead of E0100.
 
 ## [0.1.0] - 2026-10-11
 

@@ -13,6 +13,8 @@ pub enum Code {
     InvalidFloatLiteral,
     InvalidIdent,
     ReservedKeyword,
+    InvalidString,
+    InvalidCharLiteral,
     // Syntax
     Syntax,
     // Declarations
@@ -35,6 +37,7 @@ pub enum Code {
     InvalidOperator,
     InvalidConversion,
     NonBoolCondition,
+    NonConstGlobal,
     // Control flow
     AssignImmutable,
     BreakOutsideLoop,
@@ -44,6 +47,8 @@ pub enum Code {
     // Input/output and internal errors (outside the specification)
     Io,
     UnknownWorld,
+    /// Construct of the v0.2 specification that the compiler does not implement yet.
+    Unsupported,
     Internal,
 }
 
@@ -55,6 +60,8 @@ impl Code {
             Code::InvalidFloatLiteral => "E0003",
             Code::InvalidIdent => "E0004",
             Code::ReservedKeyword => "E0005",
+            Code::InvalidString => "E0006",
+            Code::InvalidCharLiteral => "E0007",
             Code::Syntax => "E0100",
             Code::Manifest => "E0200",
             Code::DuplicateItem => "E0201",
@@ -73,6 +80,7 @@ impl Code {
             Code::InvalidOperator => "E0403",
             Code::InvalidConversion => "E0404",
             Code::NonBoolCondition => "E0405",
+            Code::NonConstGlobal => "E0409",
             Code::AssignImmutable => "E0500",
             Code::BreakOutsideLoop => "E0501",
             Code::MissingReturnValue => "E0502",
@@ -80,6 +88,7 @@ impl Code {
             Code::MissingReturn => "E0504",
             Code::Io => "E9000",
             Code::UnknownWorld => "E9001",
+            Code::Unsupported => "E9002",
             Code::Internal => "E9999",
         }
     }
