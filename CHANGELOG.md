@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `ROADMAP.md`: the direction of WaSL from 0.2 to 1.0, with the target program of each version.
+
 ## [0.1.0] - 2026-10-11
 
 First version of the language, implementing the [v0.1 specification](docs/spec_v0.1/README.md).

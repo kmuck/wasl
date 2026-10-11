@@ -68,18 +68,19 @@ The road there:
 | Version | Content |
 |---|---|
 | **0.1** (done) | Numbers, functions, globals, control flow, interfaces and worlds; components callable with `weasel call` |
-| **0.2** (specified) | Data on the WasmGC heap: strings, records, enums, variants, lists, options, results ([spec](docs/spec_v0.2/README.md)) |
-| next | Async and WASI 0.3: `async func`, streams, futures; CLI programs (`wasi:cli/run`) and HTTP services (`wasi:http/handler`) |
-| next | Dependencies and imports with `wkg`; resources |
-| next | Standard library (HTTP, JSON, console), `weasel run`, `serve`, `test`, `publish` |
+| **0.2** (specified) | Data on the WasmGC heap: strings, chars, records, tuples, enums, variants, flags, lists, options, results ([spec](docs/spec_v0.2/README.md)) |
+| **0.3** | Composing with other components: imports, WIT dependencies with `wkg`, resources |
+| **0.4** | Async and WASI 0.3: `async func`, streams, futures; CLI programs (`wasi:cli/run`) and HTTP services (`wasi:http/handler`); `weasel run`, `serve` |
+| **0.5** | Standard library (text, console, HTTP, JSON); `weasel test`, `fmt`, `publish` |
 
-The detailed roadmap and the open questions are in [chapter 16 of the specification](docs/spec_v0.1/16-roadmap.md).
+The detailed roadmap, with the target program of each version and what the project needs further out, is in [ROADMAP.md](ROADMAP.md).
 
 ## Repository
 
 ```
 WaSL/
 ├── README.md     # this document
+├── ROADMAP.md    # where WaSL is going, version by version
 ├── docs/         # the language specification
 ├── waslc/        # the compiler, a Rust library
 ├── weasel/       # the build tool, a Rust executable
