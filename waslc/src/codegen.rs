@@ -47,7 +47,14 @@ pub fn generate(
             .iter()
             .chain(&func.ret)
             .all(|t| t.as_prim().is_some())
-            && func.params.iter().all(|(_, t)| t.as_prim().is_some());
+            && func.params.iter().all(|(_, t)| t.as_prim().is_some())
+            && {
+                let mut prims = true;
+                visit_stmts(&func.body, &mut |e| {
+                    prims &= e.ty.is_none_or(|t| t.as_prim().is_some());
+                });
+                prims
+            };
         if used_funcs[id] && !scalar {
             return Err(Diagnostic::without_span(
                 Code::Unsupported,
@@ -89,11 +96,12 @@ pub fn generate(
         if !used_globals[id] {
             continue;
         }
-        let init = match global.init {
-            Const::I32(v) => ConstExpr::i32_const(v),
-            Const::I64(v) => ConstExpr::i64_const(v),
-            Const::F32(v) => ConstExpr::f32_const(Ieee32::from(v)),
-            Const::F64(v) => ConstExpr::f64_const(Ieee64::from(v)),
+        let init = match global.init.kind {
+            ExprKind::Const(Const::I32(v)) => ConstExpr::i32_const(v),
+            ExprKind::Const(Const::I64(v)) => ConstExpr::i64_const(v),
+            ExprKind::Const(Const::F32(v)) => ConstExpr::f32_const(Ieee32::from(v)),
+            ExprKind::Const(Const::F64(v)) => ConstExpr::f64_const(Ieee64::from(v)),
+            _ => unreachable!("only globals of primitive types are used"),
         };
         globals.global(
             GlobalType {
@@ -162,7 +170,30 @@ fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
     for stmt in stmts {
         match stmt {
             Stmt::Local { init, .. } => init.iter().for_each(|e| visit_expr(e, f)),
-            Stmt::Assign { value, .. } => visit_expr(value, f),
+            Stmt::Assign { place, value } => {
+                match place {
+                    Place::Local(_) | Place::Global(_) => {}
+                    Place::Field { record, .. } => visit_expr(record, f),
+                    Place::Index { list, index } => {
+                        visit_expr(list, f);
+                        visit_expr(index, f);
+                    }
+                }
+                visit_expr(value, f);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_,
+            } => {
+                visit_expr(scrutinee, f);
+                for arm in arms {
+                    visit_stmts(&arm.body, f);
+                }
+                if let Some(else_) = else_ {
+                    visit_stmts(else_, f);
+                }
+            }
             Stmt::If { cond, then, else_ } => {
                 visit_expr(cond, f);
                 visit_stmts(then, f);
@@ -182,13 +213,27 @@ fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
 fn visit_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     match &e.kind {
-        ExprKind::Call { args, .. } => args.iter().for_each(|a| visit_expr(a, f)),
-        ExprKind::Unary { expr, .. } | ExprKind::Convert(expr) => visit_expr(expr, f),
-        ExprKind::Binary { lhs, rhs, .. } => {
-            visit_expr(lhs, f);
-            visit_expr(rhs, f);
+        ExprKind::Call { args, .. }
+        | ExprKind::Builtin { args, .. }
+        | ExprKind::Record(args)
+        | ExprKind::List(args)
+        | ExprKind::Tuple(args) => args.iter().for_each(|a| visit_expr(a, f)),
+        ExprKind::Unary { expr, .. }
+        | ExprKind::Convert(expr)
+        | ExprKind::Some(expr)
+        | ExprKind::Field { expr, .. }
+        | ExprKind::Elem { expr, .. }
+        | ExprKind::Flag { expr, .. } => visit_expr(expr, f),
+        ExprKind::Binary { lhs: a, rhs: b, .. } | ExprKind::Index { expr: a, index: b } => {
+            visit_expr(a, f);
+            visit_expr(b, f);
         }
-        ExprKind::Const(_) | ExprKind::Local(_) | ExprKind::Global(_) => {}
+        ExprKind::Case { payload, .. } => payload.iter().for_each(|p| visit_expr(p, f)),
+        ExprKind::Const(_)
+        | ExprKind::Local(_)
+        | ExprKind::Global(_)
+        | ExprKind::Str(_)
+        | ExprKind::None => {}
     }
 }
 
@@ -287,6 +332,7 @@ impl<'a> FuncGen<'a> {
                 match place {
                     Place::Local(l) => self.emit(Instruction::LocalSet(*l)),
                     Place::Global(g) => self.emit(Instruction::GlobalSet(self.global(*g))),
+                    Place::Field { .. } | Place::Index { .. } => unreachable!("checked"),
                 }
             }
             Stmt::If { cond, then, else_ } => {
@@ -316,6 +362,7 @@ impl<'a> FuncGen<'a> {
                 self.frames.pop();
                 self.emit(Instruction::End);
             }
+            Stmt::Match { .. } => unreachable!("checked"),
             Stmt::Break => self.branch(Frame::LoopExit),
             Stmt::Continue => self.branch(Frame::LoopStart),
             Stmt::Return(value) => {
@@ -382,6 +429,7 @@ impl<'a> FuncGen<'a> {
                 self.expr(inner);
                 self.convert(inner.value_ty(), e.value_ty());
             }
+            _ => unreachable!("only expressions of v0.1 types are compiled"),
         }
     }
 
