@@ -11,7 +11,7 @@ The order of § 11.2 becomes:
 3. **Items of the interfaces**, interface by interface, in declaration order: functions declared twice (E0202), other names declared twice (E0206), types with the name of a top-level declaration (E0210), fields, cases and flags declared twice (E0207), flags types with more than 32 flags (E0212).
 4. **Types**, interface by interface, type by type, in declaration order: unknown types in fields, payloads and signatures (E0305), types without a value (E0211).
 5. **Worlds**, in declaration order: exports (E0203, E0204).
-6. **Exported functions**, world by world, function by function: recursive types (E0208), types of interfaces with functions (E0209).
+6. **Exported functions**, world by world, function by function: recursive types (E0208), types of interfaces with functions (E0209); then cycles of `use` between the interfaces that appear in the WIT (E0213).
 7. **Initial values of the globals**, in declaration order (E0409 and the typing errors).
 8. **Function bodies**, as in § 11.2.
 
@@ -28,6 +28,7 @@ The order of § 11.2 becomes:
 | E0210 | type with the name of a top-level declaration | `record math { … }` with `interface math` |
 | E0211 | type without a value: a cycle that does not go through `option` or `list` | `record a { next: a }` |
 | E0212 | flags type with more than 32 flags | |
+| E0213 | interfaces of the WIT that use each other's types in a cycle | `record r { s: b::s }` in `a` and `func f(r: a::r)` in `b`, both exported (§ v2.7.1) |
 | E0305 | unknown type | `local x: nope = …;`, `local x: invoices::fib = …;` with a function `fib` |
 | E0306 | unknown field, flag or tuple element | `inv.nope`, `n.x` with `n: u32`, `t.2` on a `tuple<u32, u32>` |
 | E0307 | unknown case | `status::lost`, `case lost { }`, `invoices::line::x` with a record `line` |

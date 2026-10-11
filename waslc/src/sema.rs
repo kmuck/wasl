@@ -320,6 +320,28 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         }
     }
 
+    // Interfaces that appear in the WIT cannot use each other's types in a cycle (§ v2.7.1).
+    if let Some(cycle) = crate::wit::use_cycle(&types, &program) {
+        let steps: Vec<String> = cycle
+            .iter()
+            .map(|&(i, d)| {
+                let decl = &types.decls[d];
+                format!(
+                    "`{}` uses `{}::{}`",
+                    program.interfaces[i].name, program.interfaces[decl.interface].name, decl.name
+                )
+            })
+            .collect();
+        return err(
+            Code::UseCycle,
+            interfaces[cycle[0].0].name.span,
+            format!(
+                "interfaces use each other's types in a cycle, which WIT forbids: {}; move the shared types to an interface of their own",
+                steps.join(", ")
+            ),
+        );
+    }
+
     // 5. Globals (§ 6.4, § v2.4.12).
     let mut global_ids = HashMap::new();
     for global in &globals {
@@ -934,6 +956,28 @@ mod tests {
             Code::UnexportedTypeInterface
         );
         assert!(analyze_str(&format!("world w {{ export a; export paint; }} interface a {{ func f(c: paint::color) {{ }} }} {with_funcs}")).is_ok());
+    }
+
+    #[test]
+    fn use_cycles() {
+        // `a` uses `b::s` in a type, `b` uses `a::r` in a function: a cycle in the WIT.
+        let cycle = "interface a { record r { s: b::s } } \
+                     interface b { record s { x: u32 } func f(r: a::r) { } }";
+        let e = analyze_str(&format!("world w {{ export a; export b; }} {cycle}")).unwrap_err();
+        assert_eq!(e.code, Code::UseCycle);
+        assert!(
+            e.message.contains("`a` uses `b::s`, `b` uses `a::r`"),
+            "{}",
+            e.message
+        );
+        // Through three interfaces, `c` only appearing because `b` uses its types.
+        let three = "interface a { enum e { x } record r { s: b::s } } \
+                     interface b { record s { t: c::t } func f(r: a::r) { } } \
+                     interface c { record t { e: a::e } }";
+        let e = analyze_str(&format!("world w {{ export a; export b; }} {three}")).unwrap_err();
+        assert_eq!(e.code, Code::UseCycle);
+        // No cycle between interfaces that do not appear in the WIT.
+        assert!(analyze_str(cycle).is_ok());
     }
 
     #[test]

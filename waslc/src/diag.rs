@@ -30,6 +30,7 @@ pub enum Code {
     TypeNamedLikeTopLevel,
     EmptyType,
     TooManyFlags,
+    UseCycle,
     // Names
     UnknownName,
     UnknownFunc,
@@ -91,6 +92,7 @@ impl Code {
             Code::TypeNamedLikeTopLevel => "E0210",
             Code::EmptyType => "E0211",
             Code::TooManyFlags => "E0212",
+            Code::UseCycle => "E0213",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",

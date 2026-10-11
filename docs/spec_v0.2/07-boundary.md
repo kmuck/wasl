@@ -13,6 +13,8 @@ The derivation by erasure of § 2.6 and § 13.1 is extended:
 
 **Which interfaces appear.** An interface appears in the WIT of the package if a world exports it (§ 13.1), or if an interface that appears uses one of its types. An interface of the second kind that no world exports is a **types-only interface** in WIT: the world that uses it imports it implicitly, as WIT requires, and the host has nothing to provide for it. This is only possible if it declares no function: an exported function that uses a type of an interface that has functions and is not exported by the same world is an error (E0209).
 
+**No cycle of `use`.** WIT forbids interfaces whose `use` form a cycle. Among the interfaces that appear, if `a` uses a type of `b` and `b`, directly or through other interfaces, uses a type of `a`, it is an error (E0213), reported on the first interface of the cycle in declaration order, with each step of the cycle. The fix is to move the shared types to an interface of their own. Interfaces that do not appear in the WIT can use each other's types freely.
+
 ```wasl
 world shop {
   export orders;

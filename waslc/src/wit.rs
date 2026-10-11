@@ -94,7 +94,7 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
     )
     .unwrap();
 
-    let appears = appears(program);
+    let appears = appears(types, program);
     for (id, iface) in program.interfaces.iter().enumerate() {
         if !appears[id] {
             continue;
@@ -113,7 +113,7 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
         for &d in &iface.types {
             names.insert(d, kebab(&types.decls[d].name));
         }
-        let foreign = foreign_decls(program, id, exported);
+        let foreign = foreign_decls(types, program, id, exported);
         let mut uses: Vec<(usize, Vec<String>)> = Vec::new();
         for d in foreign {
             let decl = &types.decls[d];
@@ -231,14 +231,14 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
 
 /// Which interfaces appear in the WIT (§ v2.7.1): those exported by a world, and those
 /// whose types an interface that appears uses.
-pub fn appears(program: &Program) -> Vec<bool> {
+pub fn appears(types: &Types, program: &Program) -> Vec<bool> {
     let mut appears: Vec<bool> = (0..program.interfaces.len())
         .map(|i| program.is_exported(i))
         .collect();
     let mut work: Vec<InterfaceId> = (0..appears.len()).filter(|&i| appears[i]).collect();
     while let Some(i) = work.pop() {
-        for d in foreign_decls(program, i, program.is_exported(i)) {
-            let other = program.types.decls[d].interface;
+        for d in foreign_decls(types, program, i, program.is_exported(i)) {
+            let other = types.decls[d].interface;
             if !appears[other] {
                 appears[other] = true;
                 work.push(other);
@@ -248,10 +248,71 @@ pub fn appears(program: &Program) -> Vec<bool> {
     appears
 }
 
+/// A cycle of `use` between the interfaces that appear in the WIT, which WIT forbids
+/// (E0213): each interface of the cycle with a type it uses from the next one. The cycle
+/// starts with its first interface in declaration order.
+pub fn use_cycle(types: &Types, program: &Program) -> Option<Vec<(InterfaceId, DeclId)>> {
+    let appears = appears(types, program);
+    // Edges: for each interface, the first type it uses from each other interface.
+    let edges: Vec<Vec<(InterfaceId, DeclId)>> = (0..program.interfaces.len())
+        .map(|i| {
+            let mut out: Vec<(InterfaceId, DeclId)> = Vec::new();
+            if appears[i] {
+                for d in foreign_decls(types, program, i, program.is_exported(i)) {
+                    let other = types.decls[d].interface;
+                    if !out.iter().any(|&(o, _)| o == other) {
+                        out.push((other, d));
+                    }
+                }
+            }
+            out
+        })
+        .collect();
+    // Depth-first search; `state`: 0 not visited, 1 on the current path, 2 done.
+    fn visit(
+        i: InterfaceId,
+        edges: &[Vec<(InterfaceId, DeclId)>],
+        state: &mut [u8],
+        path: &mut Vec<(InterfaceId, DeclId)>,
+    ) -> Option<Vec<(InterfaceId, DeclId)>> {
+        state[i] = 1;
+        for &(other, d) in &edges[i] {
+            path.push((i, d));
+            if state[other] == 1 {
+                let start = path.iter().position(|&(j, _)| j == other).unwrap();
+                let mut cycle = path[start..].to_vec();
+                let first = (0..cycle.len()).min_by_key(|&k| cycle[k].0).unwrap();
+                cycle.rotate_left(first);
+                return Some(cycle);
+            }
+            if state[other] == 0
+                && let Some(cycle) = visit(other, edges, state, path)
+            {
+                return Some(cycle);
+            }
+            path.pop();
+        }
+        state[i] = 2;
+        None
+    }
+    let mut state = vec![0u8; edges.len()];
+    (0..edges.len()).find_map(|i| {
+        if state[i] == 0 {
+            visit(i, &edges, &mut state, &mut Vec::new())
+        } else {
+            None
+        }
+    })
+}
+
 /// The types of other interfaces that the WIT of interface `id` names: in its types and,
 /// if `with_funcs`, in the signatures of its functions. In a deterministic order.
-fn foreign_decls(program: &Program, id: InterfaceId, with_funcs: bool) -> Vec<DeclId> {
-    let types = &program.types;
+fn foreign_decls(
+    types: &Types,
+    program: &Program,
+    id: InterfaceId,
+    with_funcs: bool,
+) -> Vec<DeclId> {
     let iface = &program.interfaces[id];
     let mut roots: Vec<Type> = iface
         .types

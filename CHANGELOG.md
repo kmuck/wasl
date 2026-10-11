@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- E0213: interfaces of the WIT that use each other's types in a cycle, which WIT forbids, are reported with the steps of the cycle. They used to stop the compiler with an internal error (E9999).
+
 ## [0.2.0] - 2026-10-11
 
 Data on the WasmGC heap, implementing the [v0.2 specification](docs/spec_v0.2/README.md) (provisional until v0.3). The target program, [`examples/invoice`](examples/invoice), builds and runs in the continuous integration.
