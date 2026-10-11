@@ -1,0 +1,622 @@
+//! Helper functions of the module (§ v2.6.4): string comparison and concatenation, UTF-8
+//! validation, decoding and encoding, `char::from_u32`, list copies.
+//!
+//! Strings are always valid UTF-8 (literals, `string::from_bytes` validates, the
+//! component boundary validates), and lists of chars only hold Unicode scalar values: the
+//! decoder and the encoder do not check their input.
+
+use wasm_encoder::{BlockType, Function, HeapType, Instruction, StorageType, ValType};
+
+use super::{ModuleCx, field, ref_type};
+use crate::types::Type;
+
+use Instruction as I;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Helper {
+    /// `(string, string) -> bool`
+    StrEq,
+    /// `(string, string) -> string`
+    Concat,
+    /// `string::from_bytes`: `(list<u8>) -> option<string>`
+    FromBytes,
+    /// `string::chars`: `(string) -> list<char>`
+    Chars,
+    /// `string::from_chars`: `(list<char>) -> string`
+    FromChars,
+    /// `char::from_u32`: `(u32) -> option<char>`
+    CharFromU32,
+    /// `list::copy` and `list::freeze` on an array type.
+    Copy(u32),
+}
+
+/// `local.get`
+fn get(l: u32) -> Instruction<'static> {
+    I::LocalGet(l)
+}
+
+/// `local = local + 1`
+fn incr(l: u32) -> [Instruction<'static>; 4] {
+    [get(l), I::I32Const(1), I::I32Add, I::LocalSet(l)]
+}
+
+impl Helper {
+    /// Parameters, results and body of the helper.
+    pub(super) fn generate(self, cx: &mut ModuleCx) -> (Vec<ValType>, Vec<ValType>, Function) {
+        let bytes = cx.heap(Type::STRING);
+        let string = ref_type(bytes, false);
+        let (params, results, locals, code) = match self {
+            Helper::StrEq => (
+                vec![string, string],
+                vec![ValType::I32],
+                vec![ValType::I32; 2],
+                str_eq(bytes),
+            ),
+            Helper::Concat => (
+                vec![string, string],
+                vec![string],
+                vec![string],
+                concat(bytes),
+            ),
+            Helper::FromBytes => {
+                let mut locals = vec![ValType::I32; 7];
+                locals.push(string);
+                (
+                    vec![string],
+                    vec![ref_type(bytes, true)],
+                    locals,
+                    from_bytes(bytes),
+                )
+            }
+            Helper::Chars => {
+                let chars = cx.array(StorageType::Val(ValType::I32));
+                let mut locals = vec![ValType::I32; 4];
+                locals.push(ref_type(chars, false));
+                (
+                    vec![string],
+                    vec![ref_type(chars, false)],
+                    locals,
+                    decode(bytes, chars),
+                )
+            }
+            Helper::FromChars => {
+                let chars = cx.array(StorageType::Val(ValType::I32));
+                let mut locals = vec![ValType::I32; 4];
+                locals.push(string);
+                locals.push(ValType::I32);
+                (
+                    vec![ref_type(chars, false)],
+                    vec![string],
+                    locals,
+                    encode(bytes, chars),
+                )
+            }
+            Helper::CharFromU32 => {
+                let boxed = cx.immutable_struct(vec![field(ValType::I32, false)]);
+                (
+                    vec![ValType::I32],
+                    vec![ref_type(boxed, true)],
+                    Vec::new(),
+                    char_from_u32(boxed),
+                )
+            }
+            Helper::Copy(array) => {
+                let list = ref_type(array, false);
+                let storage = cx.rec[array as usize].composite_type.inner.clone();
+                let wasm_encoder::CompositeInnerType::Array(ty) = storage else {
+                    unreachable!("an array type")
+                };
+                let defaultable = !matches!(
+                    ty.0.element_type,
+                    StorageType::Val(ValType::Ref(r)) if !r.nullable
+                );
+                (
+                    vec![list],
+                    vec![list],
+                    vec![ValType::I32, list],
+                    copy(array, defaultable),
+                )
+            }
+        };
+        let mut function = Function::new_with_locals_types(locals);
+        for instr in &code {
+            function.instruction(instr);
+        }
+        function.instruction(&I::End);
+        (params, results, function)
+    }
+}
+
+/// `a == b`: same length, then same bytes.
+/// Locals: a = 0, b = 1, n = 2, i = 3.
+fn str_eq(bytes: u32) -> Vec<Instruction<'static>> {
+    let mut c = vec![
+        get(0),
+        I::ArrayLen,
+        I::LocalTee(2),
+        get(1),
+        I::ArrayLen,
+        I::I32Ne,
+        I::If(BlockType::Empty),
+        I::I32Const(0),
+        I::Return,
+        I::End,
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(3),
+        get(2),
+        I::I32GeU,
+        I::BrIf(1),
+        get(0),
+        get(3),
+        I::ArrayGetU(bytes),
+        get(1),
+        get(3),
+        I::ArrayGetU(bytes),
+        I::I32Ne,
+        I::If(BlockType::Empty),
+        I::I32Const(0),
+        I::Return,
+        I::End,
+    ];
+    c.extend(incr(3));
+    c.extend([I::Br(0), I::End, I::End, I::I32Const(1)]);
+    c
+}
+
+/// `a + b` on strings. Locals: a = 0, b = 1, r = 2.
+fn concat(bytes: u32) -> Vec<Instruction<'static>> {
+    let copy = I::ArrayCopy {
+        array_type_index_dst: bytes,
+        array_type_index_src: bytes,
+    };
+    vec![
+        get(0),
+        I::ArrayLen,
+        get(1),
+        I::ArrayLen,
+        I::I32Add,
+        I::ArrayNewDefault(bytes),
+        I::LocalSet(2),
+        // r[0..] = a
+        get(2),
+        I::I32Const(0),
+        get(0),
+        I::I32Const(0),
+        get(0),
+        I::ArrayLen,
+        copy.clone(),
+        // r[len(a)..] = b
+        get(2),
+        get(0),
+        I::ArrayLen,
+        get(1),
+        I::I32Const(0),
+        get(1),
+        I::ArrayLen,
+        copy,
+        get(2),
+    ]
+}
+
+/// `list::copy`, `list::freeze`: a new array of the same length, then `array.copy`. An
+/// array of non-nullable references has no default value: it is created filled with its
+/// first element. Locals: xs = 0, n = 1, r = 2.
+fn copy(array: u32, defaultable: bool) -> Vec<Instruction<'static>> {
+    let mut c = vec![get(0), I::ArrayLen, I::LocalTee(1)];
+    if defaultable {
+        c.push(I::ArrayNewDefault(array));
+    } else {
+        c.extend([
+            I::I32Eqz,
+            I::If(BlockType::Result(ref_type(array, false))),
+            I::ArrayNewFixed {
+                array_type_index: array,
+                array_size: 0,
+            },
+            I::Else,
+            get(0),
+            I::I32Const(0),
+            I::ArrayGet(array),
+            get(1),
+            I::ArrayNew(array),
+            I::End,
+        ]);
+    }
+    c.extend([
+        I::LocalSet(2),
+        get(2),
+        I::I32Const(0),
+        get(0),
+        I::I32Const(0),
+        get(1),
+        I::ArrayCopy {
+            array_type_index_dst: array,
+            array_type_index_src: array,
+        },
+        get(2),
+    ]);
+    c
+}
+
+/// `char::from_u32(n)`: `n` boxed if it is a Unicode scalar value (not a surrogate, at
+/// most U+10FFFF), `none` otherwise. Locals: n = 0.
+fn char_from_u32(boxed: u32) -> Vec<Instruction<'static>> {
+    vec![
+        get(0),
+        I::I32Const(0xD800),
+        I::I32LtU,
+        get(0),
+        I::I32Const(0xE000),
+        I::I32GeU,
+        get(0),
+        I::I32Const(0x10FFFF),
+        I::I32LeU,
+        I::I32And,
+        I::I32Or,
+        I::If(BlockType::Result(ref_type(boxed, true))),
+        get(0),
+        I::StructNew(boxed),
+        I::Else,
+        I::RefNull(HeapType::Concrete(boxed)),
+        I::End,
+    ]
+}
+
+/// `string::from_bytes(b)`: validates UTF-8 (Unicode table 3-7: no overlong form, no
+/// surrogate, nothing above U+10FFFF), then copies the bytes.
+/// Locals: b = 0, n = 1, i = 2, c = 3, need = 4, lo = 5, hi = 6, j = 7, r = 8.
+fn from_bytes(bytes: u32) -> Vec<Instruction<'static>> {
+    let invalid = |c: &mut Vec<Instruction<'static>>| {
+        c.extend([
+            I::If(BlockType::Empty),
+            I::RefNull(HeapType::Concrete(bytes)),
+            I::Return,
+            I::End,
+        ])
+    };
+    // `need` continuation bytes, the first one in [lo, hi].
+    let sequence = |need: i32, lo: [i32; 2], hi: [i32; 2]| {
+        vec![
+            I::I32Const(need),
+            I::LocalSet(4),
+            // lo = c == lo[0] ? lo[1] : 0x80
+            I::I32Const(lo[1]),
+            I::I32Const(0x80),
+            get(3),
+            I::I32Const(lo[0]),
+            I::I32Eq,
+            I::Select,
+            I::LocalSet(5),
+            // hi = c == hi[0] ? hi[1] : 0xBF
+            I::I32Const(hi[1]),
+            I::I32Const(0xBF),
+            get(3),
+            I::I32Const(hi[0]),
+            I::I32Eq,
+            I::Select,
+            I::LocalSet(6),
+        ]
+    };
+
+    let mut c = vec![
+        get(0),
+        I::ArrayLen,
+        I::LocalSet(1),
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(2),
+        get(1),
+        I::I32GeU,
+        I::BrIf(1),
+        get(0),
+        get(2),
+        I::ArrayGetU(bytes),
+        I::LocalTee(3),
+        I::I32Const(0x80),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ];
+    // ASCII: next byte
+    c.extend(incr(2));
+    c.extend([I::Br(1), I::End]);
+    c.extend([get(3), I::I32Const(0xC2), I::I32LtU]);
+    invalid(&mut c);
+    c.extend([
+        get(3),
+        I::I32Const(0xE0),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    // C2..DF: one continuation byte (0xFF never equals c: no special case)
+    c.extend(sequence(1, [0xFF, 0x80], [0xFF, 0xBF]));
+    c.extend([
+        I::Else,
+        get(3),
+        I::I32Const(0xF0),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    // E0: A0..BF; ED: 80..9F; others 80..BF
+    c.extend(sequence(2, [0xE0, 0xA0], [0xED, 0x9F]));
+    c.extend([I::Else, get(3), I::I32Const(0xF5), I::I32GeU]);
+    invalid(&mut c);
+    // F0: 90..BF; F4: 80..8F; others 80..BF
+    c.extend(sequence(3, [0xF0, 0x90], [0xF4, 0x8F]));
+    c.extend([I::End, I::End]);
+    // i + need < n, that is need < n - i (n > i here)
+    c.extend([get(4), get(1), get(2), I::I32Sub, I::I32GeU]);
+    invalid(&mut c);
+    // First continuation byte in [lo, hi]
+    c.extend([
+        get(0),
+        get(2),
+        I::I32Const(1),
+        I::I32Add,
+        I::ArrayGetU(bytes),
+        I::LocalTee(3),
+        get(5),
+        I::I32LtU,
+        get(3),
+        get(6),
+        I::I32GtU,
+        I::I32Or,
+    ]);
+    invalid(&mut c);
+    // The others in 80..BF
+    c.extend([
+        I::I32Const(2),
+        I::LocalSet(7),
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(7),
+        get(4),
+        I::I32GtU,
+        I::BrIf(1),
+        get(0),
+        get(2),
+        get(7),
+        I::I32Add,
+        I::ArrayGetU(bytes),
+        I::I32Const(0xC0),
+        I::I32And,
+        I::I32Const(0x80),
+        I::I32Ne,
+    ]);
+    invalid(&mut c);
+    c.extend(incr(7));
+    c.extend([I::Br(0), I::End, I::End]);
+    // i = i + need + 1
+    c.extend([
+        get(2),
+        get(4),
+        I::I32Add,
+        I::I32Const(1),
+        I::I32Add,
+        I::LocalSet(2),
+        I::Br(0),
+        I::End,
+        I::End,
+    ]);
+    // Copy: `b` may be a `list<mut u8>`, which can change afterwards.
+    c.extend([
+        get(1),
+        I::ArrayNewDefault(bytes),
+        I::LocalSet(8),
+        get(8),
+        I::I32Const(0),
+        get(0),
+        I::I32Const(0),
+        get(1),
+        I::ArrayCopy {
+            array_type_index_dst: bytes,
+            array_type_index_src: bytes,
+        },
+        get(8),
+    ]);
+    c
+}
+
+/// `string::chars(s)`: counts the chars (the bytes that are not continuation bytes), then
+/// decodes them. Locals: s = 0, n = 1, i = 2, k = 3, c = 4, r = 5.
+fn decode(bytes: u32, chars: u32) -> Vec<Instruction<'static>> {
+    // c = c << 6 | (s[i + offset] & 0x3F)
+    let cont = |offset: i32| {
+        [
+            get(4),
+            I::I32Const(6),
+            I::I32Shl,
+            get(0),
+            get(2),
+            I::I32Const(offset),
+            I::I32Add,
+            I::ArrayGetU(bytes),
+            I::I32Const(0x3F),
+            I::I32And,
+            I::I32Or,
+            I::LocalSet(4),
+        ]
+    };
+    // Sequence of `len` bytes: keep the payload bits of the first one, then the
+    // continuation bytes.
+    let sequence = |len: i32, mask: i32| {
+        let mut c = vec![get(4), I::I32Const(mask), I::I32And, I::LocalSet(4)];
+        for offset in 1..len {
+            c.extend(cont(offset));
+        }
+        c.extend([get(2), I::I32Const(len), I::I32Add, I::LocalSet(2)]);
+        c
+    };
+
+    let mut c = vec![
+        get(0),
+        I::ArrayLen,
+        I::LocalSet(1),
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(2),
+        get(1),
+        I::I32GeU,
+        I::BrIf(1),
+        // k += (s[i] & 0xC0) != 0x80
+        get(0),
+        get(2),
+        I::ArrayGetU(bytes),
+        I::I32Const(0xC0),
+        I::I32And,
+        I::I32Const(0x80),
+        I::I32Ne,
+        get(3),
+        I::I32Add,
+        I::LocalSet(3),
+    ];
+    c.extend(incr(2));
+    c.extend([
+        I::Br(0),
+        I::End,
+        I::End,
+        get(3),
+        I::ArrayNewDefault(chars),
+        I::LocalSet(5),
+        I::I32Const(0),
+        I::LocalSet(2),
+        I::I32Const(0),
+        I::LocalSet(3),
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(2),
+        get(1),
+        I::I32GeU,
+        I::BrIf(1),
+        get(0),
+        get(2),
+        I::ArrayGetU(bytes),
+        I::LocalTee(4),
+        I::I32Const(0x80),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    c.extend(incr(2));
+    c.extend([
+        I::Else,
+        get(4),
+        I::I32Const(0xE0),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    c.extend(sequence(2, 0x1F));
+    c.extend([
+        I::Else,
+        get(4),
+        I::I32Const(0xF0),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    c.extend(sequence(3, 0x0F));
+    c.push(I::Else);
+    c.extend(sequence(4, 0x07));
+    c.extend([I::End, I::End, I::End]);
+    // r[k] = c; k += 1
+    c.extend([get(5), get(3), get(4), I::ArraySet(chars)]);
+    c.extend(incr(3));
+    c.extend([I::Br(0), I::End, I::End, get(5)]);
+    c
+}
+
+/// `string::from_chars(cs)`: computes the length in bytes, then encodes.
+/// Locals: cs = 0, n = 1, i = 2, len = 3, c = 4, r = 5, k = 6.
+fn encode(bytes: u32, chars: u32) -> Vec<Instruction<'static>> {
+    // r[k] = prefix | (c >> shift) & mask; k += 1
+    let put = |shift: i32, mask: i32, prefix: i32| {
+        let mut c = vec![get(5), get(6), get(4)];
+        if shift > 0 {
+            c.extend([I::I32Const(shift), I::I32ShrU]);
+        }
+        if mask != 0xFF {
+            c.extend([I::I32Const(mask), I::I32And]);
+        }
+        if prefix != 0 {
+            c.extend([I::I32Const(prefix), I::I32Or]);
+        }
+        c.push(I::ArraySet(bytes));
+        c.extend(incr(6));
+        c
+    };
+
+    let mut c = vec![
+        get(0),
+        I::ArrayLen,
+        I::LocalSet(1),
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(2),
+        get(1),
+        I::I32GeU,
+        I::BrIf(1),
+        get(0),
+        get(2),
+        I::ArrayGet(chars),
+        I::LocalSet(4),
+        // len += 1 + (c >= 0x80) + (c >= 0x800) + (c >= 0x10000)
+        get(3),
+        I::I32Const(1),
+        I::I32Add,
+    ];
+    for bound in [0x80, 0x800, 0x10000] {
+        c.extend([get(4), I::I32Const(bound), I::I32GeU, I::I32Add]);
+    }
+    c.push(I::LocalSet(3));
+    c.extend(incr(2));
+    c.extend([
+        I::Br(0),
+        I::End,
+        I::End,
+        get(3),
+        I::ArrayNewDefault(bytes),
+        I::LocalSet(5),
+        I::I32Const(0),
+        I::LocalSet(2),
+        I::Block(BlockType::Empty),
+        I::Loop(BlockType::Empty),
+        get(2),
+        get(1),
+        I::I32GeU,
+        I::BrIf(1),
+        get(0),
+        get(2),
+        I::ArrayGet(chars),
+        I::LocalTee(4),
+        I::I32Const(0x80),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    c.extend(put(0, 0xFF, 0));
+    c.extend([
+        I::Else,
+        get(4),
+        I::I32Const(0x800),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    c.extend(put(6, 0xFF, 0xC0));
+    c.extend(put(0, 0x3F, 0x80));
+    c.extend([
+        I::Else,
+        get(4),
+        I::I32Const(0x10000),
+        I::I32LtU,
+        I::If(BlockType::Empty),
+    ]);
+    c.extend(put(12, 0xFF, 0xE0));
+    c.extend(put(6, 0x3F, 0x80));
+    c.extend(put(0, 0x3F, 0x80));
+    c.push(I::Else);
+    c.extend(put(18, 0xFF, 0xF0));
+    c.extend(put(12, 0x3F, 0x80));
+    c.extend(put(6, 0x3F, 0x80));
+    c.extend(put(0, 0x3F, 0x80));
+    c.extend([I::End, I::End, I::End]);
+    c.extend(incr(2));
+    c.extend([I::Br(0), I::End, I::End, get(5)]);
+    c
+}
