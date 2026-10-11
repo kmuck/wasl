@@ -1,0 +1,193 @@
+// Target program of WaSL v0.2: data on the WasmGC heap (docs/spec_v0.2).
+// It is written before the compiler supports it, and the v0.1 compiler rejects it.
+
+world billing {
+  export invoices;
+}
+
+global company: string = "Weasel & Co";
+
+interface invoices {
+
+  enum status {
+    draft,
+    sent,
+    paid,
+  }
+
+  record line {
+    label: string,
+    quantity: u32,
+    unit_price: u64,
+  }
+
+  variant discount {
+    percent(u8),
+    fixed(u64),
+  }
+
+  record invoice {
+    number: u32,
+    customer: string,
+    lines: list<line>,
+    discount: option<discount>,
+    status: mut status,
+  }
+
+  enum invoice_error {
+    empty_customer,
+    no_lines,
+    zero_quantity,
+    discount_too_large,
+  }
+
+  func sample() -> invoice {
+    return invoice {
+      number: 42,
+      customer: "ACME",
+      lines: [
+        line { label: "pen", quantity: 3, unit_price: 150 },
+        line { label: "notebook", quantity: 2, unit_price: 425 },
+      ],
+      discount: option::some(discount::percent(10)),
+      status: status::draft,
+    };
+  }
+
+  // Total in cents, after the discount.
+  func total(inv: invoice) -> result<u64, invoice_error> {
+    if (string::len(inv.customer) == 0) {
+      return result::err(invoice_error::empty_customer);
+    }
+    if (list::len(inv.lines) == 0) {
+      return result::err(invoice_error::no_lines);
+    }
+    local sum: u64;
+    local i: u32;
+    while (i < list::len(inv.lines)) {
+      local l: line = inv.lines[i];
+      if (l.quantity == 0) {
+        return result::err(invoice_error::zero_quantity);
+      }
+      sum = sum + u64(l.quantity) * l.unit_price;
+      i = i + 1;
+    }
+    match (inv.discount) {
+      case some(d) {
+        return pricing::apply(sum, d);
+      }
+      case none {
+        return result::ok(sum);
+      }
+    }
+  }
+
+  // `inv` is a copy made at the boundary of the component: changing its
+  // status changes neither the caller's value nor anything else.
+  func mark_paid(inv: invoice) -> result<invoice, invoice_error> {
+    match (total(inv)) {
+      case ok {
+        inv.status = status::paid;
+        return result::ok(inv);
+      }
+      case err(e) {
+        return result::err(e);
+      }
+    }
+  }
+
+  func summary(inv: invoice) -> string {
+    return company + ": invoice " + text::from_u32(inv.number) + " for " + inv.customer
+      + " (" + status_name(inv.status) + ")";
+  }
+
+  func status_name(s: status) -> string {
+    match (s) {
+      case draft {
+        return "draft";
+      }
+      case sent {
+        return "sent";
+      }
+      case paid {
+        return "paid";
+      }
+    }
+  }
+
+  func find(all: list<invoice>, customer: string) -> option<invoice> {
+    local i: u32;
+    while (i < list::len(all)) {
+      if (all[i].customer == customer) {
+        return option::some(all[i]);
+      }
+      i = i + 1;
+    }
+    return option::none;
+  }
+
+  func count_unpaid(all: list<invoice>) -> u32 {
+    local count: u32;
+    local i: u32;
+    while (i < list::len(all)) {
+      if (all[i].status != status::paid) {
+        count = count + 1;
+      }
+      i = i + 1;
+    }
+    return count;
+  }
+
+}
+
+// Internal: exported by no world, so it appears in no WIT.
+interface pricing {
+
+  func apply(sum: u64, d: invoices::discount) -> result<u64, invoices::invoice_error> {
+    match (d) {
+      case percent(p) {
+        if (p > 100) {
+          return result::err(invoices::invoice_error::discount_too_large);
+        }
+        return result::ok(sum - sum * u64(p) / 100);
+      }
+      case fixed(amount) {
+        if (amount > sum) {
+          return result::err(invoices::invoice_error::discount_too_large);
+        }
+        return result::ok(sum - amount);
+      }
+    }
+  }
+
+}
+
+// Internal: text formatting, written in WaSL on top of `string` and `list`.
+interface text {
+
+  // Decimal digits of `n`, built byte by byte in a mutable list.
+  func from_u32(n: u32) -> string {
+    local count: u32 = 1;
+    local rest: u32 = n / 10;
+    while (rest != 0) {
+      count = count + 1;
+      rest = rest / 10;
+    }
+    local bytes: list<mut u8> = list::filled(count, 0);
+    rest = n;
+    while (count > 0) {
+      count = count - 1;
+      bytes[count] = u8(rest % 10) + 48;
+      rest = rest / 10;
+    }
+    match (string::from_bytes(bytes)) {
+      case some(s) {
+        return s;
+      }
+      case none {
+        return "";
+      }
+    }
+  }
+
+}
