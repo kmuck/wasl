@@ -16,16 +16,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `ROADMAP.md`: the direction of WaSL from 0.2 to 1.0, with the target program of each version.
-- `waslc` parses the whole v0.2 syntax: string and char literals, type declarations in interfaces, composite types, `match`, field accesses, indexes, record, flags, list and tuple literals. Constructs that the compiler cannot compile yet are reported as `E9002`.
+- `waslc` parses the whole v0.2 syntax: string and char literals, type declarations in interfaces, composite types, `match`, field accesses, indexes, record, flags, list and tuple literals.
 - `record`, `enum`, `variant` and `flags` declarations in interfaces, and the built-in types `char`, `string`, `list`, `tuple`, `option` and `result` in signatures and declarations, with their errors (E0206 to E0212, E0305).
 - The WIT of a package contains the types of its interfaces, and types-only interfaces used through `use`.
 - Typing of the v0.2 expressions and statements: string, char, record, flags, list and tuple literals, constructors, field accesses, indexes, `match`, the operators on chars, strings, enums and flags, the built-in functions, constant globals and assignments to `mut` fields and `list<mut T>` elements, with their errors (E0306, E0307, E0406 to E0412, E0505 to E0507). `examples/invoice` passes semantic analysis and `weasel wit` prints its WIT.
-- Compilation of the v0.2 types to WasmGC (§ v2.6): structs and arrays in one recursion group, variants as tagged struct subtypes, options as nullable references, string literals and cases without payload in shared globals, long literals in data segments, and helpers for string comparison and concatenation, UTF-8 validation, `string::chars`, `string::from_chars`, `char::from_u32` and list copies. Exported functions can take and return chars, enums and flags; other heap values cannot cross the component boundary yet (E9002).
+- Compilation of the v0.2 types to WasmGC (§ v2.6): structs and arrays in one recursion group, variants as tagged struct subtypes, options as nullable references, string literals and cases without payload in shared globals, long literals in data segments, and helpers for string comparison and concatenation, UTF-8 validation, `string::chars`, `string::from_chars`, `char::from_u32` and list copies.
+- Values of every v0.2 type cross the component boundary (§ v2.7): each exported function that takes or returns a heap value gets an adapter that copies it through linear memory, with a bump allocator (`cm32p2_realloc`) and a post-return function; the memory only exists when a function needs it. `examples/invoice` builds and runs. Types-only interfaces work both imported implicitly and exported (open question 6).
 
 ### Changed
 
 - `match`, `case`, `record`, `enum`, `variant`, `flags`, `char`, `string`, `list`, `tuple`, `option` and `result` are keywords; using a keyword as an identifier reports E0005.
 - The initial value of a global that is not a literal reports E0409 instead of E0100.
+
+### Removed
+
+- E0205: exported functions have no parameter limit, parameters beyond 16 flat values go through linear memory (§ v2.7.3).
 
 ## [0.1.0] - 2026-10-11
 
