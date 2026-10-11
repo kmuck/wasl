@@ -11,7 +11,7 @@ The order of § 11.2 becomes:
 3. **Items of the interfaces**, interface by interface, in declaration order: functions declared twice (E0202), other names declared twice (E0206), types with the name of a top-level declaration (E0210), fields, cases and flags declared twice (E0207), flags types with more than 32 flags (E0212).
 4. **Types**, interface by interface, type by type, in declaration order: unknown types in fields, payloads and signatures (E0305), types without a value (E0211).
 5. **Worlds**, in declaration order: exports (E0203, E0204).
-6. **Exported functions**, world by world, function by function: recursive types (E0208), types of interfaces with functions (E0209); then cycles of `use` between the interfaces that appear in the WIT (E0213).
+6. **Exported interfaces**, world by world, interface by interface: the signatures of their functions, then their declared types, in declaration order: recursive types (E0208), types of interfaces with functions (E0209); then cycles of `use` between the interfaces that appear in the WIT (E0213).
 7. **Initial values of the globals**, in declaration order (E0409 and the typing errors).
 8. **Function bodies**, as in § 11.2.
 
@@ -23,8 +23,8 @@ The order of § 11.2 becomes:
 | E0007 | invalid char literal | `''`, `'ab'`, `'a` (not closed), `'\u{D800}'` |
 | E0206 | name declared twice in an interface | `record line { … }` and `func line()` in the same interface |
 | E0207 | field, case or flag declared twice | `record r { a: u32, a: u64 }`, `enum e { x, x }` |
-| E0208 | recursive type in the signature of an exported function | `func root() -> node` with `record node { children: list<node> }` |
-| E0209 | exported function using a type of an interface that has functions and is not exported by the world | § v2.7.1 |
+| E0208 | recursive type in the signature of an exported function or declared in an exported interface | `func root() -> node` with `record node { children: list<node> }` |
+| E0209 | exported function or type of an exported interface using a type of an interface that has functions and is not exported by the world | § v2.7.1 |
 | E0210 | type with the name of a top-level declaration | `record math { … }` with `interface math` |
 | E0211 | type without a value: no value of it can be built (§ v2.2.5) | `record a { next: a }`, `variant v { a(v) }` |
 | E0212 | flags type with more than 32 flags | |

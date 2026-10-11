@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - E0211 now only rejects types that have no value (§ v2.2.5): a variant has a value as soon as one of its cases has one, so `variant expr { lit(u32), neg(expr) }` is accepted (it used to need `neg(option<expr>)`), and `result<a>` has the value `err`. The message names the field without a value and the possible fixes.
+- The v0.2 specification states what `waslc` 0.2 already does: E0208 and E0209 also apply to the types of exported interfaces, E0005 to every keyword used as an identifier, one recursion group for all GC types, post-return only when the result goes through memory, long literals in global initializers, and the exact output and error messages of `weasel call`.
 
 ## [0.2.0] - 2026-10-11
 

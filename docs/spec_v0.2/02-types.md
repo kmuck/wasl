@@ -197,7 +197,7 @@ Most lists are built once, with a literal, `list::filled` or at the boundary, an
 
 ## v2.2.7 Types in signatures
 
-Any type can be used for parameters, return values, locals, globals, fields, list and tuple elements and payloads. The restrictions only concern **exported** functions:
+Any type can be used for parameters, return values, locals, globals, fields, list and tuple elements and payloads. The restrictions only concern what appears in the WIT of a world: the signatures of **exported** functions, and every type declared in an **exported interface**, which appears in the WIT even if no function uses it (§ v2.7.1):
 
 - no recursive type (E0208, § v2.2.5);
 - every type they use must be declared in an interface that can appear in the WIT of the world (E0209, § v2.7.1).

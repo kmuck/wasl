@@ -22,9 +22,9 @@ The commands of chapter 14 are unchanged, except for the values that `weasel cal
 | `result<…>` | `ok(…)`, `err(…)`, or `ok` / `err` without payload | `ok(1170)`, `err(no-lines)` |
 
 - Each argument is one shell argument; a value that contains spaces or quotes is quoted for the shell: `weasel call invoices::summary '{number: 7, …}'`.
-- The result is printed in WAVE on one line. Every scalar is printed as in v0.1, except NaN, written `nan` as WAVE requires (§ v2.1.3).
+- The result is printed in WAVE on one line. Every scalar is printed as in v0.1, except NaN, written `nan` as WAVE requires (§ v2.1.3): a float always has a decimal point (`3.0`, not `3`). Every field of a record is printed, including those whose value is `none`. Both choices are valid WAVE; they make the output complete and stable.
 - A `result` is a value like any other: `err(…)` is printed on standard output with the exit code `0`. Only a trap fails the command (§ 14.2).
-- An argument that is not a valid WAVE value of its type is an error: ``error: invalid value `{number: 1}` for parameter `inv` of type `invoice`: missing field `customer` ``.
+- An argument that is not a valid WAVE value of its type is an error: ``error: invalid value `{number: 1}` for parameter `inv` of type `invoice`: missing field "customer"``. The reason after the last colon comes from the WAVE parser, which quotes names with `"`.
 
 ## v2.9.2 Runtime configuration
 

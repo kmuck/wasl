@@ -32,7 +32,7 @@ The core module of a world that uses heap types requires the WebAssembly **GC** 
 
 **Type identity.** WasmGC types are structural: two WaSL records with the same field types may become the same Wasm type. Generated code never relies on a cast to tell two WaSL types apart; the type checker already did. Variant cases are told apart by their tag (§ v2.6.2), never by a cast alone.
 
-**Recursion groups.** Types that refer to each other in a cycle (§ v2.2.5) are defined in one recursion group (`rec`); every other type is in a group of its own.
+**Recursion group.** All the GC types of the module (structs and arrays) are defined in **one** recursion group (`rec`), placed before the function types, so that types that refer to each other in a cycle (§ v2.2.5) need nothing special. Within a module this behaves exactly like one group per cycle: GC types never cross the boundary (chapter v2.7), so their canonical identity across modules does not matter.
 
 ## v2.6.2 Variants and results
 
@@ -95,7 +95,7 @@ A variant `v` is a small family of struct types:
 | `char::from_u32(n)` | a helper that checks the range and the surrogates, then boxes the value |
 
 - **Locals of heap types** are non-nullable Wasm locals. This is valid in Wasm because every WaSL local of a heap type is set by its declaration (§ v2.4.13) before any use in the same block, and a match binding is set at the start of its case block.
-- **Long string literals**: Wasm implementations limit the number of operands of `array.new_fixed`. A literal longer than 1,000 bytes is placed in a passive data segment and built with `array.new_data $bytes` each time it is evaluated, which § v2.5.3 allows.
+- **Long string literals**: Wasm implementations limit the number of operands of `array.new_fixed`. A literal longer than 1,000 bytes is placed in a passive data segment and built with `array.new_data $bytes` each time it is evaluated, which § v2.5.3 allows. `array.new_data` is not a constant expression, so in the initial value of a global (§ v2.4.12) a literal always uses `array.new_fixed`, whatever its length; Wasm runtimes accept it, but compiling a very long one is slow.
 - **Helpers** (string comparison, concatenation, UTF-8 validation, the boundary adapters of chapter v2.7) are ordinary Wasm functions, included only in the modules that use them (§ 12.1).
 
 ## v2.6.5 Content of the module

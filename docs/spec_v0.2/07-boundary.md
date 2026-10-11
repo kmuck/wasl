@@ -78,9 +78,9 @@ An exported function is lifted with these canonical options **only when its sign
 | `memory` | the memory of the core module, exported as `cm32p2_memory` |
 | `realloc` | the allocator of § v2.7.4, exported as `cm32p2_realloc` |
 | `string-encoding` | `utf8`, the encoding of WaSL strings |
-| `post-return` | the function that releases the result (§ v2.7.4), exported as `cm32p2|<interface>|<function>_post` |
+| `post-return` | the function that releases the result (§ v2.7.4), exported as `cm32p2|<interface>|<function>_post`, only for a function whose result goes through memory |
 
-The module has a memory and a `realloc` only if at least one of its exported functions needs them: a world whose exported functions only use scalars is built exactly as in v0.1 (§ 13.4), with no memory.
+A function whose result is returned as flat values (a scalar, or no result) has no post-return, even if its parameters go through memory: `func f(s: string) -> u32` needs the memory and `realloc`, but leaves nothing to release. The module has a memory and a `realloc` only if at least one of its exported functions needs them: a world whose exported functions only use scalars is built exactly as in v0.1 (§ 13.4), with no memory.
 
 Because parameters beyond 16 flat values now go through memory, exported functions have **no parameter limit**: E0205 (§ 6.5) is no longer reported.
 
