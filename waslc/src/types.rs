@@ -414,6 +414,12 @@ impl Types {
 
     /// Displays a type as written in WaSL: `list<mut u8>`, `invoices::line`.
     pub fn display(&self, ty: Type) -> String {
+        self.display_in(ty, None)
+    }
+
+    /// Displays a type as written inside interface `iface`, where its own types have no
+    /// path: `line` rather than `invoices::line`.
+    pub fn display_in(&self, ty: Type, iface: Option<usize>) -> String {
         match self.kind(ty) {
             TypeKind::Prim(p) => p.name().to_string(),
             TypeKind::Char => "char".into(),
@@ -421,30 +427,36 @@ impl Types {
             TypeKind::List { mutable, elem } => format!(
                 "list<{}{}>",
                 if *mutable { "mut " } else { "" },
-                self.display(*elem)
+                self.display_in(*elem, iface)
             ),
             TypeKind::Tuple(elems) => format!(
                 "tuple<{}>",
                 elems
                     .iter()
-                    .map(|&t| self.display(t))
+                    .map(|&t| self.display_in(t, iface))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            TypeKind::Option(inner) => format!("option<{}>", self.display(*inner)),
+            TypeKind::Option(inner) => format!("option<{}>", self.display_in(*inner, iface)),
             TypeKind::Result { ok, err } => match (ok, err) {
                 (None, None) => "result".into(),
-                (Some(ok), None) => format!("result<{}>", self.display(*ok)),
-                (None, Some(err)) => format!("result<_, {}>", self.display(*err)),
+                (Some(ok), None) => format!("result<{}>", self.display_in(*ok, iface)),
+                (None, Some(err)) => format!("result<_, {}>", self.display_in(*err, iface)),
                 (Some(ok), Some(err)) => {
-                    format!("result<{}, {}>", self.display(*ok), self.display(*err))
+                    format!(
+                        "result<{}, {}>",
+                        self.display_in(*ok, iface),
+                        self.display_in(*err, iface)
+                    )
                 }
             },
             TypeKind::Decl(id) => {
                 let decl = &self.decls[*id];
                 match self.interface_names.get(decl.interface) {
-                    Some(iface) => format!("{iface}::{}", decl.name),
-                    None => decl.name.clone(),
+                    Some(name) if iface != Some(decl.interface) => {
+                        format!("{name}::{}", decl.name)
+                    }
+                    _ => decl.name.clone(),
                 }
             }
         }
