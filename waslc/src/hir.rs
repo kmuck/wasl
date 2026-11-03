@@ -4,7 +4,7 @@
 //! typed and every language rule is checked. Code generation has nothing left to verify.
 
 use crate::ast::{BinOp, UnaryOp};
-use crate::types::{DeclId, Type, Types};
+use crate::types::{DeclId, Prim, Type, Types};
 
 pub type GlobalId = usize;
 pub type FuncId = usize;
@@ -214,10 +214,42 @@ pub enum Builtin {
     ListFilled,
     ListCopy,
     ListFreeze,
+    /// `T::wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`: the result
+    /// modulo 2ⁿ (§ v2.5.6).
+    Wrapping(Arith),
+    /// `T::checked_add`, `checked_sub`, `checked_mul`: `option::none` on overflow.
+    Checked(Arith),
+    /// `T::wrapping_from(x)`: the low-order bits of the integer `x`.
+    WrappingFrom,
+}
+
+/// Integer arithmetic that can overflow (§ v2.5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Arith {
+    Add,
+    Sub,
+    Mul,
+    Neg,
 }
 
 impl Builtin {
     pub fn from_path(head: &str, name: &str) -> Option<Builtin> {
+        if let Some(prim) = Prim::from_keyword(head) {
+            if !prim.is_int() {
+                return None;
+            }
+            return Some(match name {
+                "wrapping_add" => Builtin::Wrapping(Arith::Add),
+                "wrapping_sub" => Builtin::Wrapping(Arith::Sub),
+                "wrapping_mul" => Builtin::Wrapping(Arith::Mul),
+                "wrapping_neg" if prim.is_signed() => Builtin::Wrapping(Arith::Neg),
+                "wrapping_from" => Builtin::WrappingFrom,
+                "checked_add" => Builtin::Checked(Arith::Add),
+                "checked_sub" => Builtin::Checked(Arith::Sub),
+                "checked_mul" => Builtin::Checked(Arith::Mul),
+                _ => return None,
+            });
+        }
         Some(match (head, name) {
             ("string", "len") => Builtin::StringLen,
             ("string", "bytes") => Builtin::StringBytes,

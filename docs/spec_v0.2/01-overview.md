@@ -10,6 +10,7 @@
 - field access `r.f`, tuple access `t.0`, indexing `xs[i]`, and assignment to `mut` fields and to elements of `list<mut T>` (§ v2.4);
 - the `match` statement on enums, variants, options and results (§ v2.4.9);
 - a small set of built-in functions on strings, chars and lists: `string::len`, `string::bytes`, `string::from_bytes`, `string::chars`, `string::from_chars`, `char::from_u32`, `list::len`, `list::filled`, `list::copy`, `list::freeze` (§ v2.4.11);
+- integer arithmetic and conversions that give the exact result or trap, with explicit wrapping and checked functions on each integer type: `u32::wrapping_add`, `u8::wrapping_from`, `u64::checked_mul`… (§ v2.5.6, § v2.4.11);
 - globals of these types, initialized with constant expressions (§ v2.4.12);
 - exported functions that take and return these types, through the Canonical ABI with linear memory (chapter v2.7).
 
@@ -28,6 +29,7 @@ Each decision follows from the principles of § 1.2. The rest of this document d
 5. **Mutability where WasmGC declares it.** A record field is immutable unless declared `mut`, exactly like a WasmGC struct field (§ 1.2, principle 2). A `list<T>` is immutable, for everyone and for ever, and only the elements of a `list<mut T>` can be assigned (§ v2.2.6). Strings and tuples are immutable.
 6. **No null, no default value.** Every value of a heap type is a valid value: there is no `null`, and the absence of a value is written `option<T>`. A local of a heap type therefore needs an initial value (§ v2.4.13).
 7. **One way to write each thing.** A record literal lists its fields in declaration order; every constructor is written with its type (`option::some(x)`, `status::paid`); a variant is inspected only with `match`.
+8. **An integer is exact, or the call stops.** Integer arithmetic and conversions trap when their exact result does not fit in its type, instead of wrapping (§ v2.5.6). Wrapping remains available when it is written: `u32::wrapping_add(a, b)` is the plain `i32.add`. This amends principle 1 of § 1.2, which counted integer overflow among the behaviors taken from Wasm: Wasm has both wrapping instructions (`i32.add`) and trapping ones (`i32.div_s`, `i32.trunc_f64_s`), and the `+` of WaSL now checks its result.
 
 ## v2.1.3 Changes for v0.1 programs
 
@@ -42,5 +44,8 @@ v0.2 accepts every valid v0.1 program with the same behavior, with these excepti
 | a lone `_` is a token (§ v2.3.1) | `local _: u32;` reports E0100 instead of E0004 |
 | exported functions have no parameter limit (§ v2.7.3) | E0205 is no longer reported |
 | `weasel call` prints NaN as `nan` (§ v2.9) | output of `weasel call` for a NaN float |
+| integer arithmetic traps on overflow (§ v2.5.6) | `255 + 1` on `u8` traps instead of giving `0`; wrapping is written `u8::wrapping_add(255, 1)` |
+| integer conversions trap when the value does not fit (§ v2.5.6) | `u8(n)` with `n: u32` = 300 traps instead of giving `44`; the low-order bits are `u8::wrapping_from(n)` |
+| float to integer conversions trap on NaN and out of range (§ v2.5.6) | `u8(x)` with `x: f64` = 300.7 traps instead of giving `255` |
 
 A component whose exported functions only use scalar types is built exactly as in v0.1: it has no linear memory and no `realloc` (§ v2.7.3).

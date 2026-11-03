@@ -49,7 +49,7 @@ The result is a language that aims to be:
 
 These principles drive every design decision. They are detailed in [chapter 1 of the specification](docs/spec_v0.1/01-overview.md).
 
-1. **One-to-one with the standards.** Every construct of WaSL maps directly onto WebAssembly, the Component Model or WIT. When the standard defines a behavior (overflow, division by zero, initial values, exports), WaSL adopts it instead of inventing its own.
+1. **One-to-one with the standards.** Every construct of WaSL maps directly onto WebAssembly, the Component Model or WIT. When the standard defines a behavior (division by zero, initial values, exports), WaSL adopts it instead of inventing its own. Integer overflow is the one place where WaSL picks among what Wasm offers: arithmetic traps instead of wrapping, and wrapping is written explicitly ([§ v2.5.6](docs/spec_v0.2/05-semantics.md#v256-integer-arithmetic-and-conversions)).
 2. **The structure of a program is the structure of WIT.** A project is a package; code is organized in `interface`s; a `world` declares what a component exports. The WIT of a component is derived from the code, never written by hand.
 3. **One world, one component, one entry point.** Each world of a project is compiled into its own component. A project can have several entry points (a CLI, a test runner, one HTTP service per domain) that share the same types and business logic.
 4. **Mutability where WebAssembly declares it.** Globals are mutable or not, locals always are, and later, struct fields and array elements will be declared mutable individually, exactly like in WasmGC.

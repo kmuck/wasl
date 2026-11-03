@@ -453,6 +453,9 @@ impl Parser {
             {
                 self.call_stmt(start)?
             }
+            TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
+                self.call_stmt(start)?
+            }
             TokenKind::RBrace | TokenKind::Eof => return Err(self.unexpected("a statement")),
             _ => {
                 return err(
@@ -613,6 +616,7 @@ impl Parser {
             TokenKind::KwList => "list".to_string(),
             TokenKind::KwOption => "option".to_string(),
             TokenKind::KwResult => "result".to_string(),
+            TokenKind::Type(ty) if ty.is_int() => ty.name().to_string(),
             _ => return Err(self.unexpected("a name")),
         };
         let span = self.bump().span;
@@ -872,6 +876,10 @@ impl Parser {
             | TokenKind::KwList
             | TokenKind::KwOption
             | TokenKind::KwResult => self.name_expr()?,
+            // `u32::wrapping_add(…)`: a built-in function of an integer type (§ v2.4.11).
+            TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
+                self.name_expr()?
+            }
             TokenKind::Type(_) => self.conversion()?,
             TokenKind::KwTuple => {
                 self.bump();

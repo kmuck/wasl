@@ -27,7 +27,7 @@ A path `a::b` or `a::b::c`, as an expression or before a call, is resolved by th
 
 | First name | Meaning | Examples |
 |---|---|---|
-| `string`, `list`, `char` | a built-in function (§ v2.4.11) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)` |
+| `string`, `list`, `char`, an integer type | a built-in function (§ v2.4.11) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)`, `u32::wrapping_add(h, c)` |
 | `option`, `result` | a constructor of the built-in type | `option::none`, `result::ok(sum)` |
 | a type of the current interface | a case of that enum or variant | `status::paid`, `discount::fixed(500)` |
 | an interface of the package, followed by one name | a function of that interface (§ 9.1) | `pricing::apply(sum, d)` |
@@ -137,7 +137,7 @@ The table of § 8.3 is extended:
 
 ## v2.4.11 Built-in functions and `char` conversions
 
-Ten functions are part of the language. They are called like functions of an interface, with the name of the type as path; they are not values and cannot be redefined. In this table, `list<T>` in a parameter accepts both a `list<T>` and a `list<mut T>`.
+A small set of functions is part of the language. They are called like functions of an interface, with the name of the type as path; they are not values and cannot be redefined. In this table, `list<T>` in a parameter accepts both a `list<T>` and a `list<mut T>`.
 
 | Function | Type | Result |
 |---|---|---|
@@ -157,7 +157,34 @@ Ten functions are part of the language. They are called like functions of an int
 - `string::bytes` does not copy: a string never changes, so its bytes are already an immutable `list<u8>`.
 - `list::filled`, `list::copy` and `list::freeze` are shallow: the elements that are references are shared, not copied (§ v2.5.1).
 
-**`char` conversions.** `u32(c)` with `c: char` gives the code point of `c`; it is the only conversion from a `char` (amends § 8.5). A conversion to `char`, or from `char` to any other type, is E0404: not every number is a `char`, and conversions never fail (§ 10.5), so a number becomes a `char` with `char::from_u32`.
+**Integer functions.** Each integer type `T` (`s8` to `u64`) has functions that compute modulo 2ⁿ, as § 10.2 did before § v2.5.6, or that report an overflow as a value instead of a trap:
+
+| Function | Type | Result |
+|---|---|---|
+| `T::wrapping_add(a, b)`, `T::wrapping_sub(a, b)`, `T::wrapping_mul(a, b)` | `(T, T) -> T` | `a + b`, `a - b`, `a * b` reduced modulo 2ⁿ, never a trap |
+| `T::wrapping_neg(a)`, signed `T` only | `(T) -> T` | `-a` reduced modulo 2ⁿ: `s8::wrapping_neg(-128)` is `-128` |
+| `T::wrapping_from(x)` | `(integer) -> T` | the low-order bits of `x`, read as a `T`, like the integer conversions of § 10.5: `u8::wrapping_from(n)` is `44` for `n: u32` = 300, `u32::wrapping_from(n)` is `4294967295` for `n: s32` = -1 |
+| `T::checked_add(a, b)`, `T::checked_sub(a, b)`, `T::checked_mul(a, b)` | `(T, T) -> option<T>` | `option::some` of the exact result, or `option::none` if it does not fit in `T` |
+
+- The type in the path is the expected type of the arguments, so literals need no conversion: `u32::wrapping_mul(h, 33)`. An argument of another type is E0400.
+- `T::wrapping_from(x)` takes an integer of any type. Like a conversion (§ 8.5), its argument must not be literal-only (E0402), and a float, a `bool` or a `char` is E0404.
+- `wrapping_neg` does not exist for unsigned types, where unary `-` does not exist either (E0301).
+- They are built in rather than written in a library because they exist for every integer type, and the language has no generic functions.
+
+```wasl
+func hash(s: string) -> u32 {
+  local bytes: list<u8> = string::bytes(s);
+  local h: u32 = 5381;
+  local i: u32;
+  while (i < list::len(bytes)) {
+    h = u32::wrapping_add(u32::wrapping_mul(h, 33), u32(bytes[i]));
+    i = i + 1;
+  }
+  return h;
+}
+```
+
+**`char` conversions.** `u32(c)` with `c: char` gives the code point of `c`; it is the only conversion from a `char` (amends § 8.5). A conversion to `char`, or from `char` to any other type, is E0404: not every number is a `char`, so a number becomes a `char` with `char::from_u32`, which returns an `option` instead of trapping.
 
 This set is deliberately minimal: it is what libraries written in WaSL need to build everything else (number formatting, search, slicing, sorting), following § 1.2, principle 7.
 

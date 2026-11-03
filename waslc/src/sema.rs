@@ -774,6 +774,28 @@ mod tests {
     }
 
     #[test]
+    fn integer_functions() {
+        ok("return u32::wrapping_add(n, 1) + u32::wrapping_mul(2, 3) - u32::wrapping_sub(n, n);");
+        ok("local s: s8 = s8::wrapping_neg(-128); return u32::wrapping_from(s);");
+        ok(
+            "local o: option<u64> = u64::checked_mul(u64(n), 3); m = u32::wrapping_from(m); return n;",
+        );
+        ok("u8::wrapping_add(1, 2); return 0;");
+        fails("return u32::wrapping_neg(n);", Code::UnknownFunc);
+        fails("return u32::saturating_add(n, 1);", Code::UnknownFunc);
+        fails("return u32::wrapping_add(n);", Code::ArgCount);
+        fails("return u32::wrapping_add(n, 1.5);", Code::TypeMismatch);
+        fails(
+            "local s: s8 = s8::wrapping_add(n, 1); return 0;",
+            Code::TypeMismatch,
+        );
+        fails("return u32::checked_add(n, 1);", Code::TypeMismatch);
+        fails("return u32::wrapping_from(300);", Code::UntypedLiteral);
+        fails("return u32::wrapping_from(x);", Code::InvalidConversion);
+        fails("return u32::wrapping_from(b);", Code::InvalidConversion);
+    }
+
+    #[test]
     fn errors() {
         fails("local x: u8 = 256; return 0;", Code::LiteralOutOfRange);
         fails("local x: s8 = 128; return 0;", Code::LiteralOutOfRange);

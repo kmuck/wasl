@@ -16,9 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - E0213: interfaces of the WIT that use each other's types in a cycle, which WIT forbids, are reported with the steps of the cycle. They used to stop the compiler with an internal error (E9999).
+- Built-in functions on each integer type `T` (§ v2.4.11): `T::wrapping_add`, `T::wrapping_sub`, `T::wrapping_mul`, `T::wrapping_neg` (signed types) and `T::wrapping_from` compute modulo 2ⁿ, as `+`, `-`, `*`, unary `-` and conversions used to; `T::checked_add`, `T::checked_sub` and `T::checked_mul` return `option::none` instead of overflowing.
 
 ### Changed
 
+- Integer arithmetic and conversions give the exact result or trap with `integer overflow` (§ v2.5.6), instead of wrapping silently: `+`, `-`, `*` and unary `-` on integers, conversions between integer types whose value does not fit, and float to integer conversions out of range. A NaN converted to an integer traps with `invalid conversion to integer` instead of giving `0`. The `fib` of the README now traps from `n = 93`, since it also computes fib(n + 1), where it used to return a wrong number from `n = 94`.
 - E0211 now only rejects types that have no value (§ v2.2.5): a variant has a value as soon as one of its cases has one, so `variant expr { lit(u32), neg(expr) }` is accepted (it used to need `neg(option<expr>)`), and `result<a>` has the value `err`. The message names the field without a value and the possible fixes.
 - The v0.2 specification states what `waslc` 0.2 already does: E0208 and E0209 also apply to the types of exported interfaces, E0005 to every keyword used as an identifier, one recursion group for all GC types, post-return only when the result goes through memory, long literals in global initializers, and the exact output and error messages of `weasel call`.
 

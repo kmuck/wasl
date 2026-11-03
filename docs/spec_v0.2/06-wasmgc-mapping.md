@@ -98,7 +98,26 @@ A variant `v` is a small family of struct types:
 - **Long string literals**: Wasm implementations limit the number of operands of `array.new_fixed`. A literal longer than 1,000 bytes is placed in a passive data segment and built with `array.new_data $bytes` each time it is evaluated, which § v2.5.3 allows. `array.new_data` is not a constant expression, so in the initial value of a global (§ v2.4.12) a literal always uses `array.new_fixed`, whatever its length; Wasm runtimes accept it, but compiling a very long one is slow.
 - **Helpers** (string comparison, concatenation, UTF-8 validation, the boundary adapters of chapter v2.7) are ordinary Wasm functions, included only in the modules that use them (§ 12.1).
 
-## v2.6.5 Content of the module
+## v2.6.5 Integer overflow
+
+This section amends § 12.2 to § 12.4 for the checks of § v2.5.6. Each check computes the wrapped result with the instruction of § 12.3, then tests whether the exact result fits; if not, it executes `i32.const 0x80000000` `i32.const -1` `i32.div_s`, as for `MIN / -1` on `s8` (§ 12.2), so that every overflow traps with the `integer overflow` of § 10.7. The test is an inline branch that is not taken when nothing overflows.
+
+| Operation | Overflow test |
+|---|---|
+| `+` `-` `*` unary `-` on 8- and 16-bit integers | the operands are normalized `i32`s (§ 12.2), so the exact result fits in an `i32`; it overflowed when it is out of the range of the type: `i32.gt_u` with `0xFF` or `0xFFFF` for `u8` and `u16`, `i32.extend8_s` or `i32.extend16_s` then `i32.ne` for `s8` and `s16`. This test replaces the normalization. |
+| `+` on `u32`, `u64` | `r = a + b` overflowed when `r < b` (`lt_u`) |
+| `-` on `u32`, `u64` | overflows when `a < b` (`lt_u`) |
+| `+` on `s32`, `s64` | `r = a + b` overflowed when `(a ^ r) & (b ^ r) < 0` |
+| `-` on `s32`, `s64` | `r = a - b` overflowed when `(a ^ b) & (a ^ r) < 0` |
+| unary `-` on `s32`, `s64` | overflows when the operand is the minimum of the type |
+| `*` on `u32`, `s32` | the operands extended to `i64` (`extend_i32_u` or `extend_i32_s`), multiplied with `i64.mul`; it overflowed when the product is not the extension of its low 32 bits |
+| `*` on `u64`, `s64` | when both operands fit in 32 bits (signed or unsigned as the type), the product cannot overflow, which is tested inline; otherwise a helper tests `r / a != b` for `a != 0`, the signed case `a == -1` being tested apart |
+| integer conversion that may not fit (§ 12.4) | before the conversion, the value is compared with the bounds of the target type, in the width of the source: `lt_s` and `gt_s` when both types are signed, otherwise one `gt_u` with the maximum, which also catches negative values |
+| float to integer (§ 12.4) | the trapping `trunc` instructions replace `trunc_sat`: `i32.trunc_f64_s`, `i64.trunc_f32_u`… For 8- and 16-bit targets, `i32.trunc_f32_s` or `i32.trunc_f64_s`, then the conversion test above from `s32`. |
+
+The built-in functions of § v2.4.11 use the same code without the trap: `T::wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg` and `wrapping_from` are the instructions and the normalization of § 12.2 to § 12.4 as v0.1 defined them; `T::checked_add`, `checked_sub` and `checked_mul` compute the same test and build `option::none` or `option::some` of the result instead of trapping.
+
+## v2.6.6 Content of the module
 
 The list of § 12.1 is extended:
 

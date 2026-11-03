@@ -160,7 +160,9 @@ primary           = int_literal
                   | "(" expression ")" ;
 
 path              = path_head "::" identifier [ "::" identifier ] ;                       (* v0.2 *)
-path_head         = identifier | "char" | "string" | "list" | "option" | "result" ;       (* v0.2 *)
+path_head         = identifier | "char" | "string" | "list" | "option" | "result"         (* v0.2 *)
+                  | int_type ;
+int_type          = "s8" | "s16" | "s32" | "s64" | "u8" | "u16" | "u32" | "u64" ;         (* v0.2 *)
 call              = [ path_head "::" [ identifier "::" ] ] identifier "(" [ arguments ] ")" ;   (* v0.2 *)
 arguments         = expression { "," expression } ;
 conversion        = primitive_type "(" expression ")" ;                                   (* v0.2 *)
@@ -192,6 +194,7 @@ In addition to § 5.3. Breaking one of them is a syntax error (E0100).
 
 - A `{` directly after a type name starts a record literal or a flags literal: a record literal has a `:` after its first name (`line { label: … }`), a flags literal has none (`delivery { paper }`, `delivery { }`). Because the conditions of `if`, `while` and `match` are always in parentheses (§ 5.3), `if (x) { … }` and `line { … }` are never confused.
 - A path has at most two `::`: `status::paid`, `invoices::status::paid`, `invoices::discount::percent(10)`.
+- An integer type followed by `::` starts a call to one of its built-in functions, `u32::wrapping_add(a, b)`; followed by `(`, it is a conversion, `u32(x)` (§ v2.4.11).
 - Field access and indexing apply to any expression of the right type, and chain from left to right: `all[i].customer`, `sample().lines[0]`.
 - Commas separate the fields of a record literal, the flags of a flags literal and the elements of a list or a tuple; a trailing comma is allowed, which keeps multi-line literals uniform.
 

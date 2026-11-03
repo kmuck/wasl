@@ -800,9 +800,18 @@ impl<'a> FnCx<'a> {
         let scopes = self.resolver.scopes;
         if path.len() == 1 {
             match head.name.as_str() {
-                "string" | "list" | "char" => {
+                "string" | "list" | "char" | "s8" | "s16" | "s32" | "s64" | "u8" | "u16"
+                | "u32" | "u64" => {
                     return match hir::Builtin::from_path(&head.name, &name.name) {
                         Some(b) => Ok(PathTarget::Builtin(b)),
+                        None if name.name == "wrapping_neg" => err(
+                            Code::UnknownFunc,
+                            name.span,
+                            format!(
+                                "`{}` has no built-in function `wrapping_neg`: it only exists for signed types",
+                                head.name
+                            ),
+                        ),
                         None => err(
                             Code::UnknownFunc,
                             name.span,
@@ -1104,6 +1113,9 @@ impl<'a> FnCx<'a> {
         expected: Option<Type>,
     ) -> Result<hir::Expr> {
         use hir::Builtin as B;
+        if let Some(prim) = Prim::from_keyword(&call.path[0].name) {
+            return self.int_builtin(func, prim, call, span, expected);
+        }
         let arity = if func == B::ListFilled { 2 } else { 1 };
         if call.args.len() != arity {
             return err(
@@ -1192,9 +1204,89 @@ impl<'a> FnCx<'a> {
                     }
                 }
             }
+            B::Wrapping(_) | B::Checked(_) | B::WrappingFrom => {
+                unreachable!("functions of integer types")
+            }
         };
         self.expect_type(
             typed(hir::ExprKind::Builtin { func, args }, ty),
+            expected,
+            span,
+        )
+    }
+
+    /// A built-in function of an integer type `prim`: `u32::wrapping_add(a, b)`… (§ v2.4.11).
+    fn int_builtin(
+        &mut self,
+        func: hir::Builtin,
+        prim: Prim,
+        call: &ast::Call,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Result<hir::Expr> {
+        use hir::{Arith, Builtin as B};
+        let ty = Type::prim(prim);
+        let arity = match func {
+            B::Wrapping(Arith::Neg) | B::WrappingFrom => 1,
+            _ => 2,
+        };
+        if call.args.len() != arity {
+            return err(
+                Code::ArgCount,
+                call.name.span,
+                format!(
+                    "`{}::{}` expects {arity} argument(s), {} given",
+                    call.path[0].name,
+                    call.name.name,
+                    call.args.len()
+                ),
+            );
+        }
+        let (args, result) = match func {
+            B::WrappingFrom => {
+                let arg = &call.args[0];
+                if needs_type_context(arg) {
+                    return err(
+                        Code::UntypedLiteral,
+                        arg.span,
+                        format!(
+                            "cannot infer the type of the literal: there is no need to convert a literal, write a value of type `{prim}` directly"
+                        ),
+                    );
+                }
+                let x = self.expr(arg, None)?;
+                let source = x.value_ty();
+                if !source.is_int() {
+                    return err(
+                        Code::InvalidConversion,
+                        arg.span,
+                        format!(
+                            "`{prim}::wrapping_from` takes an integer, found `{}`",
+                            self.show(source)
+                        ),
+                    );
+                }
+                (vec![x], ty)
+            }
+            B::Checked(_) => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|a| self.expr(a, Some(ty)))
+                    .collect::<Result<Vec<_>>>()?;
+                (args, self.types.intern(TypeKind::Option(ty)))
+            }
+            _ => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|a| self.expr(a, Some(ty)))
+                    .collect::<Result<Vec<_>>>()?;
+                (args, ty)
+            }
+        };
+        self.expect_type(
+            typed(hir::ExprKind::Builtin { func, args }, result),
             expected,
             span,
         )

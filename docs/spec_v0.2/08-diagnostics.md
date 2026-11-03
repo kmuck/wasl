@@ -43,7 +43,7 @@ The order of § 11.2 becomes:
 | E0506 | `match` that does not cover every case | `match (s) { case draft { } }` with three cases and no `else` |
 | E0507 | case listed twice in a `match`, or `else` that covers no case | two `case none`, `else` after all the cases |
 
-Errors that existing codes already describe keep them: a wrong type for a field value, an argument or an index is E0400; indexing something that is not a list, or `<` on strings, is E0403; an unknown interface in a path is E0300.
+Errors that existing codes already describe keep them: a wrong type for a field value, an argument or an index is E0400; indexing something that is not a list, or `<` on strings, is E0403; an unknown interface in a path is E0300; an unknown built-in function of an integer type, such as `u32::wrapping_neg`, is E0301; `T::wrapping_from` of a float, a `bool` or a `char` is E0404.
 
 ## v2.8.3 Retired code
 
