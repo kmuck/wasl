@@ -453,6 +453,30 @@ impl Parser {
             {
                 self.call_stmt(start)?
             }
+            TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
+                self.call_stmt(start)?
+            }
+            TokenKind::Underscore => {
+                self.bump();
+                self.expect(
+                    &TokenKind::Eq,
+                    "`=` (`_ = f(…);` discards the value of a call)",
+                )?;
+                let value_start = self.span();
+                let path = match self.path_segments() {
+                    Ok(path) if *self.peek() == TokenKind::LParen => path,
+                    _ => {
+                        return err(
+                            Code::Syntax,
+                            value_start,
+                            "only the value of a function call can be discarded: `_ = f(…);`",
+                        );
+                    }
+                };
+                let call = self.call_args(path)?;
+                self.expect(&TokenKind::Semi, "`;`")?;
+                StmtKind::Discard(call)
+            }
             TokenKind::RBrace | TokenKind::Eof => return Err(self.unexpected("a statement")),
             _ => {
                 return err(
@@ -613,6 +637,7 @@ impl Parser {
             TokenKind::KwList => "list".to_string(),
             TokenKind::KwOption => "option".to_string(),
             TokenKind::KwResult => "result".to_string(),
+            TokenKind::Type(ty) if ty.is_int() => ty.name().to_string(),
             _ => return Err(self.unexpected("a name")),
         };
         let span = self.bump().span;
@@ -872,6 +897,10 @@ impl Parser {
             | TokenKind::KwList
             | TokenKind::KwOption
             | TokenKind::KwResult => self.name_expr()?,
+            // `u32::wrapping_add(…)`: a built-in function of an integer type (§ v2.4.11).
+            TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
+                self.name_expr()?
+            }
             TokenKind::Type(_) => self.conversion()?,
             TokenKind::KwTuple => {
                 self.bump();

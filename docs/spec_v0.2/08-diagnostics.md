@@ -11,7 +11,7 @@ The order of § 11.2 becomes:
 3. **Items of the interfaces**, interface by interface, in declaration order: functions declared twice (E0202), other names declared twice (E0206), types with the name of a top-level declaration (E0210), fields, cases and flags declared twice (E0207), flags types with more than 32 flags (E0212).
 4. **Types**, interface by interface, type by type, in declaration order: unknown types in fields, payloads and signatures (E0305), types without a value (E0211).
 5. **Worlds**, in declaration order: exports (E0203, E0204).
-6. **Exported interfaces**, world by world, interface by interface: the signatures of their functions, then their declared types, in declaration order: recursive types (E0208), types of interfaces with functions (E0209); then cycles of `use` between the interfaces that appear in the WIT (E0213).
+6. **Exported interfaces**, world by world, interface by interface: the signatures of their functions, then their declared types, in declaration order: recursive types (E0208), types of interfaces with functions (E0209), mutable types (E0214); then cycles of `use` between the interfaces that appear in the WIT (E0213).
 7. **Initial values of the globals**, in declaration order (E0409 and the typing errors).
 8. **Function bodies**, as in § 11.2.
 
@@ -29,6 +29,7 @@ The order of § 11.2 becomes:
 | E0211 | type without a value: no value of it can be built (§ v2.2.5) | `record a { next: a }`, `variant v { a(v) }` |
 | E0212 | flags type with more than 32 flags | |
 | E0213 | interfaces of the WIT that use each other's types in a cycle | `record r { s: b::s }` in `a` and `func f(r: a::r)` in `b`, both exported (§ v2.7.1) |
+| E0214 | `mut` field or `list<mut T>` in the signature of an exported function or in a type declared in an exported interface (§ v2.2.7) | `func sort(xs: list<mut u32>)`, `record cell { v: mut u32 }` in an exported interface |
 | E0305 | unknown type | `local x: nope = …;`, `local x: invoices::fib = …;` with a function `fib` |
 | E0306 | unknown field, flag or tuple element | `inv.nope`, `n.x` with `n: u32`, `t.2` on a `tuple<u32, u32>` |
 | E0307 | unknown case | `status::lost`, `case lost { }`, `invoices::line::x` with a record `line` |
@@ -36,14 +37,15 @@ The order of § 11.2 becomes:
 | E0407 | payload where the case has none, or no payload where it has one | `status::paid()`, `discount::percent`, `case none(x) { }` |
 | E0408 | cannot infer the type of a value | `match (option::none) { … }`, `local n: u32 = list::len([]);` |
 | E0409 | initial value of a global that is not a constant expression | `global g: u32 = 1 + 1;`, `global s: string = "a" + "b";` |
-| E0410 | local of a heap type or of an enum without initial value | `local s: string;`, `local t: tuple<u32, u32>;` |
+| E0410 | local without initial value whose type has no default value: a type other than a scalar or an `option` (§ v2.4.13) | `local s: string;`, `local t: tuple<u32, u32>;` |
 | E0411 | `match` on a type that is not an enum, a variant, an option or a result | `match (n) { … }` with `n: u32` |
 | E0412 | flags literal with a repeated or misplaced flag | `delivery { urgent, email }`, `delivery { paper, paper }` |
+| E0413 | call used as a statement whose function returns a value (§ v2.4.16) | `save(inv);` with `func save(…) -> result<_, e>`, `string::len(s);` |
 | E0505 | assignment to a field that is not `mut`, to an element of a `list<T>` or of a tuple, or to a flag | `inv.number = 1;`, `xs[0] = 1;` with `xs: list<u8>`, `t.0 = 1;`, `d.paper = true;` |
 | E0506 | `match` that does not cover every case | `match (s) { case draft { } }` with three cases and no `else` |
 | E0507 | case listed twice in a `match`, or `else` that covers no case | two `case none`, `else` after all the cases |
 
-Errors that existing codes already describe keep them: a wrong type for a field value, an argument or an index is E0400; indexing something that is not a list, or `<` on strings, is E0403; an unknown interface in a path is E0300.
+Errors that existing codes already describe keep them: a wrong type for a field value, an argument or an index is E0400; indexing something that is not a list, or `<` on strings, is E0403; an unknown interface in a path is E0300; an unknown built-in function of an integer type, such as `u32::wrapping_neg`, is E0301; `T::wrapping_from` of a float, a `bool` or a `char` is E0404; `_ = f();` on a function without a return value is E0400, and `_ =` followed by anything but a call is E0100 (§ v2.4.16).
 
 ## v2.8.3 Retired code
 

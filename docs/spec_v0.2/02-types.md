@@ -101,7 +101,7 @@ interface invoices {
     lines: list<line>,
     discount: option<discount>,
     delivery: delivery,
-    status: mut status,
+    status: status,
   }
 
   func total(inv: invoice) -> result<u64, invoice_error> { … }
@@ -114,7 +114,8 @@ In each kind of declaration, the fields, cases or flags are separated by commas;
 ### `record`
 
 - A record has one or more **fields**, each with a name and a type.
-- A field declared `mut` can be assigned (`inv.status = status::paid;`); a field without `mut` is set once, when the record is created. This is exactly the mutability of WasmGC struct fields (§ v2.6.1).
+- A field declared `mut` can be assigned (`c.hits = c.hits + 1;`); a field without `mut` is set once, when the record is created. This is exactly the mutability of WasmGC struct fields (§ v2.6.1).
+- A record with a `mut` field stays inside the component: it cannot appear in the WIT (E0214, § v2.2.7).
 
 ### `enum`
 
@@ -134,7 +135,7 @@ A variant has one or more cases, each with an optional payload of **one** type: 
 
 - The names of the types and functions of an interface form **one namespace**, as in WIT: a type and a function of the same interface cannot have the same name (E0206). Two functions with the same name remain E0202.
 - A type cannot have the name of a top-level declaration of the package (a world, an interface or a global, E0210). This keeps every path unambiguous: in `a::b`, `a` is either a type of the current interface or an interface, never both.
-- Field, case and flag names live in their type. A field can have the name of a type (`status: mut status`).
+- Field, case and flag names live in their type. A field can have the name of a type (`status: status`).
 - Every name follows the identifier rules of § 4.3, and converts to WIT by replacing `_` with `-` (§ 13.2): `unit_price` → `unit-price`, `invoice_error` → `invoice-error`.
 
 ## v2.2.4 Naming a type
@@ -191,7 +192,7 @@ func digits() -> list<u8> {
 Why immutability is a guarantee and not a read-only view:
 
 - **A `list<T>` can be trusted.** A function that receives or stores a `list<T>` knows that its elements will never change, whatever the rest of the program does. Only `list<mut T>` values can be shared and modified at the same time.
-- **It prepares copy-free boundaries.** With the `gc` option of the Canonical ABI (§ v2.11), an immutable list can be handed to another component by reference, since nobody can modify it; a mutable one must still be copied. The language must therefore know, for every list, that it is really immutable.
+- **It prepares copy-free boundaries.** With the `gc` option of the Canonical ABI (§ v2.11), an immutable list can be handed to another component by reference, since nobody can modify it. A mutable list never crosses the boundary (§ v2.2.7). The language must therefore know, for every list, that it is really immutable.
 
 Most lists are built once, with a literal, `list::filled` or at the boundary, and need no `freeze`. The copy made by `list::freeze` is the price of building an immutable list element by element; the representation that makes it necessary today is explained in § v2.6.1.
 
@@ -200,4 +201,21 @@ Most lists are built once, with a literal, `list::filled` or at the boundary, an
 Any type can be used for parameters, return values, locals, globals, fields, list and tuple elements and payloads. The restrictions only concern what appears in the WIT of a world: the signatures of **exported** functions, and every type declared in an **exported interface**, which appears in the WIT even if no function uses it (§ v2.7.1):
 
 - no recursive type (E0208, § v2.2.5);
-- every type they use must be declared in an interface that can appear in the WIT of the world (E0209, § v2.7.1).
+- every type they use must be declared in an interface that can appear in the WIT of the world (E0209, § v2.7.1);
+- nothing that can change: no `mut` field and no `list<mut T>`, at any depth (E0214).
+
+**Mutability stays inside the component.** The WIT has no mutability, as it has no recursive types: what it cannot express stays internal. A record with a `mut` field, or a type that contains a `list<mut T>`, is declared in an interface that no world exports, and does not appear in an exported signature. An exported function that needs to change a list it receives takes a `list<T>` and works on `list::copy(xs)`; one that changes a record returns a new record.
+
+This makes exported functions behave the same for every caller. Values that cross the boundary are copied today, while calls inside the component share them (§ v2.5.4). Since nothing that crosses can change, and the language has no identity comparison, a copy and a shared reference cannot be told apart. The same holds when the `gc` option of the Canonical ABI lets references cross without copy (§ v2.11).
+
+```wasl
+interface counters {          // exported by a world
+  record counter { hits: mut u32 }       // E0214: `hits` is `mut`
+  func sort(xs: list<mut u32>) { … }     // E0214: `list<mut u32>`
+  func sorted(xs: list<u32>) -> list<u32> {
+    local ys: list<mut u32> = list::copy(xs);
+    // … sort ys in place …
+    return list::freeze(ys);
+  }
+}
+```

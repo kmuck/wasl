@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::ast::{self, ExprKind, Ident, Item, UnaryOp};
 use crate::diag::{Code, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
-use crate::types::{CaseDef, DeclId, DeclKind, FieldDef, Type, TypeDecl, TypeKind, Types};
+use crate::types::{CaseDef, DeclId, DeclKind, FieldDef, Mutable, Type, TypeDecl, TypeKind, Types};
 
 mod body;
 
@@ -556,8 +556,8 @@ fn why_empty(types: &Types, inhabited: &[bool], id: DeclId) -> String {
 }
 
 /// Types used at the boundary of a component by `world` (§ v2.2.7): no recursive type
-/// (E0208), and only types of interfaces that the world exports or that have no
-/// function (E0209).
+/// (E0208), only types of interfaces that the world exports or that have no function
+/// (E0209), and nothing that can change (E0214).
 fn check_boundary_types(
     types: &Types,
     program: &hir::Program,
@@ -595,6 +595,28 @@ fn check_boundary_types(
                 );
             }
         }
+    }
+    for &ty in used {
+        let message = match types.first_mutable(ty) {
+            None => continue,
+            Some(Mutable::Field(id, field)) => format!(
+                "field `{field}` of record `{}` is `mut`, but the record appears in the WIT through the {what} `{}`, and the WIT has no mutability: remove `mut` and build a new record to change a value, or keep the record out of the WIT",
+                types.display(types.decl_type_of(id)),
+                at.name
+            ),
+            Some(Mutable::List(list)) => {
+                let TypeKind::List { elem, .. } = types.kind(list) else {
+                    unreachable!("a mutable list")
+                };
+                format!(
+                    "`{}` appears in the WIT through the {what} `{}`, but the WIT has no mutability: use `list<{}>`, and `list::copy` for a mutable copy inside the component",
+                    types.display(list),
+                    at.name,
+                    types.display(*elem)
+                )
+            }
+        };
+        return err(Code::MutableExport, at.span, message);
     }
     Ok(())
 }
@@ -767,10 +789,32 @@ mod tests {
         ok("if (n < 1) { return 0; } else if (n > 2) { return 1; } else { return 2; }");
         ok("local s: s8 = -128; local t: s8 = -(5); return u32(s) + u32(t);");
         ok("local y: f64 = x * 2.0 + -1.5; return u32(y);");
-        ok("m = m + 1; v(); other::o(); return other::o() + g;");
+        ok("m = m + 1; v(); _ = other::o(); return other::o() + g;");
         ok("local c: bool = n > 1 && !b || x == 2.0; return 1 + 2 * 3;");
         ok("while (true) { if (b) { break; } else { continue; } } return n << 2 & 255;");
         ok("n = 5; return n;");
+    }
+
+    #[test]
+    fn integer_functions() {
+        ok("return u32::wrapping_add(n, 1) + u32::wrapping_mul(2, 3) - u32::wrapping_sub(n, n);");
+        ok("local s: s8 = s8::wrapping_neg(-128); return u32::wrapping_from(s);");
+        ok(
+            "local o: option<u64> = u64::checked_mul(u64(n), 3); m = u32::wrapping_from(m); return n;",
+        );
+        ok("_ = u8::wrapping_add(1, 2); return 0;");
+        fails("return u32::wrapping_neg(n);", Code::UnknownFunc);
+        fails("return u32::saturating_add(n, 1);", Code::UnknownFunc);
+        fails("return u32::wrapping_add(n);", Code::ArgCount);
+        fails("return u32::wrapping_add(n, 1.5);", Code::TypeMismatch);
+        fails(
+            "local s: s8 = s8::wrapping_add(n, 1); return 0;",
+            Code::TypeMismatch,
+        );
+        fails("return u32::checked_add(n, 1);", Code::TypeMismatch);
+        fails("return u32::wrapping_from(300);", Code::UntypedLiteral);
+        fails("return u32::wrapping_from(x);", Code::InvalidConversion);
+        fails("return u32::wrapping_from(b);", Code::InvalidConversion);
     }
 
     #[test]

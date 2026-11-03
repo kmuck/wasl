@@ -186,6 +186,8 @@ pub enum StmtKind {
     Continue,
     Return(Option<Expr>),
     Call(Call),
+    /// `_ = f(…);`: a call whose value is discarded (§ v2.4.16).
+    Discard(Call),
 }
 
 /// Target of an assignment: a name followed by field accesses and indexes (§ v2.3.4).

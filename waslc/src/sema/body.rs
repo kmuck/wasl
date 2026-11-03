@@ -8,7 +8,7 @@ use crate::ast::{self, BinOp, ExprKind, Ident, StmtKind, UnaryOp};
 use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, Const, FuncId, InterfaceId, LocalId, Place};
 use crate::source::Span;
-use crate::types::{DeclId, DeclKind, Prim, Type, TypeDecl, TypeKind, Types};
+use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
 
 /// A block always returns if one of its statements always returns (§ 8.8, § v2.4.15).
 pub(super) fn always_returns(stmts: &[hir::Stmt]) -> bool {
@@ -193,29 +193,19 @@ impl<'a> FnCx<'a> {
                 init,
             } => {
                 let ty = self.resolver.resolve(self.types, written, self.iface)?;
-                let is_enum = matches!(
-                    self.types.decl(ty),
-                    Some((
-                        _,
-                        TypeDecl {
-                            kind: DeclKind::Enum(_),
-                            ..
-                        }
-                    ))
-                );
-                if init.is_none() && (!self.types.is_scalar(ty) || is_enum) {
+                // Without an initial value, a local starts at the default value of its Wasm
+                // type: zero for a scalar, null (`option::none`) for an option. The other
+                // types are non-nullable references, which have none (§ v2.4.13).
+                let has_default =
+                    self.types.is_scalar(ty) || matches!(self.types.kind(ty), TypeKind::Option(_));
+                if init.is_none() && !has_default {
                     return err(
                         Code::Uninitialized,
                         stmt.span,
                         format!(
-                            "local `{}` of type `{}` needs an initial value: {}",
+                            "local `{}` of type `{}` needs an initial value: its Wasm type is a non-nullable reference, which has no default value",
                             name.name,
-                            self.show(ty),
-                            if is_enum {
-                                "no case of an enum is a default value"
-                            } else {
-                                "there is no default value for this type"
-                            }
+                            self.show(ty)
                         ),
                     );
                 }
@@ -312,7 +302,41 @@ impl<'a> FnCx<'a> {
                         "only function calls can be used as statements, not constructors",
                     );
                 }
-                hir::Stmt::Call(self.call(call, target, stmt.span, None)?)
+                let call_expr = self.call(call, target, stmt.span, None)?;
+                if let Some(ty) = call_expr.ty {
+                    let name = call_path(call);
+                    return err(
+                        Code::IgnoredValue,
+                        stmt.span,
+                        format!(
+                            "the value of `{name}(…)` (`{}`) is ignored: use it, or write `_ = {name}(…);` to discard it",
+                            self.show(ty)
+                        ),
+                    );
+                }
+                hir::Stmt::Call(call_expr)
+            }
+            StmtKind::Discard(call) => {
+                let target = self.call_target(call)?;
+                if !matches!(target, PathTarget::Func(_) | PathTarget::Builtin(_)) {
+                    return err(
+                        Code::Syntax,
+                        stmt.span,
+                        "only the value of a function call can be discarded, not a constructor",
+                    );
+                }
+                let call_expr = self.call(call, target, stmt.span, None)?;
+                if call_expr.ty.is_none() {
+                    let name = call_path(call);
+                    return err(
+                        Code::TypeMismatch,
+                        stmt.span,
+                        format!(
+                            "function `{name}` does not return a value, so there is nothing to discard: write `{name}(…);`"
+                        ),
+                    );
+                }
+                hir::Stmt::Call(call_expr)
             }
         })
     }
@@ -800,9 +824,18 @@ impl<'a> FnCx<'a> {
         let scopes = self.resolver.scopes;
         if path.len() == 1 {
             match head.name.as_str() {
-                "string" | "list" | "char" => {
+                "string" | "list" | "char" | "s8" | "s16" | "s32" | "s64" | "u8" | "u16"
+                | "u32" | "u64" => {
                     return match hir::Builtin::from_path(&head.name, &name.name) {
                         Some(b) => Ok(PathTarget::Builtin(b)),
+                        None if name.name == "wrapping_neg" => err(
+                            Code::UnknownFunc,
+                            name.span,
+                            format!(
+                                "`{}` has no built-in function `wrapping_neg`: it only exists for signed types",
+                                head.name
+                            ),
+                        ),
                         None => err(
                             Code::UnknownFunc,
                             name.span,
@@ -1104,6 +1137,9 @@ impl<'a> FnCx<'a> {
         expected: Option<Type>,
     ) -> Result<hir::Expr> {
         use hir::Builtin as B;
+        if let Some(prim) = Prim::from_keyword(&call.path[0].name) {
+            return self.int_builtin(func, prim, call, span, expected);
+        }
         let arity = if func == B::ListFilled { 2 } else { 1 };
         if call.args.len() != arity {
             return err(
@@ -1192,9 +1228,89 @@ impl<'a> FnCx<'a> {
                     }
                 }
             }
+            B::Wrapping(_) | B::Checked(_) | B::WrappingFrom => {
+                unreachable!("functions of integer types")
+            }
         };
         self.expect_type(
             typed(hir::ExprKind::Builtin { func, args }, ty),
+            expected,
+            span,
+        )
+    }
+
+    /// A built-in function of an integer type `prim`: `u32::wrapping_add(a, b)`… (§ v2.4.11).
+    fn int_builtin(
+        &mut self,
+        func: hir::Builtin,
+        prim: Prim,
+        call: &ast::Call,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Result<hir::Expr> {
+        use hir::{Arith, Builtin as B};
+        let ty = Type::prim(prim);
+        let arity = match func {
+            B::Wrapping(Arith::Neg) | B::WrappingFrom => 1,
+            _ => 2,
+        };
+        if call.args.len() != arity {
+            return err(
+                Code::ArgCount,
+                call.name.span,
+                format!(
+                    "`{}::{}` expects {arity} argument(s), {} given",
+                    call.path[0].name,
+                    call.name.name,
+                    call.args.len()
+                ),
+            );
+        }
+        let (args, result) = match func {
+            B::WrappingFrom => {
+                let arg = &call.args[0];
+                if needs_type_context(arg) {
+                    return err(
+                        Code::UntypedLiteral,
+                        arg.span,
+                        format!(
+                            "cannot infer the type of the literal: there is no need to convert a literal, write a value of type `{prim}` directly"
+                        ),
+                    );
+                }
+                let x = self.expr(arg, None)?;
+                let source = x.value_ty();
+                if !source.is_int() {
+                    return err(
+                        Code::InvalidConversion,
+                        arg.span,
+                        format!(
+                            "`{prim}::wrapping_from` takes an integer, found `{}`",
+                            self.show(source)
+                        ),
+                    );
+                }
+                (vec![x], ty)
+            }
+            B::Checked(_) => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|a| self.expr(a, Some(ty)))
+                    .collect::<Result<Vec<_>>>()?;
+                (args, self.types.intern(TypeKind::Option(ty)))
+            }
+            _ => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|a| self.expr(a, Some(ty)))
+                    .collect::<Result<Vec<_>>>()?;
+                (args, ty)
+            }
+        };
+        self.expect_type(
+            typed(hir::ExprKind::Builtin { func, args }, result),
             expected,
             span,
         )
@@ -1787,4 +1903,14 @@ fn untyped_literal<T>(span: Span) -> Result<T> {
         span,
         "cannot infer the type of the literal: nothing in the context gives its type",
     )
+}
+
+/// The path of a call as written, without its arguments: `save`, `store::save`.
+fn call_path(call: &ast::Call) -> String {
+    call.path
+        .iter()
+        .chain(std::iter::once(&call.name))
+        .map(|i| i.name.as_str())
+        .collect::<Vec<_>>()
+        .join("::")
 }

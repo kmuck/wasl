@@ -13,7 +13,8 @@ use wasm_encoder::{
 use crate::ast::{BinOp, UnaryOp};
 use crate::diag::Result;
 use crate::hir::{
-    Builtin, Const, Expr, ExprKind, FuncDef, FuncId, GlobalId, MatchArm, Place, Program, Stmt,
+    Arith, Builtin, Const, Expr, ExprKind, FuncDef, FuncId, GlobalId, MatchArm, Place, Program,
+    Stmt,
 };
 use crate::types::{DeclKind, Prim, Type, TypeKind, Types};
 use crate::wit::kebab;
@@ -197,7 +198,7 @@ pub fn generate(
         exports.export("cm32p2_realloc", ExportKind::Func, realloc);
     }
 
-    // Types: the GC types in one recursion group, then the function types (§ v2.6.5).
+    // Types: the GC types in one recursion group, then the function types (§ v2.6.6).
     let mut type_section = TypeSection::new();
     let gc_types = cx.rec.len() as u32;
     if gc_types > 0 {
@@ -779,7 +780,8 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 match init {
                     Some(e) => self.expr(e),
                     None => {
-                        // A local may be redeclared on every loop iteration: reset it to zero.
+                        // A local may be redeclared on every loop iteration: reset it to the
+                        // default value of its Wasm type (§ v2.4.13).
                         let ty = self.cx.val(self.local_types[*local as usize]);
                         self.zero(ty);
                     }
@@ -970,13 +972,15 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         self.cx.global_index[g].expect("used global")
     }
 
+    /// The default value of a Wasm local of type `ty`: zero, or null for an `option`.
     fn zero(&mut self, ty: ValType) {
         self.emit(match ty {
             ValType::I32 => Instruction::I32Const(0),
             ValType::I64 => Instruction::I64Const(0),
             ValType::F32 => Instruction::F32Const(Ieee32::from(0.0f32)),
             ValType::F64 => Instruction::F64Const(Ieee64::from(0.0f64)),
-            _ => unreachable!("locals of heap types are initialized"),
+            ValType::Ref(r) if r.nullable => Instruction::RefNull(r.heap_type),
+            _ => unreachable!("locals of non-nullable reference types are initialized"),
         });
     }
 
@@ -1128,6 +1132,43 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             self.emit(Instruction::ArrayNew(array));
             return;
         }
+        match func {
+            Builtin::Wrapping(Arith::Neg) => {
+                self.zero(ty.val_type());
+                self.expr(&args[0]);
+                self.emit(binary_instr(BinOp::Sub, ty));
+                self.normalize(ty);
+                return;
+            }
+            Builtin::Wrapping(op) => {
+                self.expr(&args[0]);
+                self.expr(&args[1]);
+                self.emit(binary_instr(arith_op(op), ty));
+                self.normalize(ty);
+                return;
+            }
+            Builtin::Checked(op) => {
+                // `option::none` on overflow, `option::some(r)` otherwise.
+                let int = args[0].value_ty();
+                self.expr(&args[0]);
+                self.expr(&args[1]);
+                let r = self.arith_overflow(op, int);
+                let boxed = self.cx.option_heap(int);
+                self.emit(Instruction::If(BlockType::Result(ref_type(boxed, true))));
+                self.emit(Instruction::RefNull(HeapType::Concrete(boxed)));
+                self.emit(Instruction::Else);
+                self.emit(Instruction::LocalGet(r));
+                self.emit(Instruction::StructNew(boxed));
+                self.emit(Instruction::End);
+                return;
+            }
+            Builtin::WrappingFrom => {
+                self.expr(&args[0]);
+                self.wrap_int(args[0].value_ty(), ty, true);
+                return;
+            }
+            _ => {}
+        }
         for arg in args {
             self.expr(arg);
         }
@@ -1143,7 +1184,10 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             Builtin::StringFromChars => Helper::FromChars,
             Builtin::CharFromU32 => Helper::CharFromU32,
             Builtin::ListCopy | Builtin::ListFreeze => Helper::Copy(self.cx.heap(ty)),
-            Builtin::ListFilled => unreachable!(),
+            Builtin::ListFilled
+            | Builtin::Wrapping(_)
+            | Builtin::Checked(_)
+            | Builtin::WrappingFrom => unreachable!("generated above"),
         };
         let index = self.cx.helper(helper);
         self.emit(Instruction::Call(index));
@@ -1183,15 +1227,8 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                     self.emit(Instruction::F64Neg);
                 }
                 _ => {
-                    // -x = 0 - x, wrapping.
-                    self.zero(ty.val_type());
                     self.expr(operand);
-                    self.emit(if ty.val_type() == ValType::I64 {
-                        Instruction::I64Sub
-                    } else {
-                        Instruction::I32Sub
-                    });
-                    self.normalize(ty);
+                    self.trapping_arith(Arith::Neg, ty);
                 }
             },
         }
@@ -1271,6 +1308,18 @@ impl<'g, 'a> FuncGen<'g, 'a> {
 
         self.expr(lhs);
         self.expr(rhs);
+        if ty.is_int() {
+            let arith = match op {
+                BinOp::Add => Some(Arith::Add),
+                BinOp::Sub => Some(Arith::Sub),
+                BinOp::Mul => Some(Arith::Mul),
+                _ => None,
+            };
+            if let Some(arith) = arith {
+                self.trapping_arith(arith, ty);
+                return;
+            }
+        }
         if matches!(op, BinOp::Shl | BinOp::Shr) && ty.is_small_int() {
             // Shift amount taken modulo the bit width of the type (§ 10.2).
             self.emit(Instruction::I32Const(ty.bits() as i32 - 1));
@@ -1282,6 +1331,183 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         }
     }
 
+    /// `+`, `-`, `*` or unary `-` on an integer type, with the operands on the stack: the
+    /// exact result, or a trap (§ v2.5.6).
+    fn trapping_arith(&mut self, op: Arith, ty: Type) {
+        let r = self.arith_overflow(op, ty);
+        self.trap_if_overflow();
+        self.emit(Instruction::LocalGet(r));
+    }
+
+    /// Traps with `integer overflow` if the `i32` on the stack is not 0, by dividing
+    /// `i32::MIN` by -1 as for the division of § 12.2 (§ v2.6.5). The trap is inline: a call
+    /// to a helper would make the hot path save its registers around the call.
+    fn trap_if_overflow(&mut self) {
+        self.emit(Instruction::If(BlockType::Empty));
+        self.emit(Instruction::I32Const(i32::MIN));
+        self.emit(Instruction::I32Const(-1));
+        self.emit(Instruction::I32DivS);
+        self.emit(Instruction::Drop);
+        self.emit(Instruction::End);
+    }
+
+    /// Integer arithmetic with the operands on the stack: stores the result modulo 2ⁿ in a
+    /// scratch local, which it returns, and leaves on the stack whether the exact result
+    /// does not fit in `ty` (§ v2.6.5).
+    fn arith_overflow(&mut self, op: Arith, ty: Type) -> u32 {
+        use Instruction as I;
+        let vt = ty.val_type();
+        if ty.is_small_int() {
+            // The operands are normalized `i32`s (§ 12.2), so the exact result fits in an
+            // `i32` (read as unsigned for a `u16` product): it overflowed when it is out of
+            // the range of the type.
+            if op == Arith::Neg {
+                let a = self.scratch(ValType::I32);
+                self.emit(I::LocalSet(a));
+                self.emit(I::I32Const(0));
+                self.emit(I::LocalGet(a));
+                self.emit(I::I32Sub);
+            } else {
+                self.emit(binary_instr(arith_op(op), Type::U32));
+            }
+            let r = self.scratch(ValType::I32);
+            self.emit(I::LocalTee(r));
+            match ty {
+                Type::U8 => self.emit_all([I::I32Const(0xFF), I::I32GtU]),
+                Type::U16 => self.emit_all([I::I32Const(0xFFFF), I::I32GtU]),
+                Type::S8 => self.emit_all([I::LocalGet(r), I::I32Extend8S, I::I32Ne]),
+                _ => self.emit_all([I::LocalGet(r), I::I32Extend16S, I::I32Ne]),
+            }
+            return r;
+        }
+        let r = self.scratch(vt);
+        let instr = |op| binary_instr(op, ty);
+        match op {
+            Arith::Mul if vt == ValType::I64 => {
+                // When both operands fit in 32 bits (signed or unsigned, as the type), the
+                // exact product fits in 64 bits; otherwise a helper divides.
+                let (a, b) = (self.scratch(vt), self.scratch(vt));
+                self.emit_all([
+                    I::LocalSet(b),
+                    I::LocalTee(a),
+                    I::LocalGet(b),
+                    I::I64Mul,
+                    I::LocalSet(r),
+                    I::LocalGet(a),
+                ]);
+                if ty.is_signed() {
+                    // a + 2³¹ < 2³² (unsigned) exactly when a is in [-2³¹, 2³¹).
+                    self.emit_all([
+                        I::I64Const(1 << 31),
+                        I::I64Add,
+                        I::LocalGet(b),
+                        I::I64Const(1 << 31),
+                        I::I64Add,
+                    ]);
+                } else {
+                    self.emit(I::LocalGet(b));
+                }
+                let helper = self.cx.helper(Helper::MulOverflow64 {
+                    signed: ty.is_signed(),
+                });
+                self.emit_all([
+                    I::I64Or,
+                    I::I64Const(32),
+                    I::I64ShrU,
+                    I::I64Eqz,
+                    I::If(BlockType::Result(ValType::I32)),
+                    I::I32Const(0),
+                    I::Else,
+                    I::LocalGet(a),
+                    I::LocalGet(b),
+                    I::Call(helper),
+                    I::End,
+                ]);
+            }
+            Arith::Mul => {
+                // The exact product of two 32-bit integers fits in 64 bits.
+                let extend = if ty.is_signed() {
+                    I::I64ExtendI32S
+                } else {
+                    I::I64ExtendI32U
+                };
+                let b = self.scratch(ValType::I32);
+                let wide = self.scratch(ValType::I64);
+                self.emit_all([
+                    I::LocalSet(b),
+                    extend.clone(),
+                    I::LocalGet(b),
+                    extend,
+                    I::I64Mul,
+                    I::LocalTee(wide),
+                    I::I32WrapI64,
+                    I::LocalSet(r),
+                    I::LocalGet(wide),
+                ]);
+                if ty.is_signed() {
+                    self.emit_all([I::LocalGet(wide), I::I64Extend32S, I::I64Ne]);
+                } else {
+                    self.emit_all([I::I64Const(32), I::I64ShrU, I::I64Const(0), I::I64Ne]);
+                }
+            }
+            Arith::Add | Arith::Sub => {
+                let (a, b) = (self.scratch(vt), self.scratch(vt));
+                self.emit_all([
+                    I::LocalSet(b),
+                    I::LocalTee(a),
+                    I::LocalGet(b),
+                    instr(arith_op(op)),
+                    I::LocalSet(r),
+                ]);
+                if !ty.is_signed() {
+                    // Unsigned: a + b overflowed when r < a, a - b when a < b.
+                    let lhs = if op == Arith::Add { r } else { a };
+                    let rhs = if op == Arith::Add { a } else { b };
+                    self.emit_all([I::LocalGet(lhs), I::LocalGet(rhs), instr(BinOp::Lt)]);
+                } else {
+                    // Signed: the sign of r is wrong. For a + b, a and b have the same sign
+                    // and r has the other: (a ^ r) & (b ^ r) < 0. For a - b, a and b have
+                    // different signs and r has the sign of b: (a ^ b) & (a ^ r) < 0.
+                    let (x, y) = if op == Arith::Add { (r, b) } else { (b, a) };
+                    self.emit_all([
+                        I::LocalGet(a),
+                        I::LocalGet(r),
+                        instr(BinOp::BitXor),
+                        I::LocalGet(x),
+                        I::LocalGet(y),
+                        instr(BinOp::BitXor),
+                        instr(BinOp::BitAnd),
+                    ]);
+                    self.zero(vt);
+                    self.emit(instr(BinOp::Lt));
+                }
+            }
+            Arith::Neg => {
+                // Signed only: -a overflows for the minimum of the type.
+                let a = self.scratch(vt);
+                self.emit(I::LocalSet(a));
+                self.zero(vt);
+                self.emit_all([
+                    I::LocalGet(a),
+                    instr(BinOp::Sub),
+                    I::LocalSet(r),
+                    I::LocalGet(a),
+                ]);
+                self.emit(if vt == ValType::I64 {
+                    I::I64Const(i64::MIN)
+                } else {
+                    I::I32Const(i32::MIN)
+                });
+                self.emit(instr(BinOp::Eq));
+            }
+        }
+        r
+    }
+
+    fn emit_all<const N: usize>(&mut self, instrs: [Instruction<'static>; N]) {
+        self.instrs.extend(instrs);
+    }
+
     fn convert(&mut self, from: Type, to: Type) {
         use Instruction as I;
         if from == to {
@@ -1290,16 +1516,9 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         let from_vt = from.val_type();
         let to_vt = to.val_type();
         if from.is_int() && to.is_int() {
-            match (from_vt, to_vt) {
-                (ValType::I64, ValType::I32) => self.emit(I::I32WrapI64),
-                (ValType::I32, ValType::I64) => self.emit(if from.is_signed() {
-                    I::I64ExtendI32S
-                } else {
-                    I::I64ExtendI32U
-                }),
-                _ => {}
-            }
-            self.normalize(to);
+            // Once the value is known to fit, it is already normalized for `to` (§ 12.2).
+            self.check_fits(from, to);
+            self.wrap_int(from, to, false);
         } else if from.is_int() {
             let signed = from.is_signed();
             self.emit(match (from_vt, to, signed) {
@@ -1313,27 +1532,26 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 (_, _, false) => I::F64ConvertI64U,
             });
         } else if to.is_int() {
+            // `trunc` traps on NaN and on values out of the range of its result (§ v2.5.6).
             let f32_src = from == Type::F32;
             if to.is_small_int() {
-                // Saturate to i32, then clamp to the range of the type.
                 self.emit(if f32_src {
-                    I::I32TruncSatF32S
+                    I::I32TruncF32S
                 } else {
-                    I::I32TruncSatF64S
+                    I::I32TruncF64S
                 });
-                let (min, max) = to.int_range();
-                self.clamp(min as i32, max as i32);
+                self.check_fits(Type::S32, to);
             } else {
                 let signed = to.is_signed();
                 self.emit(match (to_vt, f32_src, signed) {
-                    (ValType::I32, true, true) => I::I32TruncSatF32S,
-                    (ValType::I32, true, false) => I::I32TruncSatF32U,
-                    (ValType::I32, false, true) => I::I32TruncSatF64S,
-                    (ValType::I32, false, false) => I::I32TruncSatF64U,
-                    (_, true, true) => I::I64TruncSatF32S,
-                    (_, true, false) => I::I64TruncSatF32U,
-                    (_, false, true) => I::I64TruncSatF64S,
-                    (_, false, false) => I::I64TruncSatF64U,
+                    (ValType::I32, true, true) => I::I32TruncF32S,
+                    (ValType::I32, true, false) => I::I32TruncF32U,
+                    (ValType::I32, false, true) => I::I32TruncF64S,
+                    (ValType::I32, false, false) => I::I32TruncF64U,
+                    (_, true, true) => I::I64TruncF32S,
+                    (_, true, false) => I::I64TruncF32U,
+                    (_, false, true) => I::I64TruncF64S,
+                    (_, false, false) => I::I64TruncF64U,
                 });
             }
         } else if to == Type::F64 {
@@ -1343,26 +1561,75 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         }
     }
 
-    /// Clamps the `i32` value on top of the stack to `[min, max]`.
-    fn clamp(&mut self, min: i32, max: i32) {
+    /// With an integer of type `from` on the stack: traps if its value does not fit in the
+    /// integer type `to` (§ v2.5.6).
+    fn check_fits(&mut self, from: Type, to: Type) {
         use Instruction as I;
-        let t = self.scratch(ValType::I32);
-        self.emit(I::LocalSet(t));
-        // t = t > max ? max : t
-        self.emit(I::I32Const(max));
+        let (from_min, from_max) = from.int_range();
+        let (to_min, to_max) = to.int_range();
+        if to_min <= from_min && from_max <= to_max {
+            return;
+        }
+        let vt = from.val_type();
+        let constant = |v: i128| {
+            if vt == ValType::I64 {
+                I::I64Const(v as i64)
+            } else {
+                I::I32Const(v as i32)
+            }
+        };
+        let t = self.scratch(vt);
+        self.emit(I::LocalTee(t));
+        if from.is_signed() && to.is_signed() {
+            // t < min || t > max
+            self.emit_all([
+                constant(to_min),
+                binary_instr(BinOp::Lt, from),
+                I::LocalGet(t),
+                constant(to_max),
+                binary_instr(BinOp::Gt, from),
+                I::I32Or,
+            ]);
+        } else {
+            // Compared as unsigned, a negative `t` is above the maximum.
+            let max = to_max.min(from_max);
+            let unsigned = if vt == ValType::I64 {
+                Type::U64
+            } else {
+                Type::U32
+            };
+            self.emit_all([constant(max), binary_instr(BinOp::Gt, unsigned)]);
+        }
+        self.trap_if_overflow();
         self.emit(I::LocalGet(t));
-        self.emit(I::LocalGet(t));
-        self.emit(I::I32Const(max));
-        self.emit(I::I32GtS);
-        self.emit(I::Select);
-        self.emit(I::LocalSet(t));
-        // t < min ? min : t
-        self.emit(I::I32Const(min));
-        self.emit(I::LocalGet(t));
-        self.emit(I::LocalGet(t));
-        self.emit(I::I32Const(min));
-        self.emit(I::I32LtS);
-        self.emit(I::Select);
+    }
+
+    /// Integer to integer conversion keeping the low-order bits (`T::wrapping_from`), with
+    /// the normalization of § 12.2 unless the value already fits in `to`.
+    fn wrap_int(&mut self, from: Type, to: Type, normalize: bool) {
+        use Instruction as I;
+        match (from.val_type(), to.val_type()) {
+            (ValType::I64, ValType::I32) => self.emit(I::I32WrapI64),
+            (ValType::I32, ValType::I64) => self.emit(if from.is_signed() {
+                I::I64ExtendI32S
+            } else {
+                I::I64ExtendI32U
+            }),
+            _ => {}
+        }
+        if normalize {
+            self.normalize(to);
+        }
+    }
+}
+
+/// The binary operator of an arithmetic operation with two operands.
+fn arith_op(op: Arith) -> BinOp {
+    match op {
+        Arith::Add => BinOp::Add,
+        Arith::Sub => BinOp::Sub,
+        Arith::Mul => BinOp::Mul,
+        Arith::Neg => unreachable!("unary"),
     }
 }
 

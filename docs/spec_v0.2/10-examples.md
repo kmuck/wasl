@@ -56,7 +56,7 @@ interface invoices {
     lines: list<line>,
     discount: option<discount>,
     delivery: delivery,
-    status: mut status,
+    status: status,
   }
 
   enum invoice_error {
@@ -108,13 +108,19 @@ interface invoices {
     }
   }
 
-  // `inv` is a copy made at the boundary of the component: changing its
-  // status changes neither the caller's value nor anything else.
+  // An invoice crosses the boundary of the component, so it cannot change
+  // (§ v2.2.7): a paid invoice is a new record.
   func mark_paid(inv: invoice) -> result<invoice, invoice_error> {
     match (total(inv)) {
       case ok {
-        inv.status = status::paid;
-        return result::ok(inv);
+        return result::ok(invoice {
+          number: inv.number,
+          customer: inv.customer,
+          lines: inv.lines,
+          discount: inv.discount,
+          delivery: inv.delivery,
+          status: status::paid,
+        });
       }
       case err(e) {
         return result::err(e);
@@ -252,7 +258,7 @@ interface text {
 What this program shows:
 
 - `invoices` declares six types next to its functions, as a WIT interface does; `pricing` names them with a path (`invoices::discount`).
-- `line` and `invoice` are records; `status` is the only `mut` field, so `mark_paid` can change it and nothing else.
+- `line` and `invoice` are records without `mut` field: they appear in the WIT, which has no mutability (§ v2.2.7).
 - `discount` is a variant whose cases both carry a payload; `invoice.discount` is optional.
 - `delivery` is a flags type: `sample` builds the set `delivery { email, urgent }`, and `needs_printing` tests one flag with `inv.delivery.paper`.
 - `initial` decodes the customer's name with `string::chars` and returns an `option<char>`; `stats` returns two values in a `tuple<u32, u64>`.
@@ -260,7 +266,7 @@ What this program shows:
 - `company` is a global string, initialized with a constant (§ v2.4.12).
 - `find` compares strings with `==` and returns an `option`; `count_unpaid` compares enums with `!=`.
 - `text::from_u32` builds a string from a `list<mut u8>` with the built-in functions only: number formatting belongs to a library, not to the compiler.
-- `mark_paid` changes the status of its argument and returns it: the caller's value does not change, because the argument is a copy made at the boundary (§ v2.5.4).
+- `mark_paid` returns a new invoice with the status `paid`: its argument cannot change, so it behaves the same whether it is called from outside or from inside the component (§ v2.5.4).
 
 WIT of the package (`weasel wit`):
 
@@ -371,6 +377,8 @@ Each line is placed in a valid context, with the types of the target program, an
 | `record math { a: u32 }` with `interface math` | E0210: name of a top-level declaration |
 | `record a { next: a }` | E0211: no value of `a` can be built |
 | `func root() -> node` exported, `record node { children: list<node> }` | E0208: recursive types cannot cross the boundary |
+| `record counter { n: mut u32 }` in `invoices` | E0214: the types of an exported interface appear in the WIT, which has no `mut` |
+| `func sort(xs: list<mut u32>)` in `invoices` | E0214: use `list<u32>`, and `list::copy` inside the function |
 | `local x: lines = …;` | E0305: unknown type |
 | `local l: line = …;` in `pricing` | E0305: from another interface, write `invoices::line` |
 | `inv.total` | E0306: `invoice` has no field `total` |
@@ -385,9 +393,12 @@ Each line is placed in a valid context, with the types of the target program, an
 | `local n: u32 = list::len([]);` | E0408: no element type for `[]` |
 | `global s: string = "a" + "b";` | E0409: an operator is not a constant expression |
 | `local s: string;` | E0410: a string needs an initial value |
-| `local s: status;` | E0410: an enum needs an initial value |
+| `local m: line;` | E0410: a record needs an initial value |
+| `total(inv);` | E0413: the `result` of `total` is ignored; handle it, or write `_ = total(inv);` |
+| `_ = n;` | E0100: only the value of a call can be discarded |
 | `match (n) { … }` with `n: u32` | E0411: use `if` on numbers |
 | `inv.number = 7;` | E0505: `number` is not `mut` |
+| `inv.status = status::paid;` | E0505: `status` is not `mut`; build a new `invoice` |
 | `inv.lines[0] = l;` | E0505: `lines` is a `list<line>`, not a `list<mut line>` |
 | `match (s) { case draft { } case sent { } }` | E0506: `paid` is not covered |
 | `match (s) { case draft { } case sent { } case paid { } else { } }` | E0507: the `else` covers no case |

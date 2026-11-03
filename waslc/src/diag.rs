@@ -31,6 +31,7 @@ pub enum Code {
     EmptyType,
     TooManyFlags,
     UseCycle,
+    MutableExport,
     // Names
     UnknownName,
     UnknownFunc,
@@ -54,6 +55,7 @@ pub enum Code {
     Uninitialized,
     NotMatchable,
     FlagsOrder,
+    IgnoredValue,
     // Control flow
     AssignImmutable,
     BreakOutsideLoop,
@@ -93,6 +95,7 @@ impl Code {
             Code::EmptyType => "E0211",
             Code::TooManyFlags => "E0212",
             Code::UseCycle => "E0213",
+            Code::MutableExport => "E0214",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",
@@ -114,6 +117,7 @@ impl Code {
             Code::Uninitialized => "E0410",
             Code::NotMatchable => "E0411",
             Code::FlagsOrder => "E0412",
+            Code::IgnoredValue => "E0413",
             Code::AssignImmutable => "E0500",
             Code::BreakOutsideLoop => "E0501",
             Code::MissingReturnValue => "E0502",

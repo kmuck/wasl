@@ -27,7 +27,7 @@ A path `a::b` or `a::b::c`, as an expression or before a call, is resolved by th
 
 | First name | Meaning | Examples |
 |---|---|---|
-| `string`, `list`, `char` | a built-in function (§ v2.4.11) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)` |
+| `string`, `list`, `char`, an integer type | a built-in function (§ v2.4.11) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)`, `u32::wrapping_add(h, c)` |
 | `option`, `result` | a constructor of the built-in type | `option::none`, `result::ok(sum)` |
 | a type of the current interface | a case of that enum or variant | `status::paid`, `discount::fixed(500)` |
 | an interface of the package, followed by one name | a function of that interface (§ 9.1) | `pricing::apply(sum, d)` |
@@ -137,7 +137,7 @@ The table of § 8.3 is extended:
 
 ## v2.4.11 Built-in functions and `char` conversions
 
-Ten functions are part of the language. They are called like functions of an interface, with the name of the type as path; they are not values and cannot be redefined. In this table, `list<T>` in a parameter accepts both a `list<T>` and a `list<mut T>`.
+A small set of functions is part of the language. They are called like functions of an interface, with the name of the type as path; they are not values and cannot be redefined. In this table, `list<T>` in a parameter accepts both a `list<T>` and a `list<mut T>`.
 
 | Function | Type | Result |
 |---|---|---|
@@ -157,7 +157,34 @@ Ten functions are part of the language. They are called like functions of an int
 - `string::bytes` does not copy: a string never changes, so its bytes are already an immutable `list<u8>`.
 - `list::filled`, `list::copy` and `list::freeze` are shallow: the elements that are references are shared, not copied (§ v2.5.1).
 
-**`char` conversions.** `u32(c)` with `c: char` gives the code point of `c`; it is the only conversion from a `char` (amends § 8.5). A conversion to `char`, or from `char` to any other type, is E0404: not every number is a `char`, and conversions never fail (§ 10.5), so a number becomes a `char` with `char::from_u32`.
+**Integer functions.** Each integer type `T` (`s8` to `u64`) has functions that compute modulo 2ⁿ, as § 10.2 did before § v2.5.6, or that report an overflow as a value instead of a trap:
+
+| Function | Type | Result |
+|---|---|---|
+| `T::wrapping_add(a, b)`, `T::wrapping_sub(a, b)`, `T::wrapping_mul(a, b)` | `(T, T) -> T` | `a + b`, `a - b`, `a * b` reduced modulo 2ⁿ, never a trap |
+| `T::wrapping_neg(a)`, signed `T` only | `(T) -> T` | `-a` reduced modulo 2ⁿ: `s8::wrapping_neg(-128)` is `-128` |
+| `T::wrapping_from(x)` | `(integer) -> T` | the low-order bits of `x`, read as a `T`, like the integer conversions of § 10.5: `u8::wrapping_from(n)` is `44` for `n: u32` = 300, `u32::wrapping_from(n)` is `4294967295` for `n: s32` = -1 |
+| `T::checked_add(a, b)`, `T::checked_sub(a, b)`, `T::checked_mul(a, b)` | `(T, T) -> option<T>` | `option::some` of the exact result, or `option::none` if it does not fit in `T` |
+
+- The type in the path is the expected type of the arguments, so literals need no conversion: `u32::wrapping_mul(h, 33)`. An argument of another type is E0400.
+- `T::wrapping_from(x)` takes an integer of any type. Like a conversion (§ 8.5), its argument must not be literal-only (E0402), and a float, a `bool` or a `char` is E0404.
+- `wrapping_neg` does not exist for unsigned types, where unary `-` does not exist either (E0301).
+- They are built in rather than written in a library because they exist for every integer type, and the language has no generic functions.
+
+```wasl
+func hash(s: string) -> u32 {
+  local bytes: list<u8> = string::bytes(s);
+  local h: u32 = 5381;
+  local i: u32;
+  while (i < list::len(bytes)) {
+    h = u32::wrapping_add(u32::wrapping_mul(h, 33), u32(bytes[i]));
+    i = i + 1;
+  }
+  return h;
+}
+```
+
+**`char` conversions.** `u32(c)` with `c: char` gives the code point of `c`; it is the only conversion from a `char` (amends § 8.5). A conversion to `char`, or from `char` to any other type, is E0404: not every number is a `char`, so a number becomes a `char` with `char::from_u32`, which returns an `option` instead of trapping.
 
 This set is deliberately minimal: it is what libraries written in WaSL need to build everything else (number formatting, search, slicing, sorting), following § 1.2, principle 7.
 
@@ -181,9 +208,25 @@ A global that is not `mut` always designates the same value, but that value can 
 
 ## v2.4.13 Locals
 
-A local of a **heap type** must have an initial value (E0410): there is no zero value for a string, a record or a list, and no `null` (§ v2.1.2). A local of an enum type without initial value is not allowed either (E0410): no case is more of a default than the others.
+A local declared without an initial value starts at the **default value of its Wasm type**: the value Wasm gives a local before its first `local.set`. Only scalars and options have one:
 
-The other scalar types have a zero value, as numbers do (§ 9.4): `'\u{0}'` for a `char`, the empty set for a flags type.
+| Type | Wasm type (§ v2.6.1) | Default value |
+|---|---|---|
+| integers, floats, `bool` | `i32`, `i64`, `f32`, `f64` | `0`, `0.0`, `false`, as in § 9.4 |
+| `char` | `i32` | `'\u{0}'` |
+| an enum | `i32`, the index of the case | its first case |
+| a flags type | `i32` | the empty set |
+| `option<T>` | a nullable reference | `option::none` |
+
+A string, a list, a tuple, a record, a variant or a result is a non-nullable reference in Wasm, which has no default value: a local of one of these types must have an initial value (E0410). The language still has no `null` (§ v2.1.2): the null reference of an option is its `none`, a value of the option type.
+
+As in § 9.4, the default value is set every time the declaration runs: a local declared in a loop starts from it again on every iteration. The default value of an enum depends on the order of its cases, as its representation does.
+
+```wasl
+local s: status;            // status::draft, the first case
+local d: option<discount>;  // option::none
+local t: string;            // E0410: a string needs an initial value
+```
 
 ## v2.4.14 Assignment
 
@@ -198,3 +241,19 @@ Assigning a field that is not `mut`, an element of a `list<T>`, an element of a 
 ## v2.4.15 Every path returns
 
 The syntactic check of § 8.8 is extended: a `match` always returns if the block of each of its cases, and its `else` block if present, always returns. A `match` is always exhaustive (§ v2.4.9), so no other path exists.
+
+## v2.4.16 Calls used as statements
+
+This section replaces § 9.6. A call followed by `;` is a statement only if its function returns no value. Calling a function that returns a value as a statement is an error (E0413): the value would be lost without a trace, and with it the error of a `result`. To discard it on purpose, write `_ =` before the call.
+
+```wasl
+reset();          // a function without a return value
+_ = incr();       // a function that returns a u32: the value is discarded
+save(inv);        // E0413: `save` returns a result<_, save_error>, which would be lost
+```
+
+This is what Wasm itself requires: a value left on the stack must be removed with `drop`, and `_ = f();` is that `drop`, written in the source (§ v2.6.4).
+
+- Only a call can follow `_ =` (§ v2.3.4): `_ = x;` is E0100.
+- `_ = f();` on a function without a return value is E0400, as any other use of its call as a value (§ 8.6).
+- The built-in functions all return a value: `string::len(s);` is E0413.

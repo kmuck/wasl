@@ -335,9 +335,10 @@ interface v {
     return tuple(o, r);
   }
 
-  func count_bytes(xs: list<mut u8>) -> u32 {
-    xs[0] = 0;
-    return list::len(xs);
+  func count_bytes(xs: list<u8>) -> u32 {
+    local ys: list<mut u8> = list::copy(xs);
+    ys[0] = 0;
+    return list::len(ys);
   }
 }
 "#;

@@ -53,10 +53,10 @@ v0.2 **extends** [v0.1](../spec_v0.1/README.md). Everything v0.1 specifies still
 | § | Chapter | Content |
 |---|---|---|
 | v2.1 | [Overview](01-overview.md) | Scope, design decisions, what changes for v0.1 programs |
-| v2.2 | [Types](02-types.md) | The new types, type declarations in interfaces, recursion |
+| v2.2 | [Types](02-types.md) | The new types, type declarations in interfaces, recursion, immutable types at the boundary |
 | v2.3 | [Syntax](03-syntax.md) | New tokens and keywords, complete grammar of v0.2 |
-| v2.4 | [Typing](04-typing.md) | Literals, constructors, field access, indexing, `match`, operators, built-in functions |
-| v2.5 | [Runtime semantics](05-semantics.md) | References, aliasing, mutability, evaluation order, traps |
+| v2.4 | [Typing](04-typing.md) | Literals, constructors, field access, indexing, `match`, operators, built-in functions, default values of locals, calls as statements |
+| v2.5 | [Runtime semantics](05-semantics.md) | References, aliasing, mutability, evaluation order, traps, integer overflow |
 | v2.6 | [Mapping to WasmGC](06-wasmgc-mapping.md) | Representation of each type, generated code |
 | v2.7 | [Component boundary](07-boundary.md) | Generated WIT, Canonical ABI, copies through linear memory |
 | v2.8 | [Diagnostics](08-diagnostics.md) | New error codes, order of analysis |

@@ -75,8 +75,7 @@ These land whenever a version needs them, rather than being tied to one:
 - hexadecimal and binary literals, digit separators, exponents;
 - `///` documentation comments copied into the WIT;
 - unqualified constructors where the expected type is known (§ v2.11, question 2);
-- structural equality of heap values (§ v2.11, question 4);
-- optional overflow checks.
+- structural equality of heap values (§ v2.11, question 4).
 
 ## Further out
 
