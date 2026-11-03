@@ -7,7 +7,7 @@ This chapter extends chapter 13: the WIT of the new types, and how their values 
 The derivation by erasure of § 2.6 and § 13.1 is extended:
 
 - The types of an interface appear in its WIT **before its functions**, in declaration order, with WIT names (§ 13.2): `unit_price` → `unit-price`.
-- `mut` is erased: a `mut` field is a plain field, and `list<mut T>` is `list<T>`.
+- `mut` never appears: the WIT has no mutability, so the types it contains have no `mut` field and no `list<mut T>` (E0214, § v2.2.7).
 - `string`, `list<T>`, `option<T>`, `result<…>`, `record`, `enum` and `variant` are written as in WIT, which uses the same names and the same forms.
 - When an interface `a` uses a type of another interface `b` (in a function signature or in one of its types), the WIT of `a` starts with `use b.{t1, t2};`, listing the types of `b` it uses in declaration order, and the path is erased: `invoices::line` is written `line` in `a`.
 

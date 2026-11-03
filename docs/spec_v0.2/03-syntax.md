@@ -118,7 +118,8 @@ statement         = local_declaration
                   | "break" ";"
                   | "continue" ";"
                   | "return" [ expression ] ";"
-                  | call ";" ;
+                  | call ";"
+                  | "_" "=" call ";" ;                                                     (* v0.2 *)
 
 local_declaration = "local" identifier ":" type [ "=" expression ] ";" ;
 assignment        = place "=" expression ";" ;                                            (* v0.2 *)
@@ -185,9 +186,10 @@ In addition to § 5.3. Breaking one of them is a syntax error (E0100).
 
 **Statements**
 
-- The target of an assignment starts with a name, followed by any number of field accesses and indexes: `x = …`, `inv.status = …`, `rows[i].cells[j] = …`. A call cannot start an assignment target: `f().x = 1;` is invalid.
+- The target of an assignment starts with a name, followed by any number of field accesses and indexes: `x = …`, `c.hits = …`, `rows[i].cells[j] = …`. A call cannot start an assignment target: `f().x = 1;` is invalid.
 - A statement that starts with a name followed by `.` or `[` is an assignment: `inv.status;` is invalid.
 - `match` is a statement, not an expression. It has at least one `case`; `else`, if present, comes last.
+- `_ = f(…);` discards the value of a call (§ v2.4.16). Only a call can follow `_ =`: `_ = x;` is invalid.
 - Braces are required after each `case` and after `else`, as for `if`. An empty block is allowed: `case none { }`.
 
 **Expressions**

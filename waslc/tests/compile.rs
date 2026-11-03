@@ -207,8 +207,8 @@ fn wit_of_types() {
            flags delivery { email, paper }
            variant discount { percent(u8), fixed(u64), none }
            record order {
-             items: list<mut types::item>,
-             status: mut status,
+             items: list<types::item>,
+             status: status,
              delivery: delivery,
              discount: option<discount>,
              totals: tuple<u32, u64>,
@@ -244,6 +244,69 @@ fn wit_of_types() {
         assert!(wit.contains(expected), "{expected}\n{wit}");
     }
     assert!(!wit.contains("hidden"), "{wit}");
+}
+
+/// Types that appear in the WIT cannot change (§ v2.2.7): E0214.
+#[test]
+fn mutable_types_stay_inside() {
+    let program = |exported: &str| {
+        format!(
+            "world w {{ export api; }}
+             interface shared {{ record counter {{ n: mut u32 }} record point {{ x: u32 }} }}
+             interface inner {{
+               record cell {{ v: mut u32 }}
+               func bump(c: cell, xs: list<mut u8>) -> list<mut u8> {{ c.v = c.v + 1; xs[0] = 1; return xs; }}
+             }}
+             interface api {{
+               {exported}
+             }}"
+        )
+    };
+    // Mutable types are allowed inside the component, and so are types of `shared`
+    // that no exported function uses.
+    let ok = [
+        "func f(p: shared::point) -> u32 { return p.x; }",
+        "func f(xs: list<u8>) -> u32 { local ys: list<mut u8> = list::copy(xs); ys[0] = 2; return list::len(ys); }",
+        "record r { a: list<list<u8>> } func f(x: r) -> r { return x; }",
+    ];
+    for exported in ok {
+        if let Err(e) = analyze_files(&[("src/m.wasl", &program(exported))]) {
+            panic!("{exported}: {e}");
+        }
+    }
+    let cases = [
+        (
+            "record r { a: mut u32 }",
+            "field `a` of record `api::r` is `mut`",
+        ),
+        (
+            "func f(xs: list<mut u8>) { }",
+            "`list<mut u8>` appears in the WIT through the exported function `f`",
+        ),
+        ("func f() -> list<mut u8> { return [1]; }", "`list<mut u8>`"),
+        (
+            "func f(c: shared::counter) { }",
+            "field `n` of record `shared::counter`",
+        ),
+        (
+            "record r { a: option<tuple<u8, list<mut s8>>> }",
+            "`list<mut s8>`",
+        ),
+        (
+            "record r { a: u32 } func f() -> result<list<r>, list<mut r>> { return result::ok([]); }",
+            "`list<mut api::r>`",
+        ),
+    ];
+    for (exported, message) in cases {
+        let sources = sources(&[("src/m.wasl", &program(exported))]);
+        match analyze(&package(), &sources) {
+            Ok(_) => panic!("accepted: {exported}"),
+            Err(e) => {
+                assert_eq!(e.code, Code::MutableExport, "{exported}: {}", e.message);
+                assert!(e.message.contains(message), "{exported}: {}", e.message);
+            }
+        }
+    }
 }
 
 const INVOICE: &str = include_str!("../../examples/invoice/src/invoice.wasl");
@@ -311,8 +374,9 @@ fn invalid_v2_programs() {
         ("local m: u32 = list::len([]);", Code::CannotInfer),
         ("local m: u32 = list::len([1, 2]);", Code::CannotInfer),
         ("local s: string;", Code::Uninitialized),
-        ("local t: status;", Code::Uninitialized),
+        ("local m: line;", Code::Uninitialized),
         ("local t: tuple<u32, u32>;", Code::Uninitialized),
+        ("local r: result<u32, status>;", Code::Uninitialized),
         ("match (n) { case a { } }", Code::NotMatchable),
         ("inv.number = 7;", Code::AssignReadOnly),
         ("inv.lines[0] = l;", Code::AssignReadOnly),
@@ -366,6 +430,12 @@ fn invalid_v2_programs() {
             Code::UnknownCase,
         ),
         ("result::ok(1);", Code::Syntax),
+        ("_ = result::ok(1);", Code::Syntax),
+        ("_ = n;", Code::Syntax),
+        ("string::len(inv.customer);", Code::IgnoredValue),
+        ("total(inv);", Code::IgnoredValue),
+        ("_ = probe(inv, other, s, n, l);", Code::TypeMismatch),
+        ("inv.status = status::paid;", Code::AssignReadOnly),
         ("local m: u32 = invoices::status;", Code::UnknownCase),
         (
             "local m: u32 = string::nope(inv.customer);",
@@ -386,7 +456,7 @@ fn invalid_v2_programs() {
         let program = INVOICE.replace(
             "  func sample() -> invoice {",
             &format!(
-                "  func probe(inv: invoice, other: invoice, s: status, n: u32, d: list<mut u8>, l: line) {{\n    {body}\n  }}\n\n  func sample() -> invoice {{"
+                "  func probe(inv: invoice, other: invoice, s: status, n: u32, l: line) {{\n    local d: list<mut u8> = list::filled(4, 0);\n    {body}\n  }}\n\n  func sample() -> invoice {{"
             ),
         );
         let sources = sources(&[("src/invoice.wasl", &program)]);
@@ -437,18 +507,19 @@ fn valid_v2_bodies() {
         "local zs: list<mut string> = list::filled(n, \"\"); local ws: list<string> = list::filled(n, \"\"); local m: list<u8> = list::filled(2, 0);",
         "local cs: list<char> = string::chars(inv.customer); local t: string = string::from_chars(cs); local b: option<string> = string::from_bytes(d);",
         "local e: option<char> = char::from_u32(65); local k: u32 = list::len(list::copy(string::chars(inv.customer)));",
-        "inv.status = status::paid; other = inv; other.status = s;",
+        "other = inv; s = other.status;",
+        "local t: status; local o: option<line>; local f: delivery; if (t == status::draft && f == delivery { }) { o = option::some(l); }",
         "match (inv.discount) { case some(x) { match (x) { case percent(p) { n = u32(p); } case fixed { } } } case none { } }",
         "while (true) { match (s) { case draft { break; } else { continue; } } }",
         "local g: list<list<u8>> = [[1], [], string::bytes(\"x\")];",
         "local h: list<line> = [l, line { label: \"x\", quantity: 1, unit_price: 2, }];",
-        "string::len(inv.customer);",
+        "_ = string::len(inv.customer); _ = total(inv); _ = u32::wrapping_add(n, 1);",
     ];
     for body in bodies {
         let program = INVOICE.replace(
             "  func sample() -> invoice {",
             &format!(
-                "  func probe(inv: invoice, other: invoice, s: status, n: u32, d: list<mut u8>, l: line) {{\n    {body}\n  }}\n\n  func sample() -> invoice {{"
+                "  func probe(inv: invoice, other: invoice, s: status, n: u32, l: line) {{\n    local d: list<mut u8> = list::filled(4, 0);\n    {body}\n  }}\n\n  func sample() -> invoice {{"
             ),
         );
         let sources = sources(&[("src/invoice.wasl", &program)]);

@@ -63,6 +63,8 @@ A variant `v` is a small family of struct types:
 | WaSL | Wasm |
 |---|---|
 | `local x: T = e;` (heap type) | a Wasm local of type `T'`; `e` then `local.set` |
+| `local x: T;` | the default value of `T'` (§ v2.4.13), `i32.const 0` or `ref.null $X`, then `local.set` |
+| `f(…);`, `_ = f(…);` | the call, followed by `drop` for `_ =` |
 | `"abc"` | `global.get $str_k`, a global initialized with `array.new_fixed $bytes 3 (i32.const 97) (i32.const 98) (i32.const 99)`; one global per distinct literal |
 | record literal `r { … }` | the values, `struct.new $r` |
 | `e.f` | `e` `struct.get $r f` |
@@ -94,7 +96,7 @@ A variant `v` is a small family of struct types:
 | `string::chars(s)`, `string::from_chars(cs)` | helpers that decode or encode UTF-8 |
 | `char::from_u32(n)` | a helper that checks the range and the surrogates, then boxes the value |
 
-- **Locals of heap types** are non-nullable Wasm locals. This is valid in Wasm because every WaSL local of a heap type is set by its declaration (§ v2.4.13) before any use in the same block, and a match binding is set at the start of its case block.
+- **Locals of heap types** are non-nullable Wasm locals, except options, which are nullable. This is valid in Wasm because every WaSL local of a non-nullable type is set by its declaration (§ v2.4.13) before any use in the same block, and a match binding is set at the start of its case block.
 - **Long string literals**: Wasm implementations limit the number of operands of `array.new_fixed`. A literal longer than 1,000 bytes is placed in a passive data segment and built with `array.new_data $bytes` each time it is evaluated, which § v2.5.3 allows. `array.new_data` is not a constant expression, so in the initial value of a global (§ v2.4.12) a literal always uses `array.new_fixed`, whatever its length; Wasm runtimes accept it, but compiling a very long one is slow.
 - **Helpers** (string comparison, concatenation, UTF-8 validation, the boundary adapters of chapter v2.7) are ordinary Wasm functions, included only in the modules that use them (§ 12.1).
 

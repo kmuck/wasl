@@ -274,6 +274,15 @@ pub struct FieldDef {
     pub ty: Type,
 }
 
+/// A part of a type that can change (§ v2.2.7).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Mutable {
+    /// A `list<mut T>`.
+    List(Type),
+    /// A record and the name of its first `mut` field.
+    Field(DeclId, String),
+}
+
 #[derive(Debug)]
 pub struct CaseDef {
     pub name: String,
@@ -380,6 +389,34 @@ impl Types {
             stack.extend(children);
         }
         decls
+    }
+
+    /// The first part of `ty` that can change, if any: a `list<mut T>`, or a record with
+    /// a `mut` field (§ v2.2.7).
+    pub fn first_mutable(&self, ty: Type) -> Option<Mutable> {
+        let mut seen = Vec::new();
+        let mut stack = vec![ty];
+        while let Some(t) = stack.pop() {
+            if seen.contains(&t) {
+                continue;
+            }
+            seen.push(t);
+            match self.kind(t) {
+                TypeKind::List { mutable: true, .. } => return Some(Mutable::List(t)),
+                TypeKind::Decl(id) => {
+                    if let DeclKind::Record(fields) = &self.decls[*id].kind
+                        && let Some(f) = fields.iter().find(|f| f.mutable)
+                    {
+                        return Some(Mutable::Field(*id, f.name.clone()));
+                    }
+                }
+                _ => {}
+            }
+            let mut children = self.children(t);
+            children.reverse();
+            stack.extend(children);
+        }
+        None
     }
 
     /// Whether a declared type is part of a cycle of types (§ v2.2.5).

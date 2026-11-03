@@ -38,7 +38,7 @@ interface invoices {
     lines: list<line>,
     discount: option<discount>,
     delivery: delivery,
-    status: mut status,
+    status: status,
   }
 
   enum invoice_error {
@@ -90,13 +90,19 @@ interface invoices {
     }
   }
 
-  // `inv` is a copy made at the boundary of the component: changing its
-  // status changes neither the caller's value nor anything else.
+  // An invoice crosses the boundary of the component, so it cannot change
+  // (§ v2.2.7): a paid invoice is a new record.
   func mark_paid(inv: invoice) -> result<invoice, invoice_error> {
     match (total(inv)) {
       case ok {
-        inv.status = status::paid;
-        return result::ok(inv);
+        return result::ok(invoice {
+          number: inv.number,
+          customer: inv.customer,
+          lines: inv.lines,
+          discount: inv.discount,
+          delivery: inv.delivery,
+          status: status::paid,
+        });
       }
       case err(e) {
         return result::err(e);

@@ -208,9 +208,25 @@ A global that is not `mut` always designates the same value, but that value can 
 
 ## v2.4.13 Locals
 
-A local of a **heap type** must have an initial value (E0410): there is no zero value for a string, a record or a list, and no `null` (§ v2.1.2). A local of an enum type without initial value is not allowed either (E0410): no case is more of a default than the others.
+A local declared without an initial value starts at the **default value of its Wasm type**: the value Wasm gives a local before its first `local.set`. Only scalars and options have one:
 
-The other scalar types have a zero value, as numbers do (§ 9.4): `'\u{0}'` for a `char`, the empty set for a flags type.
+| Type | Wasm type (§ v2.6.1) | Default value |
+|---|---|---|
+| integers, floats, `bool` | `i32`, `i64`, `f32`, `f64` | `0`, `0.0`, `false`, as in § 9.4 |
+| `char` | `i32` | `'\u{0}'` |
+| an enum | `i32`, the index of the case | its first case |
+| a flags type | `i32` | the empty set |
+| `option<T>` | a nullable reference | `option::none` |
+
+A string, a list, a tuple, a record, a variant or a result is a non-nullable reference in Wasm, which has no default value: a local of one of these types must have an initial value (E0410). The language still has no `null` (§ v2.1.2): the null reference of an option is its `none`, a value of the option type.
+
+As in § 9.4, the default value is set every time the declaration runs: a local declared in a loop starts from it again on every iteration. The default value of an enum depends on the order of its cases, as its representation does.
+
+```wasl
+local s: status;            // status::draft, the first case
+local d: option<discount>;  // option::none
+local t: string;            // E0410: a string needs an initial value
+```
 
 ## v2.4.14 Assignment
 
@@ -225,3 +241,19 @@ Assigning a field that is not `mut`, an element of a `list<T>`, an element of a 
 ## v2.4.15 Every path returns
 
 The syntactic check of § 8.8 is extended: a `match` always returns if the block of each of its cases, and its `else` block if present, always returns. A `match` is always exhaustive (§ v2.4.9), so no other path exists.
+
+## v2.4.16 Calls used as statements
+
+This section replaces § 9.6. A call followed by `;` is a statement only if its function returns no value. Calling a function that returns a value as a statement is an error (E0413): the value would be lost without a trace, and with it the error of a `result`. To discard it on purpose, write `_ =` before the call.
+
+```wasl
+reset();          // a function without a return value
+_ = incr();       // a function that returns a u32: the value is discarded
+save(inv);        // E0413: `save` returns a result<_, save_error>, which would be lost
+```
+
+This is what Wasm itself requires: a value left on the stack must be removed with `drop`, and `_ = f();` is that `drop`, written in the source (§ v2.6.4).
+
+- Only a call can follow `_ =` (§ v2.3.4): `_ = x;` is E0100.
+- `_ = f();` on a function without a return value is E0400, as any other use of its call as a value (§ 8.6).
+- The built-in functions all return a value: `string::len(s);` is E0413.

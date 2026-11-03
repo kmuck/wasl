@@ -10,9 +10,11 @@ A value of a heap type is a **reference** to an object of the WasmGC heap. Insid
 - two names that hold the same reference see the same object: a change made through one is visible through the other.
 
 ```wasl
-local a: invoice = sample();
-local b: invoice = a;
-b.status = status::paid;      // a.status is now paid as well: a and b are the same record
+record counter { hits: mut u32 }
+
+local a: counter = counter { hits: 0 };
+local b: counter = a;
+b.hits = 1;                   // a.hits is now 1 as well: a and b are the same record
 ```
 
 Sharing is only observable through what can change: `mut` fields and the elements of `list<mut T>`. Strings, tuples and `list<T>` never change, so whether two of them are the same object cannot be observed; the language has no identity comparison (§ v2.11).
@@ -43,14 +45,11 @@ String literals, constructors without payload and empty lists may be shared by t
 
 ## v2.5.4 Values at the component boundary
 
-When an exported function is called, its arguments come from **outside** the component (the host or another component), and its result goes outside. These values are always **deep copies** (chapter v2.7):
-
-- the function receives new objects, which nobody outside holds: changing a `mut` field of an argument never changes the caller's value;
-- the caller receives a copy of the result: the component can keep and change the original afterwards (in a global, for instance) without affecting what the caller received;
-- sharing is not preserved: a record that appears twice in a returned list arrives as two distinct, equal records;
-- `mut` is not visible outside: a `list<mut T>` is received as a WIT `list<T>`, a `mut` field as a plain field.
+When an exported function is called, its arguments come from **outside** the component (the host or another component), and its result goes outside. Today these values are **deep copies** (chapter v2.7), and sharing is not preserved: a record that appears twice in a returned list arrives as two distinct, equal records.
 
 Calls between functions of the same component never copy, including calls to functions of exported interfaces: `total(inv)` inside `mark_paid` receives the same record.
+
+The difference cannot be observed. The values that cross the boundary contain nothing that can change (§ v2.2.7), and the language has no identity comparison: a function cannot tell a copy from a shared reference. An exported function therefore behaves the same whether it is called from outside or from inside the component, and will still do so when the `gc` option of the Canonical ABI removes the copies (§ v2.11).
 
 ## v2.5.5 Traps
 

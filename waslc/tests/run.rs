@@ -204,8 +204,8 @@ interface t {
   }
   func calls() -> u32 {
     reset();
-    incr();
-    incr();
+    _ = incr();
+    _ = incr();
     return counter;
   }
 

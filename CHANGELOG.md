@@ -16,10 +16,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - E0213: interfaces of the WIT that use each other's types in a cycle, which WIT forbids, are reported with the steps of the cycle. They used to stop the compiler with an internal error (E9999).
+- `_ = f(…);` discards the value of a call explicitly (§ v2.4.16); it is the `drop` that Wasm requires.
+- E0214: a `mut` field or a `list<mut T>` in a type that appears in the WIT (the signature of an exported function, or a type of an exported interface) is an error (§ v2.2.7). They used to be erased silently, so an exported function changed its argument when called from inside the component and not when called from outside.
 - Built-in functions on each integer type `T` (§ v2.4.11): `T::wrapping_add`, `T::wrapping_sub`, `T::wrapping_mul`, `T::wrapping_neg` (signed types) and `T::wrapping_from` compute modulo 2ⁿ, as `+`, `-`, `*`, unary `-` and conversions used to; `T::checked_add`, `T::checked_sub` and `T::checked_mul` return `option::none` instead of overflowing.
 
 ### Changed
 
+- E0413: a call used as a statement must call a function without a return value (§ v2.4.16). `incr();` on a function that returns a value is now an error, so the error of a `result` can no longer be lost silently; write `_ = incr();` to discard it.
+- A local of an enum or `option` type can be declared without an initial value (§ v2.4.13): it starts at the default value of its Wasm type, the first case of the enum (index 0) or `option::none` (null). E0410 remains for the other heap types, whose Wasm references cannot be null.
+- `examples/invoice`: `invoice.status` is no longer `mut`, and `mark_paid` returns a new record.
 - Integer arithmetic and conversions give the exact result or trap with `integer overflow` (§ v2.5.6), instead of wrapping silently: `+`, `-`, `*` and unary `-` on integers, conversions between integer types whose value does not fit, and float to integer conversions out of range. A NaN converted to an integer traps with `invalid conversion to integer` instead of giving `0`. The `fib` of the README now traps from `n = 93`, since it also computes fib(n + 1), where it used to return a wrong number from `n = 94`.
 - E0211 now only rejects types that have no value (§ v2.2.5): a variant has a value as soon as one of its cases has one, so `variant expr { lit(u32), neg(expr) }` is accepted (it used to need `neg(option<expr>)`), and `result<a>` has the value `err`. The message names the field without a value and the possible fixes.
 - The v0.2 specification states what `waslc` 0.2 already does: E0208 and E0209 also apply to the types of exported interfaces, E0005 to every keyword used as an identifier, one recursion group for all GC types, post-return only when the result goes through memory, long literals in global initializers, and the exact output and error messages of `weasel call`.

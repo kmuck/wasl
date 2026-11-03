@@ -780,7 +780,8 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 match init {
                     Some(e) => self.expr(e),
                     None => {
-                        // A local may be redeclared on every loop iteration: reset it to zero.
+                        // A local may be redeclared on every loop iteration: reset it to the
+                        // default value of its Wasm type (§ v2.4.13).
                         let ty = self.cx.val(self.local_types[*local as usize]);
                         self.zero(ty);
                     }
@@ -971,13 +972,15 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         self.cx.global_index[g].expect("used global")
     }
 
+    /// The default value of a Wasm local of type `ty`: zero, or null for an `option`.
     fn zero(&mut self, ty: ValType) {
         self.emit(match ty {
             ValType::I32 => Instruction::I32Const(0),
             ValType::I64 => Instruction::I64Const(0),
             ValType::F32 => Instruction::F32Const(Ieee32::from(0.0f32)),
             ValType::F64 => Instruction::F64Const(Ieee64::from(0.0f64)),
-            _ => unreachable!("locals of heap types are initialized"),
+            ValType::Ref(r) if r.nullable => Instruction::RefNull(r.heap_type),
+            _ => unreachable!("locals of non-nullable reference types are initialized"),
         });
     }
 

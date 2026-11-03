@@ -294,6 +294,47 @@ interface h {
     }
   }
 
+  // Locals without an initial value start at the default value of their Wasm type
+  // (§ v2.4.13), on every iteration: 3 × 1111.
+  func default_locals() -> u32 {
+    local total: u32;
+    local i: u32;
+    while (i < 3) {
+      local c: color;
+      local o: option<geo::point>;
+      local d: option<u32>;
+      local ch: char;
+      local b: bool;
+      if (c == color::red) {
+        total = total + 1;
+      }
+      match (o) {
+        case none {
+          total = total + 10;
+        }
+        case some {
+        }
+      }
+      match (d) {
+        case none {
+          total = total + 100;
+        }
+        case some {
+        }
+      }
+      if (ch == '\u{0}' && !b) {
+        total = total + 1000;
+      }
+      c = color::blue;
+      o = option::some(origin);
+      d = option::some(1);
+      ch = 'a';
+      b = true;
+      i = i + 1;
+    }
+    return total;
+  }
+
   func same_color(a: color, b: color) -> bool {
     return a == b;
   }
@@ -674,6 +715,7 @@ fn enums_and_flags() {
         Bool(false)
     );
     assert_eq!(call("count-colors", &[]), U32(111));
+    assert_eq!(call("default-locals", &[]), U32(3333));
 }
 
 #[test]
@@ -730,14 +772,13 @@ world probe {
 interface p {
   func total_sample(discount: u8) -> u64 {
     local inv: invoices::invoice = invoices::sample();
-    inv.status = invoices::status::sent;
     local d: invoices::invoice = invoices::invoice {
       number: inv.number,
       customer: inv.customer,
       lines: inv.lines,
       discount: option::some(invoices::discount::percent(discount)),
       delivery: inv.delivery,
-      status: inv.status,
+      status: invoices::status::sent,
     };
     match (invoices::total(d)) {
       case ok(t) {
@@ -848,9 +889,9 @@ fn invoice_functions() {
     assert_eq!(call("summary-matches", &[]), Bool(true));
     assert_eq!(call("initial", &[]), Char('A'));
     assert_eq!(call("stats-sum", &[]), U64(3 * 1170));
-    // `mark_paid` changes the record it receives: inside the component, `inv` and `paid`
-    // are the same record (§ v2.5.4).
-    assert_eq!(call("unpaid-after-mark", &[]), U32(1));
+    // `mark_paid` returns a new record and leaves `inv` unpaid, inside the component as
+    // outside (§ v2.2.7).
+    assert_eq!(call("unpaid-after-mark", &[]), U32(2));
     assert_eq!(call("number-text", &[U32(0)]), U32(1));
     assert_eq!(call("number-text", &[U32(4294967295)]), U32(10));
 }

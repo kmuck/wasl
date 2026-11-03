@@ -456,6 +456,27 @@ impl Parser {
             TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
                 self.call_stmt(start)?
             }
+            TokenKind::Underscore => {
+                self.bump();
+                self.expect(
+                    &TokenKind::Eq,
+                    "`=` (`_ = f(…);` discards the value of a call)",
+                )?;
+                let value_start = self.span();
+                let path = match self.path_segments() {
+                    Ok(path) if *self.peek() == TokenKind::LParen => path,
+                    _ => {
+                        return err(
+                            Code::Syntax,
+                            value_start,
+                            "only the value of a function call can be discarded: `_ = f(…);`",
+                        );
+                    }
+                };
+                let call = self.call_args(path)?;
+                self.expect(&TokenKind::Semi, "`;`")?;
+                StmtKind::Discard(call)
+            }
             TokenKind::RBrace | TokenKind::Eof => return Err(self.unexpected("a statement")),
             _ => {
                 return err(
