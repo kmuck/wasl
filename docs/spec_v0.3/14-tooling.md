@@ -62,9 +62,12 @@ interface math {
 
 Compiles the world `<world>` into its component (§ 2.3, § 3.4).
 
-1. The whole package is analyzed; any error stops the command.
-2. The component of `<world>` is generated and written to `build/<world>.wasm` (the `build/` directory is created if needed).
-3. `Built \`build/<world>.wasm\`` is printed on standard error.
+1. The dependencies are resolved (§ 3.5), fetched if needed, and `wkg.lock` is written if it changed.
+2. The whole package is analyzed; any error stops the command.
+3. The component of `<world>` is generated and written to `build/<world>.wasm` (the `build/` directory is created if needed).
+4. `Built \`build/<world>.wasm\`` is printed on standard error.
+
+The component keeps its imports: `build` never composes it with the components that provide them, so that the same file can be deployed and composed by any tool (`wac`, a host). `weasel call` composes in memory (below).
 
 The world is always given explicitly, even when the project has a single world: a world is an entry point, and one build produces one component. An unknown world is an error (E9001):
 
@@ -74,7 +77,7 @@ error[E9001]: unknown world `nope`: the package defines `app`, `other`
 
 ### `weasel check`
 
-Analyzes the whole package without generating any component, and prints `No errors in \`<name>\`` on standard error if there is no error.
+Resolves the dependencies like `build`, analyzes the whole package without generating any component, and prints `No errors in \`<name>\`` on standard error if there is no error.
 
 ### `weasel wit`
 
@@ -107,9 +110,17 @@ error: `math::div` trapped: integer divide by zero
 
 Each `call` runs on a fresh instance: globals start from their initial values.
 
+**Imports** (specified, not available yet). When the world imports interfaces, `call` composes its component in memory before running it, with `wac-graph`:
+
+- an interface of the package is provided by the component of the first world, in declaration order, that exports it; an interface of a path dependency that is a WaSL project, by the first world of that project that exports it. Their components are built in memory and composed in turn if they have imports of their own;
+- an interface of WASI 0.2 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`) is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1);
+- any other import is an error: ``error: no component provides `example:catalog/carts@0.1.0`: add it as a path dependency on a WaSL project``.
+
+Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export, such as `wasi:cli/run`, run with `wasmtime run` until `weasel run` exists (§ 14.4).
+
 ### `weasel clean`
 
-Removes the `build/` directory if it exists, and prints `Removed \`build/\`` on standard error.
+Removes the `build/` directory if it exists (never `wkg.lock`), and prints `Removed \`build/\`` on standard error.
 
 ## 14.3 `waslc`: library API
 
@@ -125,8 +136,14 @@ let package = Package::new("example", "calc", "0.1.0")?;
 let mut sources = SourceMap::default();
 sources.add("src/calc.wasl".into(), text);
 
+// Dependencies (§ 3.5): the WIT of each one, as WIT text or as a binary WIT package
+// (what `wkg` fetches). For a WaSL project, its `analysis.wit()`.
+let mut deps = waslc::Dependencies::default();
+deps.add_wit_text("wasi:cli", "0.2.6", files)?;       // files: Vec<(display path, text)>
+deps.add_wit_binary("wasi:io", "0.2.6", bytes)?;
+
 // 1. Analysis of the whole package (chapters 4 to 9, 11).
-let analysis = waslc::analyze(&package, &sources)?;
+let analysis = waslc::analyze(&package, &sources, &deps)?;
 
 // Worlds of the package, with their exported interfaces and functions (WaSL names).
 for world in analysis.worlds() { /* world.name, world.exports */ }
@@ -148,7 +165,7 @@ The following commands are planned ([ROADMAP.md](../../ROADMAP.md)):
 
 | Command | Purpose |
 |---|---|
-| `weasel run <world> [args…]` | run a world that exports `wasi:cli/run` |
+| `weasel run <world> [args…]` | run a world that exports `wasi:cli/run`; in 0.3, `wasmtime run build/<world>.wasm` does it (§ 15.6) |
 | `weasel serve <world>` | serve a world that exports `wasi:http/handler` |
 | `weasel build --all` | build every world |
 | `weasel test` | run the tests of the project |
@@ -178,6 +195,7 @@ Like `build`, `run` and `serve` always take the world explicitly.
 - Each argument is one shell argument; a value that contains spaces or quotes is quoted for the shell: `weasel call invoices::summary '{number: 7, …}'`.
 - The result is printed in WAVE on one line. Integers are printed in decimal (`55`, `-3`, `18446744073709551615`); floats in the shortest decimal form that reads back the same value, always with a `.` or an exponent (`3.0`, not `3`; `1.5`, `12.56636`, `1e20`, `inf`), and NaN as `nan`, as WAVE requires. Every field of a record is printed, including those whose value is `none`. Both choices are valid WAVE; they make the output complete and stable.
 - A `result` is a value like any other: `err(…)` is printed on standard output with the exit code `0`. Only a trap fails the command (§ 14.2).
+- WAVE has no value for a resource: a function whose parameters or result contain a resource, and the constructors, methods and static functions of resources, cannot be called with `weasel call` (``error: `carts::cart::of` cannot be called from the command line: its result contains the resource `cart` ``). They are called by other components (§ 15.5).
 - An argument that is not a valid WAVE value of its type is an error: ``error: invalid value `{number: 1}` for parameter `inv` of type `invoice`: missing field "customer"``. The reason after the last colon comes from the WAVE parser, which quotes names with `"`.
 
 ## 14.6 Runtime configuration

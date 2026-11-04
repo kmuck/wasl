@@ -18,12 +18,23 @@ world calculator {
 }
 ```
 
-- A world contains only `export <interface>;` items.
-- Each `export` names an interface of the package. An unknown name, or the name of a world or a global, is an error (E0203).
-- An interface can be exported only once per world (E0204). The same interface can be exported by several worlds.
-- A world can be empty; it then produces a component without exports.
-- Each world is compiled into its own component (§ 2.3).
-- Exporting an interface of another package, with its implementation in the world, is specified in § 2.4.2 and not available yet.
+```wasl
+world orders_service {
+  import accounts;                  // an interface of the package, provided by another component
+  import wasi:cli/stdout;           // an interface of a dependency
+  export orders;                    // an interface of the package
+  export wasi:cli/run {             // an interface of a dependency, implemented here
+    func run() -> result { … }
+  }
+}
+```
+
+- A world contains `import` and `export` items, in any order. Their order is the order of the WIT (§ 13.1).
+- `export <name>;` names an interface of the package. An unknown name, or the name of a world or a global, is an error (E0203). An interface can be exported only once per world (E0204). The same interface can be exported by several worlds.
+- `export <foreign name> { … }` implements an interface of a dependency for this world (§ 2.4.2). The interface must exist in a dependency (E0215), and the block must match its WIT (E0218).
+- `import <name>;` names an interface of the package (unknown name: E0203); `import <foreign name>;` an interface of a dependency (E0215). A world imports an interface at most once, and never imports an interface it exports (E0216).
+- A world can be empty; it then produces a component without imports or exports.
+- Each world is compiled into its own component (§ 2.3); the interfaces it imports are not compiled into it (§ 2.5).
 
 ## 6.3 `interface`
 
@@ -34,7 +45,7 @@ interface math {
 }
 ```
 
-- An interface contains functions (`func`) and type declarations (`record`, `enum`, `variant`, `flags`, § 7.7), in any order. It can be empty.
+- An interface contains functions (`func`) and type declarations (`record`, `enum`, `variant`, `flags`, `resource`, § 7.7, § 7.12), in any order. It can be empty.
 - Two functions of the same interface cannot have the same name (E0202). There is no overloading. Two different interfaces can have functions with the same name.
 - The names of the types and functions of an interface form one namespace: a type and a function of the same interface cannot have the same name (E0206).
 - All the functions and types of an interface are public: if the interface is exported by a world, all of them appear in the WIT.
@@ -67,7 +78,7 @@ func reset() { … }
 
 - A function has zero or more parameters and zero or one return value. The type of each parameter and of the return value is required.
 - Two parameters of the same function cannot have the same name (E0304).
-- A function is declared inside an interface; there are no free functions at the top level.
+- A function is declared inside an interface, inside a resource (a method or a static function, § 7.12) or inside the foreign export block of a world (§ 2.4.2); there are no free functions at the top level.
 - The rules of the body are in chapters 8 (typing) and 9 (names).
 - A function has no limit on its number of parameters: in an exported function, parameters beyond 16 flat values go through linear memory (§ 13.6).
 - Functions can call each other freely, including recursively and across interfaces.

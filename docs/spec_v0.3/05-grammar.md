@@ -19,11 +19,15 @@ file              = { declaration } ;
 declaration       = world | interface | global ;
 
 (* Declarations, chapter 6 *)
-world             = "world" identifier "{" { export } "}" ;
-export            = "export" identifier ";" ;
+world             = "world" identifier "{" { world_item } "}" ;
+world_item        = "import" interface_name ";"
+                  | "export" identifier ";"
+                  | "export" foreign_name "{" { function } "}" ;
+interface_name    = identifier | foreign_name ;
+foreign_name      = identifier ":" identifier "/" identifier ;
 
 interface         = "interface" identifier "{" { interface_item } "}" ;
-interface_item    = function | record | enum | variant | flags ;
+interface_item    = function | record | enum | variant | flags | resource ;
 
 record            = "record" identifier "{" field { "," field } [ "," ] "}" ;
 field             = identifier ":" [ "mut" ] type ;
@@ -31,6 +35,10 @@ enum              = "enum" identifier "{" identifier { "," identifier } [ "," ] 
 variant           = "variant" identifier "{" case { "," case } [ "," ] "}" ;
 case              = identifier [ "(" type ")" ] ;
 flags             = "flags" identifier "{" identifier { "," identifier } [ "," ] "}" ;
+resource          = "resource" identifier "{" { resource_item } "}" ;
+resource_item     = field ","
+                  | "constructor" "(" [ parameters ] ")" block
+                  | [ "static" ] function ;
 
 global            = "global" identifier ":" [ "mut" ] type "=" expression ";" ;
 
@@ -46,6 +54,7 @@ type              = primitive_type
                   | "list" "<" [ "mut" ] type ">"
                   | "option" "<" type ">"
                   | "result" [ "<" result_args ">" ]
+                  | "borrow" "<" type_name ">"
                   | type_name ;
 result_args       = type [ "," type ] | "_" "," type ;
 type_name         = identifier [ "::" identifier ] ;
@@ -63,13 +72,14 @@ statement         = local_declaration
                   | "break" ";"
                   | "continue" ";"
                   | "return" [ expression ] ";"
-                  | call ";"
-                  | "_" "=" call ";" ;
+                  | call_statement ";"
+                  | "_" "=" call_statement ";" ;
 
 local_declaration = "local" identifier ":" type [ "=" expression ] ";" ;
 assignment        = place "=" expression ";" ;
-place             = identifier { selector } ;
+place             = identifier { selector } | "self" selector { selector } ;
 selector          = "." ( identifier | int_literal ) | "[" expression "]" ;
+call_statement    = postfix ;   (* ending with a call, a method call or "?", § 5.3 *)
 if                = "if" "(" expression ")" block [ "else" ( if | block ) ] ;
 while             = "while" "(" expression ")" block ;
 match             = "match" "(" expression ")" "{" match_case { match_case }
@@ -89,13 +99,15 @@ shift             = additive { ( "<<" | ">>" ) additive } ;
 additive          = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative    = unary { ( "*" | "/" | "%" ) unary } ;
 unary             = ( "-" | "!" ) unary | postfix ;
-postfix           = primary { selector } ;
+postfix           = primary { selector | method_call | "?" } ;
+method_call       = "." identifier "(" [ arguments ] ")" ;
 primary           = int_literal
                   | float_literal
                   | string_literal
                   | char_literal
                   | "true" | "false"
                   | identifier
+                  | "self"
                   | path
                   | call
                   | conversion
@@ -133,11 +145,11 @@ These rules follow from the grammar; they are listed because they differ from ma
 **Statements**
 
 - Every simple statement ends with `;`. No `;` follows a `}`.
-- Only an assignment or a function call can start with a name. A statement that starts with a name followed by anything other than `=`, `(`, `::`, `.` or `[` is invalid: `x + 1;` and `x;` are invalid.
-- The target of an assignment starts with a name, followed by any number of field accesses and indexes: `x = …`, `c.hits = …`, `rows[i].cells[j] = …`. A call cannot start an assignment target: `f().x = 1;` is invalid.
-- A statement that starts with a name followed by `.` or `[` is an assignment: `inv.status;` is invalid.
-- An expression is not a statement: `1;` and `f(1) + 2;` are invalid. A function call is the only expression that can be used as a statement (§ 9.6).
-- `_ = f(…);` discards the value of a call (§ 9.6). Only a call can follow `_ =`: `_ = x;` is invalid.
+- Only an assignment or a call statement can start with a name or `self`. A statement that starts with a name followed by anything other than `=`, `(`, `::`, `.` or `[` is invalid: `x + 1;` and `x;` are invalid.
+- The target of an assignment starts with a name or `self`, followed by any number of field accesses and indexes: `x = …`, `c.hits = …`, `self.items = …`, `rows[i].cells[j] = …`. `self` itself cannot be assigned: `self = c;` is invalid. A call cannot appear in an assignment target: `f().x = 1;` and `c.last().sku = …` are invalid.
+- A **call statement** is a name followed by selectors, method calls and `?`, whose last element is a call, a method call or a `?`: `f(x);`, `math::reset();`, `c.add(x);`, `c.add(x)?;`, `items[0].cart.clear();`. A statement made of a name and field accesses or indexes only is invalid: `inv.status;`.
+- An expression is not a statement: `1;` and `f(1) + 2;` are invalid. A call statement is the only expression that can be used as a statement (§ 9.6).
+- `_ = f(…);` discards the value of a call statement (§ 9.6). Only a call statement can follow `_ =`: `_ = x;` is invalid, `_ = c.add(x)?;` is valid.
 - `match` is a statement, not an expression. It has at least one `case`; `else`, if present, comes last.
 - There are no compound assignments (`+=`, `-=`, …) and no `++` / `--`: write `i = i + 1;`.
 - `local` always has a type: `local x = 5;` is invalid.
@@ -146,7 +158,9 @@ These rules follow from the grammar; they are listed because they differ from ma
 
 - A `global` is declared at the top level, never inside an interface.
 - An interface contains functions and type declarations, in any order. A type can be used before its declaration.
-- A `world` only contains `export` items: types are not declared in worlds.
+- A `world` only contains `import` and `export` items: types are not declared in worlds. The block of a foreign export only contains functions (§ 2.4.2).
+- A foreign name is written `namespace:package/interface`, with WaSL identifiers and no version: `wasi:cli/run`, `example:catalog/carts`. An interface of the package is written with its name alone; `export` of an interface of the package ends with `;`, `export` of a foreign interface is followed by its implementation in braces.
+- A resource contains fields, at most one constructor, methods (`func`) and static functions (`static func`), in any order (§ 7.12). Each field ends with `,`. A resource may be empty: `resource token { }`.
 - Records, enums, variants and flags have at least one field, case or flag: `record r { }` is invalid. Tuples have at least one element: `tuple<>` and `tuple()` are invalid.
 
 **Expressions**
@@ -157,4 +171,7 @@ These rules follow from the grammar; they are listed because they differ from ma
 - A path has at most two `::`: `status::paid`, `invoices::status::paid`, `invoices::discount::percent(10)`. A call has an optional path: `fib(n)`, `math::fib(n)`, `string::len(s)`.
 - A `{` directly after a type name starts a record literal or a flags literal: a record literal has a `:` after its first name (`line { label: … }`), a flags literal has none (`delivery { paper }`, `delivery { }`). Because the conditions of `if`, `while` and `match` are always in parentheses, `if (x) { … }` and `line { … }` are never confused.
 - Field access and indexing apply to any expression of the right type, and chain from left to right: `all[i].customer`, `sample().lines[0]`.
+- A `.` followed by a name and `(` is a method call: `c.add(x)`, `stdout::get_stdout().blocking_flush()` (§ 8.20). A field that holds a value cannot be called: `r.f(x)` always calls the method `f`.
+- `?` applies to the postfix expression on its left and binds tighter than every operator: `-f()?` is `-(f()?)`, `c.last_line()?.sku` reads the field of the payload (§ 8.19).
+- `borrow<T>` is a type, but it is accepted only as the type of a parameter (§ 7.12, E0219).
 - Commas separate the fields of a record literal, the flags of a flags literal and the elements of a list or a tuple; a trailing comma is allowed, which keeps multi-line literals uniform.

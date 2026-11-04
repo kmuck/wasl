@@ -7,7 +7,7 @@ The lexer splits each source file into **tokens**: keywords, identifiers, litera
 - Source files are encoded in **UTF-8**.
 - Outside comments, string literals and char literals, only ASCII characters are allowed. Any other character is an error (E0001), e.g. `é` in an identifier; `"Grüße"` is valid.
 - Whitespace characters are: space (U+0020), tab (U+0009), line feed (U+000A) and carriage return (U+000D).
-- Any ASCII character that is not whitespace and does not start a token is an error (E0001). In particular, `@`, `#`, `$` and `?` are invalid.
+- Any ASCII character that is not whitespace and does not start a token is an error (E0001). In particular, `@`, `#` and `$` are invalid.
 
 ## 4.2 Comments
 
@@ -43,9 +43,10 @@ The lexer reads the longest run of ASCII letters, digits and `_` starting with a
 **Keywords:**
 
 ```
-world interface export global mut local func
+world interface export import global mut local func
 if else while break continue return true false
 record enum variant flags match case
+resource constructor static self borrow
 ```
 
 **Type names**, also keywords:
@@ -58,9 +59,9 @@ char string list tuple option result
 **Reserved words**, which are not used yet but cannot be identifiers, for future versions and for compatibility with WIT:
 
 ```
-import package use type resource map
-own borrow stream future async await
-static constructor include with as self
+package use type map own
+stream future async await
+include with as
 ```
 
 Any keyword, type name or reserved word written where an identifier is expected is an error (E0005): `local record: u32 = 1;`, `local while: u32 = 1;`, `func string() { }`.
@@ -121,9 +122,10 @@ A char literal contains exactly one Unicode scalar value, written directly or as
 ```
 {  }  (  )  [  ]  ,  ;  :  ::  ->  =  .  _
 +  -  *  /  %  &  |  ^  <<  >>
-== != <  <= >  >=  && ||  !
+== != <  <= >  >=  && ||  !  ?
 ```
 
 - The lexer always takes the longest possible token: `<<` is one token, not two `<`; `::` is one token, not two `:`; `->` is one token, not `-` followed by `>`.
 - `.` after the digits of a number starts a float literal (§ 4.6), so `1.5` is a float and `inv.status` is a field access.
+- `?` is the error propagation operator, written after an expression (§ 8.19). It does not combine with `.` or `:`: there is no `?.` or `??`.
 - **Wildcard.** A word made of a single `_` is the token `_`, used only in `result<_, E>` (§ 7.6) and in `_ = f();` (§ 9.6). Any other identifier starting or ending with `_` remains E0004.

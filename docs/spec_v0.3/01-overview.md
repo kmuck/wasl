@@ -52,7 +52,16 @@ Each decision follows from the principles of § 1.2. The rest of this specificat
 
 With these, every WIT type except resources (`own`, `borrow`) and async types (`stream`, `future`) has its WaSL equivalent.
 
-**Not yet available** ([ROADMAP.md](../../ROADMAP.md), chapter 16): imports, dependencies, implementations of interfaces defined in other packages, resources, an error propagation operator, type aliases (`type`), `use` in source code, WASI, async, string formatting. The model for imports and foreign interfaces is specified in § 2.4.2 and § 2.5 so that the structure of the language is complete.
+**Added in 0.3** (specified, being implemented; each section says "specified, not available yet" until the compiler supports it):
+
+- dependencies on other packages, declared in `wasl.toml` and resolved from a path or a registry (§ 3.2, § 3.5);
+- imports of interfaces of other packages and of the same package (§ 2.5), and implementations of interfaces defined by other packages, such as `wasi:cli/run` (§ 2.4.2);
+- resources: their declaration, constructors, methods and static functions (§ 7.12), handles and their automatic release (§ 9.9);
+- the error propagation operator `?` on `result` and `option` (§ 8.19).
+
+With these, every WIT type except async types (`stream`, `future`) has its WaSL equivalent, and a WaSL component can run as a WASI 0.2 command (§ 15.6).
+
+**Not yet available** ([ROADMAP.md](../../ROADMAP.md), chapter 16): type aliases (`type`), `use` in source code, async and WASI 0.3, `weasel run` and `weasel serve`, string formatting, a standard library.
 
 A component whose exported functions only exchange scalars uses neither WasmGC at the boundary, nor linear memory, nor imports (§ 13.6).
 
@@ -86,9 +95,12 @@ wasl.toml + src/**/*.wasl
 | **WIT** | *Wasm Interface Type*, the text language that describes the interfaces and worlds of components. |
 | **Package** | A named, versioned unit of WIT definitions, written `namespace:name@version` (e.g. `example:calc@0.1.0`). A WaSL project is a package. |
 | **Interface** | A named group of functions and types. In WaSL an interface also contains the implementation of its functions. |
-| **World** | The description of a component: what it exports (and, later, imports). In WaSL each world is compiled into one component; a world is an **entry point**. |
+| **World** | The description of a component: what it imports and what it exports. In WaSL each world is compiled into one component; a world is an **entry point**. |
 | **Export** | An interface that a component provides to its host or to other components. |
-| **Import** | An interface that a component needs and that its host or another component provides (not available yet, § 2.5). |
+| **Import** | An interface that a component needs and that its host or another component provides (§ 2.5). |
+| **Resource** | A Component Model type with an identity and methods, reached from outside its component only through a handle (§ 7.12). |
+| **Handle** | An `i32` that designates a resource owned by another component, in the handle table of the current instance (§ 9.9). |
+| **Dependency** | Another package whose interfaces a project imports or implements, declared in `wasl.toml` (§ 3.5). |
 | **Canonical ABI** | The rules that translate component-level values into core Wasm values when crossing the boundary of a component. |
 | **WasmGC** | The garbage collection proposal of WebAssembly, part of WebAssembly 3.0: typed structs and arrays allocated and reclaimed by the runtime. |
 | **Scalar type**, **heap type** | A scalar type is represented by a Wasm number; a heap type by a reference to a WasmGC object (§ 7.2). |
@@ -118,3 +130,12 @@ Version 0.2 accepts every valid v0.1 program with the same behavior, with these 
 | a call used as a statement must call a function without a return value (§ 9.6) | `incr();` with `func incr() -> u32` reports E0413; write `_ = incr();` |
 
 A component whose exported functions only use scalar types is built exactly as in v0.1: it has no linear memory and no `realloc` (§ 13.6).
+
+## 1.8 Changes from v0.2
+
+Version 0.3 accepts every valid v0.2 program with the same behavior. `resource`, `constructor`, `static`, `self`, `borrow` and `import` were already reserved (§ 4.4) and become keywords; the only other changes are:
+
+| Change | Effect on v0.2 programs |
+|---|---|
+| `?` is a token (§ 4.10) | `?` reports a syntax error (E0100) where it is misplaced, instead of E0001 |
+| `wasl.toml` accepts a `[dependencies]` table (§ 3.2) | a manifest with `[dependencies]` is no longer E0200 |

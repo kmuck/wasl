@@ -1,0 +1,7 @@
+[package]
+namespace = "example"
+name = "checkout"
+version = "0.1.0"
+
+[dependencies]
+"example:catalog" = { path = "../catalog" }

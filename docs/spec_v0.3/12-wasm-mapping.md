@@ -11,10 +11,11 @@ For a world `w`, the module contains:
 - **types**: the type definitions of § 12.5 used by the included functions and globals, then one function type per distinct signature;
 - **functions**: every function of the interfaces exported by `w`, plus every function they call, directly or transitively, whatever its interface. Other functions of the package are not included. To these are added the helpers they use (§ 12.8) and the boundary adapters of the exported functions (§ 13.8);
 - **globals**: every global read or assigned by those functions, one immutable global per distinct string literal and per shared case without payload (§ 12.6), then the globals of § 13.7 when the module has a memory;
-- **exports**: one export per function of each interface exported by `w`, with the name of § 13.3;
+- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10 (specified, not available yet);
+- **exports**: one export per function of each interface exported by `w`, with the name of § 13.3, and the functions of the resources of these interfaces (§ 13.11);
 - **memory**, **realloc** and **post-return** functions only when an exported function needs them (§ 13.6).
 
-The module has no table, no import and no start function. Functions and globals appear in the order of their declaration in the package (§ 3.3, § 11.2), restricted to those included.
+The module has no table and no start function, and no import when `w` imports nothing. Functions and globals appear in the order of their declaration in the package (§ 3.3, § 11.2), restricted to those included.
 
 | WaSL | Wasm |
 |---|---|
@@ -118,6 +119,9 @@ For a conversion from `S` to `T` (§ 10.5), the instructions below are preceded 
 | variant `v` | `(ref $v)` | see § 12.6 |
 | `result<…>` | `(ref $v)` | a variant with the cases `ok` (0) and `err` (1) |
 | `option<T>` | `(ref null X)` | see § 12.7 |
+| resource `r` of the package | `(ref $r)` | `$r = (struct (field F1) …)`, like a record (§ 12.10) |
+| handle type (§ 7.12) | `i32` | the index of the handle in the handle table of the instance |
+| `borrow<r>` | the type of `r` | |
 
 **List elements.** `E` is `i8` for `bool`, `s8` and `u8`; `i16` for `s16` and `u16`; `T'` otherwise. Packed elements are read with `array.get_s` for signed types and `array.get_u` otherwise, which gives the normalized `i32` of § 12.2.
 
@@ -215,3 +219,40 @@ This section gives the checks of § 10.2 and § 10.5 used by § 12.2 to § 12.4.
 | float to integer (§ 12.4) | the trapping `trunc` instructions, which trap on NaN and out of range: `i32.trunc_f64_s`, `i64.trunc_f32_u`… For 8- and 16-bit targets, `i32.trunc_f32_s` or `i32.trunc_f64_s`, then the conversion test above from `s32`. |
 
 The built-in functions of § 8.17 use the same code without the trap: `T::wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg` and `wrapping_from` are the instructions and the normalization of § 12.2 to § 12.4, without the test; `T::checked_add`, `checked_sub` and `checked_mul` compute the same test and build `option::none` or `option::some` of the result instead of trapping.
+
+## 12.10 Resources and handles (specified, not available yet)
+
+**Resources of the package.** In a world that does not import its interface, a resource `r` is a struct, built like a record from its fields in declaration order, with `mut` fields as `(mut T')`:
+
+| WaSL | Wasm |
+|---|---|
+| resource literal `r { … }` | the values, `struct.new $r` |
+| constructor `r(a)` | `a` `call $r.constructor`, a function whose body returns the new struct |
+| method `e.m(a)` | `e` `a` `call $r.m`; `self` is the first parameter, `(ref $r)` |
+| static function `r::s(a)` | `a` `call $r.s` |
+| `self.f`, `self.f = v;` | `struct.get $r f`, `struct.set $r f` |
+
+The table of handles that other components hold on these objects is part of the boundary (§ 13.11).
+
+**Handles.** In a world that imports the interface of a resource, or for a resource of another package, a value of the resource is an `i32` handle:
+
+| WaSL | Wasm |
+|---|---|
+| constructor, method, static function | a call to the imported function of § 13.10; `self` is the handle, lent as a `borrow` |
+| move of `x` (§ 9.9) | `local.get $x` `i32.const 0` `local.set $x` |
+| release of `x` | `local.get $x` `if` (`x != 0`) `local.get $x` `call $[resource-drop]r` `end` |
+| assignment `x = e;` | `e` into a fresh local, the release of `x`, then `local.set $x` |
+| release of a temporary given to `_ =` | a generated helper per type that walks the value and calls `$[resource-drop]r` on every handle |
+
+`option<r>`, where `r` is a handle type, boxes the `i32` (§ 12.7); variants and results hold it as an `i32` payload. Releases are emitted at each exit of a block, before its `br` or `return`, in the reverse order of the declarations (§ 10.11).
+
+## 12.11 Error propagation (specified, not available yet)
+
+`e?` compiles to the instructions of the equivalent `match` (§ 8.19), without the `br_table`:
+
+| Operand | Wasm |
+|---|---|
+| `result<T, E>` | `e` into a local; `struct.get $v 0` `if` (tag `1`) the releases of § 12.10, the `err` of the function's `result<U, E>`, built from the payload (`ref.cast` `struct.get $v.err 1` `struct.new $u.err`) or `global.get` of its shared instance without payload, `return` `end`; then `ref.cast (ref $v.ok)` `struct.get $v.ok 1` for the payload |
+| `option<T>` | `e` `br_on_non_null $l`, the releases, `ref.null` of the function's option, `return`; at `$l`, the reference itself or `struct.get $box_T 0` |
+
+The `err` value is rebuilt because `result<T, E>` and `result<U, E>` are two distinct struct families (§ 12.6), even with the same `E`; its payload is not copied, only its reference.

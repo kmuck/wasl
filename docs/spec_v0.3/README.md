@@ -1,6 +1,6 @@
 # WaSL v0.3 Specification
 
-Status: **draft, in progress, provisional until v0.4**. This document merges the [v0.1](../spec_v0.1/README.md) and [v0.2](../spec_v0.2/README.md) specifications into one complete specification, without changing any of their rules; the features of version 0.3 (imports, dependencies, resources, error propagation, implementations of foreign interfaces) are added to it as they are specified. Until then, it describes exactly the language that `waslc` 0.2 implements.
+Status: **draft, in progress, provisional until v0.4**. This document merges the [v0.1](../spec_v0.1/README.md) and [v0.2](../spec_v0.2/README.md) specifications into one complete specification, without changing any of their rules; the features of version 0.3 (imports, dependencies, resources, error propagation, implementations of foreign interfaces) are specified in it, in sections marked *specified, not available yet* until the compiler implements them. The rest describes exactly the language that `waslc` 0.2 implements. The target programs of 0.3 are `examples/catalog` with `examples/checkout` (§ 15.5), and `examples/hello` (§ 15.6).
 
 This specification defines WaSL completely: the language, how it maps onto WebAssembly, WasmGC and the Component Model, the compiler contract and the build tool. It is written so that a reader who discovers the project, human or AI agent, can understand everything the language is without any other context, and can implement, test or extend it. The earlier versions are frozen and are no longer needed to read it.
 
@@ -57,19 +57,19 @@ The number of a chapter is the number of its sections: § 8.2 is section 2 of ch
 
 | § | Chapter | Content |
 |---|---|---|
-| 1 | [Overview](01-overview.md) | Goals, design principles and decisions, scope, glossary, changes from v0.1 |
-| 2 | [Component Model](02-component-model.md) | How WaSL maps onto packages, interfaces, worlds and components; the two kinds of exports; entry points |
-| 3 | [Projects](03-projects.md) | Project layout, manifest, source files, outputs |
+| 1 | [Overview](01-overview.md) | Goals, design principles and decisions, scope, glossary, changes from v0.1 and v0.2 |
+| 2 | [Component Model](02-component-model.md) | How WaSL maps onto packages, interfaces, worlds and components; the two kinds of exports; imports; entry points; resources |
+| 3 | [Projects](03-projects.md) | Project layout, manifest, source files, outputs, dependencies |
 | 4 | [Lexical structure](04-lexical.md) | Characters, comments, identifiers, keywords, literals, punctuation |
 | 5 | [Grammar](05-grammar.md) | Complete EBNF grammar and syntactic rules |
-| 6 | [Declarations](06-declarations.md) | Package namespace, `world`, `interface`, `global`, `func` |
-| 7 | [Types](07-types.md) | Primitive types, built-in and declared types, recursion, mutability, types in the WIT |
-| 8 | [Typing](08-typing.md) | Literals, operators, conversions, constructors, field access, lists, `match`, built-in functions, globals |
-| 9 | [Names and scopes](09-names.md) | Name resolution, paths, locals and their default values, assignment, calls as statements, loops |
-| 10 | [Runtime semantics](10-semantics.md) | Evaluation order, integer and float arithmetic, conversions, references and sharing, traps |
+| 6 | [Declarations](06-declarations.md) | Package namespace, `world` with `import` and `export`, `interface`, `global`, `func` |
+| 7 | [Types](07-types.md) | Primitive types, built-in and declared types, recursion, mutability, types in the WIT, resources |
+| 8 | [Typing](08-typing.md) | Literals, operators, conversions, constructors, field access, lists, `match`, built-in functions, globals, `?`, resource calls |
+| 9 | [Names and scopes](09-names.md) | Name resolution, paths, locals and their default values, assignment, calls as statements, loops, handles |
+| 10 | [Runtime semantics](10-semantics.md) | Evaluation order, integer and float arithmetic, conversions, references and sharing, traps, resources and imports |
 | 11 | [Diagnostics](11-diagnostics.md) | Error format, order of analysis, error codes |
-| 12 | [Mapping to Wasm and WasmGC](12-wasm-mapping.md) | Core module generated for a world, representation of each type |
-| 13 | [Mapping to the Component Model](13-component-mapping.md) | Generated WIT, names, core exports, Canonical ABI, copies through linear memory |
+| 12 | [Mapping to Wasm and WasmGC](12-wasm-mapping.md) | Core module generated for a world, representation of each type, resources and handles, `?` |
+| 13 | [Mapping to the Component Model](13-component-mapping.md) | Generated WIT, names, core exports, Canonical ABI, copies through linear memory, imports, resources at the boundary, foreign exports |
 | 14 | [Tooling](14-tooling.md) | The `weasel` commands, values in WAVE, the `waslc` library API |
 | 15 | [Examples](15-examples.md) | The target programs, invalid programs |
 | 16 | [Open questions](16-open-questions.md) | What this specification leaves undecided |

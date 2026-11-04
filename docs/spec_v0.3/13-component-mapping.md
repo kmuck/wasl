@@ -8,7 +8,7 @@ The **WIT of the package** contains, in this order:
 
 1. the declaration `package <namespace>:<name>@<version>;` from the manifest (§ 3.2);
 2. every interface that appears (below), in declaration order, with its types then its functions, each in declaration order;
-3. every world, in declaration order, with its `export`s.
+3. every world, in declaration order, with its `import`s and `export`s in the order of the source.
 
 Internal interfaces, globals and function bodies never appear (§ 2.6).
 
@@ -27,13 +27,14 @@ world calculator {
 ```
 
 - A function `func f(p: T, …) -> R` becomes `f: func(p: T, …) -> R;`; without a return type, `f: func(p: T, …);`.
-- A world `world w { export i; }` becomes `world w { export i; }`.
+- A world `world w { export i; }` becomes `world w { export i; }`. An import or an export of an interface of another package is written with its WIT name and the version of the dependency (§ 3.5): `import wasi:cli/stdout@0.2.6;`, `export wasi:cli/run@0.2.6;`. The foreign interfaces themselves are not written in the WIT of the package: they belong to their packages, and the component embeds them (below).
+- A resource becomes `resource r { … }` with its constructor (`constructor(p: T, …);`), its methods (`m: func(…) -> R;`) and its static functions (`s: static func(…) -> R;`), in declaration order; its fields never appear (§ 7.12). A parameter `c: r` is written `c: r` (an `own`), `c: borrow<r>` as is.
 - `weasel wit` prints the WIT of the package (§ 14.2). The layout of the printed text (indentation, blank lines) is not specified; its content is.
-- The **component of a world** embeds the WIT of that world: the world, the interfaces it exports and the package they belong to.
+- The **component of a world** embeds the WIT of that world: the world, the interfaces it imports and exports, the package they belong to, and the packages of the dependencies they come from.
 - The types of an interface appear in its WIT **before its functions**, in declaration order, with WIT names (§ 13.2): `unit_price` → `unit-price`.
 - `mut` never appears: the WIT has no mutability, so the types it contains have no `mut` field and no `list<mut T>` (E0214, § 7.11).
 - `string`, `list<T>`, `option<T>`, `result<…>`, `record`, `enum` and `variant` are written as in WIT, which uses the same names and the same forms.
-- When an interface `a` uses a type of another interface `b` (in a function signature or in one of its types), the WIT of `a` starts with `use b.{t1, t2};`, listing the types of `b` it uses in declaration order, and the path is erased: `invoices::line` is written `line` in `a`.
+- When an interface `a` uses a type of another interface `b` (in a function signature or in one of its types), the WIT of `a` starts with `use b.{t1, t2};`, listing the types of `b` it uses in declaration order, and the path is erased: `invoices::line` is written `line` in `a`. When `b` belongs to another package, the `use` names it with its package and version: `use example:catalog/carts@0.1.0.{cart, cart-error};`.
 
 **Which interfaces appear.** An interface appears in the WIT of the package if a world exports it, or if an interface that appears uses one of its types. An interface of the second kind that no world exports is a **types-only interface** in WIT: the world that uses it imports it implicitly, as WIT requires, and the host has nothing to provide for it. This is only possible if it declares no function: an exported function that uses a type of an interface that has functions and is not exported by the same world is an error (E0209).
 
@@ -85,6 +86,7 @@ The WIT of the world, embedded in its component, contains `import types;` added 
 - This applies to interfaces, worlds, functions, parameters, types, fields, enum cases, variant cases and flags: `invoice_error` → `invoice-error`, `discount_too_large` → `discount-too-large`.
 - The primitive and built-in types have the same names in WaSL and in WIT (§ 7.1, § 7.6).
 - A WaSL identifier may coincide with a WIT keyword that is not reserved in WaSL (for instance `from`). The WIT then writes it with the WIT escape `%` (`%from`), which is the standard way to use a keyword as a name in WIT.
+- **Names of other packages** go the other way: a WIT name of a dependency is written in WaSL by replacing each `-` with `_` (`incoming-handler` → `incoming_handler`, `output-stream` → `output_stream`, `blocking-write-and-flush` → `blocking_write_and_flush`), and the namespace and package the same way (`my-org:http-tools` → `my_org:http_tools`). A WIT name that gives no valid WaSL identifier, because it has uppercase letters, a word that starts with a digit or is a WaSL keyword or reserved word (§ 4.4), cannot be named from WaSL: using the item is E0215, and the interface stays usable for its other items. The WIT escape `%` is removed: `%from` is `from`.
 
 ## 13.3 Exports of the core module
 
@@ -161,7 +163,7 @@ Linear memory only holds values **during** a boundary crossing: never a WaSL val
 - After the adapter has lifted the arguments, it sets `$scratch_top` back to 0: the arguments are now on the WasmGC heap.
 - Lowering the result allocates from 0 again. The **post-return** function sets `$scratch_top` back to 0 once the host has read the result.
 
-The memory starts with zero pages and grows to the size of the largest single crossing; it never shrinks. This is enough because a component is never re-entered: a synchronous export cannot be called again while it runs, and a component has no imports yet. Imports and async will extend this scheme.
+The memory starts with zero pages and grows to the size of the largest single crossing; it never shrinks. This is enough because a component is never re-entered: a synchronous export cannot be called again while it runs, and an import cannot call the component back. The calls to imports use the same buffer, in the reverse direction (§ 13.10). Async will extend this scheme.
 
 ## 13.8 Adapters
 
@@ -197,3 +199,47 @@ wasm-tools validate build/calculator.wasm
 wasm-tools component wit build/calculator.wasm     # prints the WIT of the world
 wasm-tools print build/calculator.wasm             # prints the component as text
 ```
+
+## 13.10 Imports (specified, not available yet)
+
+Each function of an imported interface that the component calls is a **core import** of the module, lowered by the Component Model with `canon lower`, under the standard names:
+
+```
+module: cm32p2|<interface>         name: <function>
+```
+
+- `<interface>` is the canonical name of § 13.3: `cm32p2|wasi:cli/stdout@0.2` for `wasi:cli/stdout@0.2.6`, `cm32p2|example:catalog/carts@0.1` for the `carts` of `example:catalog@0.1.0`. An interface of the same package (§ 2.5) has the name of the package.
+- `<function>` is the WIT name of the function: `get-stdout`; for a resource, the names of the Component Model: `[constructor]cart`, `[method]cart.add`, `[static]cart.of`.
+- Each imported resource that the component uses adds the import `<resource>_drop` (`output-stream_drop`), the `resource.drop` of § 12.10, of type `(func (param i32))`.
+
+**Reverse adapters.** A call to an imported function goes through a generated function that does the work of § 13.8 in the reverse direction: it **lowers** the arguments (strings and lists written to linear memory allocated with `cm32p2_realloc`), calls the import, then **lifts** the result into new WasmGC objects, and sets `$scratch_top` back to where it was before the call. When the result goes through memory, the caller allocates the return area. Canonical options for imports follow § 13.6: `memory`, `realloc` and `utf8` when the signature needs them, never a post-return.
+
+**Handles.** An own handle passed as an argument is given to the callee: the Component Model removes it from the handle table, which is why WaSL sets the local to `0` (§ 9.9). A borrowed handle is passed as is and stays in the table. A handle received in a result is a new entry of the table, owned by the place that receives it.
+
+**Same package.** For `import accounts;` the component imports the functions of `accounts` that it calls, under the name of the package; the functions of `accounts` are not compiled into it (§ 2.5). The component of the world that exports `accounts` provides them when the two are composed (§ 14.2).
+
+## 13.11 Resources at the boundary (specified, not available yet)
+
+A resource `r` of an exported interface `i` is a WasmGC struct inside the component (§ 12.10), but the Component Model gives other components an `i32` handle whose **representation** (`rep`) is chosen by the component. A WasmGC reference cannot be a `rep`, so the module keeps a **rep table**:
+
+- a mutable global `$reps_r`, a growable `(array (mut (ref null $r)))`, and a free list of its empty slots;
+- `rep` is an index in this array. Each handle given out gets its own slot, which holds the object, and keeps it alive, until the handle is released.
+
+The module imports the intrinsics of the Component Model for `r`, under the module `cm32p2|_ex_<interface>`, and exports its destructor:
+
+| Name | Type | Role |
+|---|---|---|
+| `r_new` (import) | `(func (param i32) (result i32))` | `resource.new`: creates a handle for a `rep` |
+| `r_rep` (import) | `(func (param i32) (result i32))` | `resource.rep`: the `rep` of a handle |
+| `r_drop` (import) | `(func (param i32))` | `resource.drop`: releases a handle owned by the component |
+| `cm32p2\|<interface>\|r_dtor` (export) | `(func (param i32))` | called by the Component Model when the handle is released: empties the slot `rep` |
+
+**Lowering** an object (a result, or the argument of an import) stores it in a free slot and returns `r_new(slot)`. **Lifting** a handle: for an `own<r>`, `r_rep` gives the slot, the object is read from it, then `r_drop` releases the handle, which runs the destructor and empties the slot: the object is now an ordinary WasmGC value of the component; for a `borrow<r>` of the component's own resource, the Component Model passes the `rep` directly, and the object is read from the slot.
+
+The constructor, the methods and the static functions are exported like functions of the interface (§ 13.3), with the names of the Component Model: `cm32p2|example:catalog/carts@0.1|[constructor]cart`, `…|[method]cart.add`, `…|[static]cart.of`. Their adapters lift `self` as a `borrow<r>`.
+
+## 13.12 Foreign exports (specified, not available yet)
+
+The functions of the block `export wasi:cli/run { … }` (§ 2.4.2) are exported like the functions of an interface of the package: with the canonical name of the foreign interface, `cm32p2|wasi:cli/run@0.2|run`, their adapters (§ 13.8) and their canonical options (§ 13.6).
+
+The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, and no other function. The types are compared after the conversion of names of § 13.2. A foreign interface that declares resources cannot be exported in 0.3: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).

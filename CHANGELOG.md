@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The v0.3 specification describes the features of 0.3, marked *specified, not available yet* until the compiler implements them: dependencies in `wasl.toml` and `wkg.lock` (§ 3.5), imports of interfaces of other packages and of the same package (§ 2.5), implementations of foreign interfaces such as `wasi:cli/run` (§ 2.4.2, § 13.12), resources with constructors, methods and static functions (§ 7.12, § 8.20), automatic release of handles (§ 9.9), the `?` operator (§ 8.19), and the errors E0215 to E0221, E0308, E0309, E0414 and E0415 (§ 11.3).
+- The target programs of 0.3, written before the compiler supports them: [`examples/catalog`](examples/catalog) and [`examples/checkout`](examples/checkout), two components linked by a resource, and [`examples/hello`](examples/hello), a WASI 0.2 command.
+
 ### Changed
 
 - The v0.2 specification is frozen. The [v0.3 specification](docs/spec_v0.3/README.md) merges v0.1 and v0.2 into one complete document, without changing any rule; it will receive the features of 0.3. Its README maps the old `§ v2.x.y` numbers to the new ones, and the comments of the compiler cite the new numbers.
