@@ -87,9 +87,11 @@ pub fn analyze(package: &Package, sources: &SourceMap, deps: &Dependencies) -> R
         .iter()
         .map(|world| World {
             name: world.name.clone(),
+            // Implementations of interfaces of other packages are not called by name.
             exports: world
                 .exports
                 .iter()
+                .filter(|&&iface| program.interfaces[iface].implements.is_none())
                 .map(|&iface| ExportedInterface {
                     name: program.interfaces[iface].name.clone(),
                     functions: program.interfaces[iface]

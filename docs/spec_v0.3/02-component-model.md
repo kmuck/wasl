@@ -53,7 +53,7 @@ world calculator {
 
 `export math;` exports an interface declared in the package. Its implementation is the `interface math { … }` block: the same code in every world that exports it. This is how a package shares business logic between several components.
 
-### 2.4.2 Interfaces of other packages (specified, not available yet)
+### 2.4.2 Interfaces of other packages
 
 An interface can also be defined by **another package**: a WASI interface such as `wasi:cli/run` or `wasi:http/incoming-handler`, or any WIT interface of a dependency (§ 3.5). The package that defines it only provides the contract. Its implementation is written **inside the world that exports it**:
 

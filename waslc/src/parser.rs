@@ -244,19 +244,46 @@ impl Parser {
             } else {
                 InterfaceRef::Local(first)
             };
-            if !import && let InterfaceRef::Foreign(f) = &iface {
-                return err(
-                    Code::Syntax,
-                    iface.span(),
-                    format!(
-                        "exporting `{}`, an interface of another package, is not available yet: it needs its implementation in the world (`export {} {{ … }}`, § 2.4.2)",
-                        f.display(),
-                        f.display()
-                    ),
-                );
-            }
-            self.expect(&TokenKind::Semi, "`;`")?;
-            items.push(WorldItem { import, iface });
+            let body = match &iface {
+                InterfaceRef::Foreign(f) if !import => {
+                    if !matches!(self.peek(), TokenKind::LBrace) {
+                        return err(
+                            Code::Syntax,
+                            iface.span(),
+                            format!(
+                                "exporting `{}`, an interface of another package, needs its implementation in the world: `export {} {{ func … }}` (§ 2.4.2)",
+                                f.display(),
+                                f.display()
+                            ),
+                        );
+                    }
+                    self.bump();
+                    let mut funcs = Vec::new();
+                    while !self.eat(&TokenKind::RBrace) {
+                        match self.peek() {
+                            TokenKind::Func => funcs.push(InterfaceItem::Func(self.func()?)),
+                            _ => {
+                                return Err(self.unexpected(
+                                    "`func` or `}`: the implementation of an interface of another package only has functions",
+                                ));
+                            }
+                        }
+                    }
+                    Some(Interface {
+                        name: f.name.clone(),
+                        items: funcs,
+                    })
+                }
+                _ => {
+                    self.expect(&TokenKind::Semi, "`;`")?;
+                    None
+                }
+            };
+            items.push(WorldItem {
+                import,
+                iface,
+                body,
+            });
         }
         Ok(World { name, items })
     }

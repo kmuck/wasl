@@ -37,6 +37,9 @@ pub struct World {
 pub struct WorldItem {
     pub import: bool,
     pub iface: InterfaceRef,
+    /// The implementation of an exported interface of another package, for this world
+    /// only (§ 2.4.2): its functions, as an interface named like the foreign one.
+    pub body: Option<Interface>,
 }
 
 /// The name of an interface in a world (§ 6.2): an interface of the package, or an

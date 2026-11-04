@@ -458,7 +458,7 @@ fn errors() {
     fails(
         "world w { export demo:host/log; }",
         Code::Syntax,
-        "exporting `demo:host/log`, an interface of another package, is not available yet",
+        "exporting `demo:host/log`, an interface of another package, needs its implementation in the world",
     );
     fails(
         "world w { import nope; }",

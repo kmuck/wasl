@@ -1,7 +1,6 @@
 // Target program of WaSL v0.3 (docs/spec_v0.3): a command-line program for WASI 0.2,
 // run with `wasmtime run`. Its entry point is `wasi:cli/run`, an interface defined by
 // WASI and implemented in the world (§ 2.4.2).
-// It is written before the compiler supports it, and the v0.2 compiler rejects it.
 
 world hello {
   import wasi:io/streams;

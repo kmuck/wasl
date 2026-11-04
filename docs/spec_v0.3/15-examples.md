@@ -626,7 +626,7 @@ Each line is placed in a valid context, with the types of § 15.3.
 | `return paid;` | E0300: write `status::paid` |
 | `f().number = 1;` | E0100: an assignment target starts with a name |
 
-### With imports, resources and `?` (specified, not available yet)
+### With imports, resources and `?`
 
 Each line is written in `examples/checkout` (§ 15.5), unless it says otherwise.
 
@@ -884,7 +884,7 @@ What the program shows:
 - **`?` on `result` and `option`.** `prices::of(sku)?` and `c.add(…)?` propagate a `cart_error`; `c.last_line()?` propagates a `none` (§ 8.19).
 - **Composition.** `weasel call` builds `catalog` from its path dependency and plugs it into `checkout` (§ 14.2). The same composition is written with the standard tool: `wac plug build/checkout.wasm --plug ../catalog/build/catalog.wasm -o build/shop.wasm`.
 
-## 15.6 A WASI command: `hello` (specified, not available yet)
+## 15.6 A WASI command: `hello`
 
 The second target program of version 0.3 is a command-line program for WASI 0.2: its world exports `wasi:cli/run` and imports what it needs to write on its standard output. It runs with `wasmtime run`, like a program written in any other language.
 
