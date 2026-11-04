@@ -27,6 +27,9 @@ pub(crate) enum Boundary {
     PostReturn,
     /// The core export of an exported function (§ 13.8).
     Adapter(FuncId),
+    /// The reverse adapter of an imported function (§ 13.10): lowers the arguments,
+    /// calls the import, lifts the result.
+    Import(FuncId),
     /// `(ptr) -> T'`: lifts a value stored at `ptr`.
     LiftMem(Type),
     /// `(T', ptr)`: lowers a value to `ptr`.
@@ -214,6 +217,30 @@ fn params_flat(types: &Types, func: &FuncDef) -> Vec<ValType> {
 pub(super) fn result_in_memory(types: &Types, func: &FuncDef) -> bool {
     func.ret
         .is_some_and(|t| has_list(types, t) || flat(types, t).len() > MAX_FLAT_RESULTS)
+}
+
+/// Whether a call to an imported function goes through a reverse adapter (§ 13.10).
+pub(super) fn import_needs_adapter(types: &Types, func: &FuncDef) -> bool {
+    needs_adapter(types, func) || needs_memory(types, func)
+}
+
+/// The core type of an imported function, following the Canonical ABI: its flat
+/// parameters (or a pointer to them), then a pointer to the return area if the result
+/// goes through memory; its flat result otherwise.
+pub(super) fn import_signature(types: &Types, func: &FuncDef) -> (Vec<ValType>, Vec<ValType>) {
+    let mut params = params_flat(types, func);
+    if params.len() > MAX_FLAT_PARAMS {
+        params = vec![ValType::I32];
+    }
+    let results = match func.ret {
+        Some(_) if result_in_memory(types, func) => {
+            params.push(ValType::I32);
+            Vec::new()
+        }
+        Some(t) => flat(types, t),
+        None => Vec::new(),
+    };
+    (params, results)
 }
 
 /// Whether an exported function needs linear memory (§ 13.6).
@@ -491,6 +518,127 @@ impl<'c, 'a> Gen<'c, 'a> {
         }
     }
 
+    /// Pushes the value of local `local`, of Wasm type `val`, as a non-null reference
+    /// when its type is one.
+    fn get(&mut self, local: u32, val: ValType) {
+        self.emit(I::LocalGet(local));
+        if matches!(val, ValType::Ref(r) if !r.nullable) {
+            self.emit(I::RefAsNonNull);
+        }
+    }
+
+    /// Lowers the value pushed by `value`, of type `ty`, to its flat values, pushed in
+    /// order (Canonical ABI flattening).
+    fn lower_to_flat(&mut self, ty: Type, value: &[Instruction<'static>]) {
+        let types = self.types;
+        if types.is_scalar(ty) {
+            self.code.extend(value.iter().cloned());
+            return;
+        }
+        if matches!(types.kind(ty), TypeKind::String | TypeKind::List { .. }) {
+            self.code.extend(value.iter().cloned());
+            self.call(Boundary::LowerList(ty));
+            return;
+        }
+        let val = self.cx.val(ty);
+        let v = self.local(val);
+        self.code.extend(value.iter().cloned());
+        self.emit(I::LocalSet(v));
+        if let Some(fields) = fields(types, ty) {
+            let index = self.cx.heap(ty);
+            for (k, &f) in fields.iter().enumerate() {
+                let value = [
+                    I::LocalGet(v),
+                    I::StructGet {
+                        struct_type_index: index,
+                        field_index: k as u32,
+                    },
+                ];
+                self.lower_to_flat(f, &value);
+            }
+            return;
+        }
+        // A variant, `option` or `result`: the discriminant, then the joined payloads.
+        let payloads = cases(types, ty).expect("a variant");
+        let joined = flat(types, ty)[1..].to_vec();
+        let slots: Vec<u32> = joined.iter().map(|&t| self.local(t)).collect();
+        let disc = self.local(ValType::I32);
+        let lower_case = |g: &mut Self, payload: Type, value: Vec<Instruction<'static>>| {
+            g.lower_to_flat(payload, &value);
+            let have = flat(types, payload);
+            for (i, &t) in have.iter().enumerate().rev() {
+                g.widen(t, joined[i]);
+                g.emit(I::LocalSet(slots[i]));
+            }
+        };
+        if let TypeKind::Option(inner) = types.kind(ty) {
+            let inner = *inner;
+            let boxed = self.cx.boxed(inner).then(|| self.cx.option_heap(inner));
+            self.emit(I::LocalGet(v));
+            self.emit(I::RefIsNull);
+            self.emit(I::I32Eqz);
+            self.emit(I::LocalTee(disc));
+            self.emit(I::If(BlockType::Empty));
+            let value = match boxed {
+                Some(index) => vec![
+                    I::LocalGet(v),
+                    I::StructGet {
+                        struct_type_index: index,
+                        field_index: 0,
+                    },
+                ],
+                None => vec![I::LocalGet(v), I::RefAsNonNull],
+            };
+            lower_case(self, inner, value);
+            self.emit(I::End);
+        } else {
+            let base = self.cx.heap(ty);
+            self.emit(I::LocalGet(v));
+            self.emit(I::StructGet {
+                struct_type_index: base,
+                field_index: 0,
+            });
+            self.emit(I::LocalSet(disc));
+            for (k, payload) in payloads.iter().enumerate() {
+                let Some(p) = payload else { continue };
+                let case = self.cx.case_type(ty, k as u32);
+                self.emit(I::LocalGet(disc));
+                self.emit(I::I32Const(k as i32));
+                self.emit(I::I32Eq);
+                self.emit(I::If(BlockType::Empty));
+                let value = vec![
+                    I::LocalGet(v),
+                    I::RefCastNonNull(HeapType::Concrete(case)),
+                    I::StructGet {
+                        struct_type_index: case,
+                        field_index: 1,
+                    },
+                ];
+                lower_case(self, *p, value);
+                self.emit(I::End);
+            }
+        }
+        self.emit(I::LocalGet(disc));
+        for slot in slots {
+            self.emit(I::LocalGet(slot));
+        }
+    }
+
+    /// Converts a flat value of a case, of type `from`, to the joined type `to`.
+    fn widen(&mut self, from: ValType, to: ValType) {
+        match (from, to) {
+            _ if from == to => {}
+            (ValType::F32, ValType::I32) => self.emit(I::I32ReinterpretF32),
+            (ValType::I32, ValType::I64) => self.emit(I::I64ExtendI32U),
+            (ValType::F32, ValType::I64) => {
+                self.emit(I::I32ReinterpretF32);
+                self.emit(I::I64ExtendI32U);
+            }
+            (ValType::F64, ValType::I64) => self.emit(I::I64ReinterpretF64),
+            _ => unreachable!("joined flat types"),
+        }
+    }
+
     /// Lowers the value on the stack to its single flat value.
     fn lower_flat(&mut self, ty: Type) {
         let types = self.types;
@@ -529,6 +677,7 @@ impl Boundary {
                 g.finish(Vec::new())
             }
             Boundary::Adapter(f) => adapter(cx, f),
+            Boundary::Import(f) => import_adapter(cx, f),
             Boundary::LiftMem(ty) => {
                 let mut g = Gen::new(cx, vec![ValType::I32]);
                 let result = g.cx.val(ty);
@@ -927,6 +1076,88 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
         Some(t) => {
             g.lower_flat(t);
             flat(types, t)
+        }
+    };
+    g.finish(results)
+}
+
+/// The reverse adapter of an imported function (§ 13.10): lowers the arguments, calls the
+/// import, lifts the result, then sets `$scratch_top` back to where it was.
+fn import_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let types = cx.types;
+    let func = &cx.program.funcs[f];
+    let params: Vec<ValType> = func.params.iter().map(|(_, t)| cx.val(*t)).collect();
+    let ret_val = func.ret.map(|t| cx.val(t));
+    let target = cx.func_index[f].expect("imported function");
+    let mut g = Gen::new(cx, params.clone());
+    let saved = g.cx.scratch_top.map(|top| {
+        let saved = g.local(ValType::I32);
+        g.emit(I::GlobalGet(top));
+        g.emit(I::LocalSet(saved));
+        saved
+    });
+
+    let param_types: Vec<Type> = func.params.iter().map(|(_, t)| *t).collect();
+    if params_flat(types, func).len() > MAX_FLAT_PARAMS {
+        let (offsets, size, align) = fields_layout(types, &param_types);
+        let area = g.local(ValType::I32);
+        g.emit(I::I32Const(0));
+        g.emit(I::I32Const(0));
+        g.emit(I::I32Const(align as i32));
+        g.emit(I::I32Const(size as i32));
+        g.call(Boundary::Realloc);
+        g.emit(I::LocalSet(area));
+        for (k, (&t, &offset)) in param_types.iter().zip(&offsets).enumerate() {
+            g.lower_at(t, &[I::LocalGet(k as u32)], area, offset);
+        }
+        g.emit(I::LocalGet(area));
+    } else {
+        for (k, &t) in param_types.iter().enumerate() {
+            g.lower_to_flat(t, &[I::LocalGet(k as u32)]);
+        }
+    }
+    let ret_area = match func.ret {
+        Some(t) if result_in_memory(types, func) => {
+            let (size, align) = size_align(types, t);
+            let ptr = g.local(ValType::I32);
+            g.emit(I::I32Const(0));
+            g.emit(I::I32Const(0));
+            g.emit(I::I32Const(align as i32));
+            g.emit(I::I32Const(size as i32));
+            g.call(Boundary::Realloc);
+            g.emit(I::LocalTee(ptr));
+            Some(ptr)
+        }
+        _ => None,
+    };
+    g.emit(I::Call(target));
+
+    let results = match (func.ret, ret_val) {
+        (Some(t), Some(val)) => {
+            match ret_area {
+                Some(ptr) => g.lift_at(t, ptr, 0),
+                None => {
+                    let flat_ty = flat(types, t)[0];
+                    let r = g.local(flat_ty);
+                    g.emit(I::LocalSet(r));
+                    g.lift_flat(t, &[(r, flat_ty)], 0);
+                }
+            }
+            if let (Some(saved), Some(top)) = (saved, g.cx.scratch_top) {
+                let value = g.local(val);
+                g.emit(I::LocalSet(value));
+                g.emit(I::LocalGet(saved));
+                g.emit(I::GlobalSet(top));
+                g.get(value, val);
+            }
+            vec![val]
+        }
+        _ => {
+            if let (Some(saved), Some(top)) = (saved, g.cx.scratch_top) {
+                g.emit(I::LocalGet(saved));
+                g.emit(I::GlobalSet(top));
+            }
+            Vec::new()
         }
     };
     g.finish(results)

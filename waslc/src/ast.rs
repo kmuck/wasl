@@ -29,7 +29,49 @@ impl Item {
 #[derive(Debug)]
 pub struct World {
     pub name: Ident,
-    pub exports: Vec<Ident>,
+    /// `import` and `export` items, in source order.
+    pub items: Vec<WorldItem>,
+}
+
+#[derive(Debug)]
+pub struct WorldItem {
+    pub import: bool,
+    pub iface: InterfaceRef,
+}
+
+/// The name of an interface in a world (§ 6.2): an interface of the package, or an
+/// interface of another package, `namespace:package/interface` (§ 2.5).
+#[derive(Debug, Clone)]
+pub enum InterfaceRef {
+    Local(Ident),
+    Foreign(ForeignName),
+}
+
+impl InterfaceRef {
+    pub fn span(&self) -> Span {
+        match self {
+            InterfaceRef::Local(name) => name.span,
+            InterfaceRef::Foreign(f) => f.namespace.span.to(f.name.span),
+        }
+    }
+}
+
+/// `namespace:package/interface`, with WaSL identifiers.
+#[derive(Debug, Clone)]
+pub struct ForeignName {
+    pub namespace: Ident,
+    pub package: Ident,
+    pub name: Ident,
+}
+
+impl ForeignName {
+    /// The name as written in WaSL: `wasi:cli/stdout`.
+    pub fn display(&self) -> String {
+        format!(
+            "{}:{}/{}",
+            self.namespace.name, self.package.name, self.name.name
+        )
+    }
 }
 
 #[derive(Debug)]

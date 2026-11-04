@@ -55,7 +55,7 @@ With these, every WIT type except resources (`own`, `borrow`) and async types (`
 **Added in 0.3** (specified, being implemented; each section says "specified, not available yet" until the compiler supports it):
 
 - dependencies on other packages, declared in `wasl.toml` and resolved from a path or a registry (§ 3.2, § 3.5), already implemented;
-- imports of interfaces of other packages and of the same package (§ 2.5), and implementations of interfaces defined by other packages, such as `wasi:cli/run` (§ 2.4.2);
+- imports of interfaces of other packages and of the same package (§ 2.5), already implemented except the resources of other packages, and implementations of interfaces defined by other packages, such as `wasi:cli/run` (§ 2.4.2);
 - resources: their declaration, constructors, methods and static functions (§ 7.12), handles and their automatic release (§ 9.9);
 - the error propagation operator `?` on `result` and `option` (§ 8.19), already implemented.
 

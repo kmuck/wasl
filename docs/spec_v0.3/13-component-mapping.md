@@ -36,7 +36,7 @@ world calculator {
 - `string`, `list<T>`, `option<T>`, `result<…>`, `record`, `enum` and `variant` are written as in WIT, which uses the same names and the same forms.
 - When an interface `a` uses a type of another interface `b` (in a function signature or in one of its types), the WIT of `a` starts with `use b.{t1, t2};`, listing the types of `b` it uses in declaration order, and the path is erased: `invoices::line` is written `line` in `a`. When `b` belongs to another package, the `use` names it with its package and version: `use example:catalog/carts@0.1.0.{cart, cart-error};`.
 
-**Which interfaces appear.** An interface appears in the WIT of the package if a world exports it, or if an interface that appears uses one of its types. An interface of the second kind that no world exports is a **types-only interface** in WIT: the world that uses it imports it implicitly, as WIT requires, and the host has nothing to provide for it. This is only possible if it declares no function: an exported function that uses a type of an interface that has functions and is not exported by the same world is an error (E0209).
+**Which interfaces appear.** An interface appears in the WIT of the package if a world exports it, or if an interface that appears uses one of its types. An interface of the second kind that no world exports is a **types-only interface** in WIT: the world that uses it imports it implicitly, as WIT requires, and the host has nothing to provide for it. This is only possible if it declares no function: an exported function that uses a type of an interface that has functions and is neither exported nor imported by the same world is an error (E0209). An interface of the package that a world imports also appears, with its functions: `import accounts;` needs the WIT of `accounts`.
 
 **No cycle of `use`.** WIT forbids interfaces whose `use` form a cycle. Among the interfaces that appear, if `a` uses a type of `b` and `b`, directly or through other interfaces, uses a type of `a`, it is an error (E0213), reported on the first interface of the cycle in declaration order, with each step of the cycle. The fix is to move the shared types to an interface of their own. Interfaces that do not appear in the WIT can use each other's types freely.
 
@@ -200,7 +200,7 @@ wasm-tools component wit build/calculator.wasm     # prints the WIT of the world
 wasm-tools print build/calculator.wasm             # prints the component as text
 ```
 
-## 13.10 Imports (specified, not available yet)
+## 13.10 Imports
 
 Each function of an imported interface that the component calls is a **core import** of the module, lowered by the Component Model with `canon lower`, under the standard names:
 
@@ -210,11 +210,11 @@ module: cm32p2|<interface>         name: <function>
 
 - `<interface>` is the canonical name of § 13.3: `cm32p2|wasi:cli/stdout@0.2` for `wasi:cli/stdout@0.2.6`, `cm32p2|example:catalog/carts@0.1` for the `carts` of `example:catalog@0.1.0`. An interface of the same package (§ 2.5) has the name of the package.
 - `<function>` is the WIT name of the function: `get-stdout`; for a resource, the names of the Component Model: `[constructor]cart`, `[method]cart.add`, `[static]cart.of`.
-- Each imported resource that the component uses adds the import `<resource>_drop` (`output-stream_drop`), the `resource.drop` of § 12.10, of type `(func (param i32))`.
+- Each imported resource that the component uses (specified, not available yet) adds the import `<resource>_drop` (`output-stream_drop`), the `resource.drop` of § 12.10, of type `(func (param i32))`.
 
-**Reverse adapters.** A call to an imported function goes through a generated function that does the work of § 13.8 in the reverse direction: it **lowers** the arguments (strings and lists written to linear memory allocated with `cm32p2_realloc`), calls the import, then **lifts** the result into new WasmGC objects, and sets `$scratch_top` back to where it was before the call. When the result goes through memory, the caller allocates the return area. Canonical options for imports follow § 13.6: `memory`, `realloc` and `utf8` when the signature needs them, never a post-return.
+**Reverse adapters.** A call to an imported function goes through a generated function that does the work of § 13.8 in the reverse direction: it **lowers** the arguments (strings and lists written to linear memory allocated with `cm32p2_realloc`), calls the import, then **lifts** the result into new WasmGC objects, and sets `$scratch_top` back to where it was before the call. Arguments that flatten to more than 16 values are written to memory and passed by address; when the result flattens to more than one value, the caller allocates the return area and passes its address as the last argument. An imported function whose parameters and result are all scalars is called directly, without an adapter. A module whose imported functions need memory has a memory and a `realloc`, even if its exported functions do not. Canonical options for imports follow § 13.6: `memory`, `realloc` and `utf8` when the signature needs them, never a post-return.
 
-**Handles.** An own handle passed as an argument is given to the callee: the Component Model removes it from the handle table, which is why WaSL sets the local to `0` (§ 9.9). A borrowed handle is passed as is and stays in the table. A handle received in a result is a new entry of the table, owned by the place that receives it.
+**Handles** (specified, not available yet). An own handle passed as an argument is given to the callee: the Component Model removes it from the handle table, which is why WaSL sets the local to `0` (§ 9.9). A borrowed handle is passed as is and stays in the table. A handle received in a result is a new entry of the table, owned by the place that receives it.
 
 **Same package.** For `import accounts;` the component imports the functions of `accounts` that it calls, under the name of the package; the functions of `accounts` are not compiled into it (§ 2.5). The component of the world that exports `accounts` provides them when the two are composed (§ 14.2).
 

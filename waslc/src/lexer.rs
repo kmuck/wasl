@@ -24,6 +24,7 @@ pub enum TokenKind {
     World,
     Interface,
     Export,
+    Import,
     Global,
     Mut,
     Local,
@@ -132,6 +133,7 @@ impl TokenKind {
             TokenKind::World => "world",
             TokenKind::Interface => "interface",
             TokenKind::Export => "export",
+            TokenKind::Import => "import",
             TokenKind::Global => "global",
             TokenKind::Mut => "mut",
             TokenKind::Local => "local",
@@ -209,7 +211,6 @@ pub struct Token {
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
-    "import",
     "package",
     "use",
     "type",
@@ -234,6 +235,7 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "world" => TokenKind::World,
         "interface" => TokenKind::Interface,
         "export" => TokenKind::Export,
+        "import" => TokenKind::Import,
         "global" => TokenKind::Global,
         "mut" => TokenKind::Mut,
         "local" => TokenKind::Local,
@@ -771,7 +773,8 @@ mod tests {
         assert_eq!(error_code("x_"), Code::InvalidIdent);
         assert_eq!(error_code("a__b"), Code::InvalidIdent);
         assert_eq!(error_code("a_1"), Code::InvalidIdent);
-        assert_eq!(error_code("import"), Code::ReservedKeyword);
+        assert_eq!(error_code("use"), Code::ReservedKeyword);
+        assert_eq!(kinds("import")[0], TokenKind::Import);
         assert_eq!(kinds("record")[0], TokenKind::Record);
         assert_eq!(kinds("list")[0], TokenKind::KwList);
         assert_eq!(

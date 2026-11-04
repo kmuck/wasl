@@ -4,12 +4,18 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{self, ExprKind, Ident, Item, UnaryOp};
+use crate::ast::{self, ExprKind, Ident, InterfaceRef, Item, UnaryOp};
+use crate::deps::Dependencies;
 use crate::diag::{Code, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
+use crate::source::Span;
 use crate::types::{CaseDef, DeclId, DeclKind, FieldDef, Mutable, Type, TypeDecl, TypeKind, Types};
+use crate::wit::kebab;
 
 mod body;
+mod foreign;
+
+pub(crate) use foreign::wasl_name;
 
 use body::{FnCx, always_returns};
 
@@ -34,12 +40,13 @@ impl TopLevel {
     }
 }
 
-/// Analyzes the package. Items must be given in the deterministic file order.
-pub fn analyze(items: &[Item]) -> Result<hir::Program> {
+/// Analyzes the package. Items must be given in the deterministic file order; `deps`
+/// holds the WIT of the packages it depends on (§ 3.5).
+pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
     let mut worlds = Vec::new();
     let mut interfaces = Vec::new();
     let mut globals = Vec::new();
-    let mut names: HashMap<&str, TopLevel> = HashMap::new();
+    let mut names: HashMap<String, TopLevel> = HashMap::new();
 
     // 1. Top-level names (§ 6.1).
     for item in items {
@@ -65,10 +72,51 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                 TopLevel::Global
             }
         };
-        names.insert(&name.name, entry);
+        names.insert(name.name.clone(), entry);
     }
 
-    // 2. Items of the interfaces (§ 6.3, § 7.7).
+    // 2. Interfaces of other packages named by the worlds (§ 2.5, § 3.5), then the names
+    //    code gives them (E0217).
+    let mut converter = foreign::Converter::new(deps.resolve(), interfaces.len());
+    let mut named_foreign: Vec<(wit_parser::InterfaceId, Span)> = Vec::new();
+    for world in &worlds {
+        for item in &world.items {
+            let InterfaceRef::Foreign(f) = &item.iface else {
+                continue;
+            };
+            let id = foreign_interface(deps, f)?;
+            if !named_foreign.iter().any(|(i, _)| *i == id) {
+                named_foreign.push((id, item.iface.span()));
+            }
+        }
+    }
+    let mut foreign_names: Vec<(String, InterfaceId)> = Vec::new();
+    for &(id, span) in &named_foreign {
+        let hir_id = converter.iface(id);
+        let short = converter.short_name(hir_id);
+        let full = converter.ifaces[hir_id - interfaces.len()].display();
+        if let Some(prev) = names.get(short.as_str()) {
+            let what = match prev {
+                TopLevel::Interface(other) if *other >= interfaces.len() => format!(
+                    "the interface `{}`",
+                    converter.ifaces[*other - interfaces.len()].display()
+                ),
+                TopLevel::Interface(_) => format!("the interface `{short}` of the package"),
+                other => format!("{} of the package", other.describe()),
+            };
+            return err(
+                Code::InterfaceNameClash,
+                span,
+                format!(
+                    "`{full}` is named `{short}` in code, like {what}: code could not tell them apart"
+                ),
+            );
+        }
+        names.insert(short.clone(), TopLevel::Interface(hir_id));
+        foreign_names.push((short, hir_id));
+    }
+
+    // 3. Items of the interfaces (§ 6.3, § 7.7).
     let mut program = hir::Program::default();
     let mut types = Types::default();
     types.interface_names = interfaces.iter().map(|i| i.name.name.clone()).collect();
@@ -118,7 +166,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                 ast::InterfaceItem::Func(func) => {
                     let id = funcs.len();
                     funcs.push(func);
-                    scope.funcs.insert(&func.name.name, id);
+                    scope.funcs.insert(func.name.name.clone(), id);
                     func_ids.push(id);
                 }
                 ast::InterfaceItem::Type(decl) => {
@@ -136,7 +184,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                     check_members(decl)?;
                     let id = decls.len();
                     decls.push(decl);
-                    scope.types.insert(&decl.name.name, id);
+                    scope.types.insert(decl.name.name.clone(), id);
                     decl_ids.push(id);
                     // The members are resolved in step 3; the names are known now.
                     types.decls.push(TypeDecl {
@@ -162,10 +210,48 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
             name: iface.name.name.clone(),
             funcs: func_ids,
             types: decl_ids,
+            foreign: None,
         });
     }
 
-    // 3. Types: fields, payloads and signatures, interface by interface (§ 11.2).
+    // The functions and types of the interfaces of other packages, after those of the
+    // package: their ids come after.
+    let mut foreign_funcs: Vec<hir::FuncDef> = Vec::new();
+    let mut foreign_scopes: Vec<(InterfaceId, InterfaceScope)> = Vec::new();
+    for &(id, _) in &named_foreign {
+        let (scope, defs) = converter.scope(&mut types, id, funcs.len() + foreign_funcs.len());
+        let hir_id = converter.iface(id);
+        foreign_scopes.push((hir_id, scope));
+        foreign_funcs.extend(defs);
+    }
+    for (i, f) in converter.ifaces.iter().enumerate() {
+        let id = interfaces.len() + i;
+        let mut scope = foreign_scopes
+            .iter_mut()
+            .find(|(h, _)| *h == id)
+            .map(|(_, s)| std::mem::take(s))
+            .unwrap_or_default();
+        scope.foreign = true;
+        let funcs: Vec<FuncId> = foreign_funcs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.interface == id)
+            .map(|(k, _)| funcs.len() + k)
+            .collect();
+        let decls: Vec<DeclId> = (0..types.decls.len())
+            .filter(|&d| types.decls[d].interface == id)
+            .collect();
+        scopes.push(scope);
+        types.interface_names.push(converter.short_name(id));
+        program.interfaces.push(hir::InterfaceDef {
+            name: converter.short_name(id),
+            funcs,
+            types: decls,
+            foreign: Some(f.clone()),
+        });
+    }
+
+    // 4. Types: fields, payloads and signatures, interface by interface (§ 11.2).
     let resolver = Resolver {
         names: &names,
         scopes: &scopes,
@@ -230,7 +316,9 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
             }
         }
     }
-    // Functions were pushed in interface order, which is the order of `funcs`.
+    // Functions were pushed in interface order, which is the order of `funcs`; those of
+    // other packages come after them.
+    program.funcs.extend(foreign_funcs);
     let inhabited = inhabited_decls(&types);
     for (id, decl) in decls.iter().enumerate() {
         if !inhabited[id] {
@@ -246,53 +334,116 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         }
     }
 
-    // 3. Worlds (§ 6.2).
+    // 5. Worlds (§ 6.2).
     for world in &worlds {
-        let mut exports = Vec::new();
-        for export in &world.exports {
-            let id = match names.get(export.name.as_str()) {
-                Some(TopLevel::Interface(id)) => *id,
-                Some(other) => {
+        let mut def = hir::WorldDef {
+            name: world.name.name.clone(),
+            exports: Vec::new(),
+            imports: Vec::new(),
+            items: Vec::new(),
+        };
+        for item in &world.items {
+            let span = item.iface.span();
+            let (id, written) = match &item.iface {
+                InterfaceRef::Local(name) => match names.get(name.name.as_str()) {
+                    Some(TopLevel::Interface(id)) if *id < interfaces.len() => {
+                        (*id, name.name.clone())
+                    }
+                    Some(TopLevel::Interface(id)) => {
+                        let full = program.interfaces[*id].foreign.as_ref().unwrap().display();
+                        return err(
+                            Code::UnknownExportedInterface,
+                            span,
+                            format!(
+                                "the package has no interface `{}`: `{}` is the interface `{full}` of another package, write `{full}`",
+                                name.name, name.name
+                            ),
+                        );
+                    }
+                    Some(other) => {
+                        return err(
+                            Code::UnknownExportedInterface,
+                            span,
+                            format!("`{}` is {}, not an interface", name.name, other.describe()),
+                        );
+                    }
+                    None => {
+                        return err(
+                            Code::UnknownExportedInterface,
+                            span,
+                            format!("unknown interface `{}`", name.name),
+                        );
+                    }
+                },
+                InterfaceRef::Foreign(f) => {
+                    let id = foreign_names
+                        .iter()
+                        .find(|(_, i)| {
+                            program.interfaces[*i].foreign.as_ref().unwrap().display()
+                                == f.display()
+                        })
+                        .map(|(_, i)| *i)
+                        .expect("foreign interface resolved");
+                    (id, f.display())
+                }
+            };
+            let world_name = &world.name.name;
+            if item.import {
+                if def.imports.contains(&id) {
                     return err(
-                        Code::UnknownExportedInterface,
-                        export.span,
+                        Code::DuplicateImport,
+                        span,
                         format!(
-                            "`{}` is {}, not an interface",
-                            export.name,
-                            other.describe()
+                            "interface `{written}` is already imported by world `{world_name}`"
                         ),
                     );
                 }
-                None => {
+                if def.exports.contains(&id) {
                     return err(
-                        Code::UnknownExportedInterface,
-                        export.span,
-                        format!("unknown interface `{}`", export.name),
+                        Code::DuplicateImport,
+                        span,
+                        format!(
+                            "world `{world_name}` exports interface `{written}`, so it cannot import it"
+                        ),
                     );
                 }
-            };
-            if exports.contains(&id) {
-                return err(
-                    Code::DuplicateExport,
-                    export.span,
-                    format!(
-                        "interface `{}` is already exported by world `{}`",
-                        export.name, world.name.name
-                    ),
-                );
+                def.imports.push(id);
+            } else {
+                if def.exports.contains(&id) {
+                    return err(
+                        Code::DuplicateExport,
+                        span,
+                        format!(
+                            "interface `{written}` is already exported by world `{world_name}`"
+                        ),
+                    );
+                }
+                if def.imports.contains(&id) {
+                    return err(
+                        Code::DuplicateImport,
+                        span,
+                        format!(
+                            "world `{world_name}` imports interface `{written}`, so it cannot export it"
+                        ),
+                    );
+                }
+                def.exports.push(id);
             }
-            exports.push(id);
+            def.items.push((item.import, id));
         }
-        program.worlds.push(hir::WorldDef {
-            name: world.name.name.clone(),
-            exports,
-        });
+        program.worlds.push(def);
     }
 
-    // 4. Exported functions: types that can cross the boundary (§ 7.11). They have no
-    //    parameter limit (§ 13.6).
+    // 6. Exported functions, and functions of the imported interfaces of the package:
+    //    types that can cross the boundary (§ 7.11). They have no parameter limit
+    //    (§ 13.6).
     for world in &program.worlds {
-        for &iface_id in &world.exports {
+        let crossing = world
+            .exports
+            .iter()
+            .chain(&world.imports)
+            .filter(|&&i| i < interfaces.len());
+        for &iface_id in crossing {
             let iface = interfaces[iface_id];
             for func in iface.funcs() {
                 let def = &program.funcs[scopes[iface_id].funcs[func.name.name.as_str()]];
@@ -304,7 +455,11 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                     world,
                     &signature,
                     &func.name,
-                    "exported function",
+                    if world.exports.contains(&iface_id) {
+                        "exported function"
+                    } else {
+                        "imported function"
+                    },
                 )?;
             }
             // The types of an exported interface all appear in the WIT (§ 13.1).
@@ -316,7 +471,11 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                     world,
                     &[ty],
                     &decl.name,
-                    "type of an exported interface",
+                    if world.exports.contains(&iface_id) {
+                        "type of an exported interface"
+                    } else {
+                        "type of an imported interface"
+                    },
                 )?;
             }
         }
@@ -344,7 +503,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         );
     }
 
-    // 5. Globals (§ 6.4, § 8.18).
+    // 7. Globals (§ 6.4, § 8.18).
     let mut global_ids = HashMap::new();
     for global in &globals {
         let ty = resolver.resolve(&mut types, &global.ty, None)?;
@@ -373,7 +532,8 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         });
     }
 
-    // 6. Function bodies.
+    // 8. Function bodies.
+    let mut foreign_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
     for (id, func) in funcs.iter().enumerate() {
         let iface = program.funcs[id].interface;
         let ret = program.funcs[id].ret;
@@ -401,9 +561,47 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
             );
         }
         let locals = cx.locals;
+        foreign_calls.push(cx.foreign_calls);
         let def = &mut program.funcs[id];
         def.locals = locals;
         def.body = body;
+    }
+
+    // 9. Calls to interfaces of other packages, world by world (E0221).
+    for (w, world) in program.worlds.iter().enumerate() {
+        let (used, _) = program.reach(w);
+        for (f, calls) in foreign_calls.iter().enumerate() {
+            if !used[f] {
+                continue;
+            }
+            for &(callee, span) in calls {
+                let iface = program.funcs[callee].interface;
+                if world.imports.contains(&iface) {
+                    continue;
+                }
+                let caller = &program.funcs[f];
+                let full = program.interfaces[iface]
+                    .foreign
+                    .as_ref()
+                    .unwrap()
+                    .display();
+                return err(
+                    Code::UnimportedCall,
+                    span,
+                    format!(
+                        "`{}::{}` calls `{}::{}`, of the interface `{full}`, but world `{}` reaches `{}::{}` and does not import `{full}`: add `import {full};` to world `{}`",
+                        program.interfaces[caller.interface].name,
+                        caller.name,
+                        program.interfaces[iface].name,
+                        program.funcs[callee].name,
+                        world.name,
+                        program.interfaces[caller.interface].name,
+                        caller.name,
+                        world.name,
+                    ),
+                );
+            }
+        }
     }
 
     program.types = types;
@@ -448,9 +646,74 @@ fn is_constant_hir(e: &hir::Expr) -> bool {
 
 /// Functions and types of an interface, by name.
 #[derive(Default)]
-struct InterfaceScope<'a> {
-    funcs: HashMap<&'a str, FuncId>,
-    types: HashMap<&'a str, DeclId>,
+pub(super) struct InterfaceScope {
+    funcs: HashMap<String, FuncId>,
+    types: HashMap<String, DeclId>,
+    /// Types of another package that are aliases of a type that is not declared:
+    /// `type instant = u64` (§ 13.2).
+    aliases: HashMap<String, Type>,
+    /// Items of another package that code cannot use, with the reason (E0215).
+    unavailable: HashMap<String, String>,
+    /// An interface of another package.
+    foreign: bool,
+}
+
+impl InterfaceScope {
+    /// The error for an item of another package that code cannot use, if `name` is one.
+    fn unavailable<T>(&self, iface: &str, name: &Ident) -> Option<Result<T>> {
+        let reason = self.unavailable.get(name.name.as_str())?;
+        Some(err(
+            Code::ForeignInterface,
+            name.span,
+            format!(
+                "`{iface}::{}` cannot be used from WaSL: {reason}",
+                name.name
+            ),
+        ))
+    }
+}
+
+/// The interface of a dependency named `namespace:package/interface` in a world (E0215).
+fn foreign_interface(deps: &Dependencies, f: &ast::ForeignName) -> Result<wit_parser::InterfaceId> {
+    let package = format!("{}:{}", kebab(&f.namespace.name), kebab(&f.package.name));
+    let span = f.namespace.span.to(f.name.span);
+    let Some(id) = deps.package(&package) else {
+        return err(
+            Code::ForeignInterface,
+            span,
+            format!(
+                "`{}` is not a dependency of the package: add `\"{package}\"` to `[dependencies]` in `wasl.toml`",
+                package.replace('-', "_")
+            ),
+        );
+    };
+    let pkg = &deps.resolve().packages[id];
+    match pkg.interfaces.get(&kebab(&f.name.name)) {
+        Some(&iface) => Ok(iface),
+        None => {
+            let mut known: Vec<String> = pkg
+                .interfaces
+                .keys()
+                .filter_map(|n| wasl_name(n))
+                .map(|n| format!("`{n}`"))
+                .collect();
+            known.sort();
+            err(
+                Code::ForeignInterface,
+                f.name.span,
+                format!(
+                    "package `{}` has no interface `{}`{}",
+                    f.namespace.name.clone() + ":" + &f.package.name,
+                    f.name.name,
+                    if known.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; its interfaces are {}", known.join(", "))
+                    }
+                ),
+            )
+        }
+    }
 }
 
 /// Fields, cases or flags declared twice (E0207), more than 32 flags (E0212).
@@ -581,7 +844,27 @@ fn check_boundary_types(
                 );
             }
             let iface = &program.interfaces[decl.interface];
-            if !world.exports.contains(&decl.interface) && !iface.funcs.is_empty() {
+            if let Some(f) = &iface.foreign
+                && !world.imports.contains(&decl.interface)
+                && !iface.funcs.is_empty()
+            {
+                return err(
+                    Code::UnexportedTypeInterface,
+                    at.span,
+                    format!(
+                        "{what} `{}` uses the type `{}`, but world `{}` does not import interface `{}`, which has functions: add `import {};` to the world",
+                        at.name,
+                        types.display(types.decl_type_of(id)),
+                        world.name,
+                        f.display(),
+                        f.display()
+                    ),
+                );
+            }
+            if !world.exports.contains(&decl.interface)
+                && !world.imports.contains(&decl.interface)
+                && !iface.funcs.is_empty()
+            {
                 return err(
                     Code::UnexportedTypeInterface,
                     at.span,
@@ -623,11 +906,20 @@ fn check_boundary_types(
 
 /// Resolves the types written in the source (§ 7.8).
 struct Resolver<'a> {
-    names: &'a HashMap<&'a str, TopLevel>,
-    scopes: &'a [InterfaceScope<'a>],
+    names: &'a HashMap<String, TopLevel>,
+    scopes: &'a [InterfaceScope],
 }
 
 impl Resolver<'_> {
+    /// The name code gives to an interface.
+    fn interface_name(&self, iface: InterfaceId) -> String {
+        self.names
+            .iter()
+            .find(|(_, t)| matches!(t, TopLevel::Interface(i) if *i == iface))
+            .map(|(n, _)| n.clone())
+            .unwrap_or_default()
+    }
+
     /// The type designated by `ty`, written in interface `iface` (`None` for a global).
     fn resolve(
         &self,
@@ -661,9 +953,27 @@ impl Resolver<'_> {
                     .map(|t| self.resolve(types, t, iface))
                     .transpose()?,
             },
-            K::Named(name) => TypeKind::Decl(self.decl(name, iface)?),
+            K::Named(name) => {
+                if let Some(&t) = self.alias(name, iface) {
+                    return Ok(t);
+                }
+                TypeKind::Decl(self.decl(name, iface)?)
+            }
         };
         Ok(types.intern(kind))
+    }
+
+    /// The type of another package named `name`, when it is an alias of a type that is
+    /// not declared (`type instant = u64`).
+    fn alias(&self, name: &ast::TypeName, current: Option<InterfaceId>) -> Option<&Type> {
+        let iface = match &name.iface {
+            Some(iface) => match self.names.get(iface.name.as_str()) {
+                Some(TopLevel::Interface(id)) => *id,
+                _ => return None,
+            },
+            None => current?,
+        };
+        self.scopes[iface].aliases.get(name.name.name.as_str())
     }
 
     /// The declared type named `name`.
@@ -697,7 +1007,7 @@ impl Resolver<'_> {
                             TopLevel::Interface(i)
                                 if self.scopes[*i].types.contains_key(name.name.name.as_str()) =>
                             {
-                                Some(*n)
+                                Some(n.as_str())
                             }
                             _ => None,
                         })
@@ -715,6 +1025,15 @@ impl Resolver<'_> {
         if let Some(&id) = scope.types.get(name.name.name.as_str()) {
             return Ok(id);
         }
+        if let Some(e) = scope.unavailable(&self.interface_name(iface), &name.name) {
+            return e;
+        }
+        if scope.aliases.contains_key(name.name.name.as_str()) {
+            return unknown(format!(
+                "`{}` is an alias of a type that is not a record or a flags type",
+                name.name.name
+            ));
+        }
         if scope.funcs.contains_key(name.name.name.as_str()) {
             return unknown(format!("`{}` is a function, not a type", name.name.name));
         }
@@ -727,7 +1046,7 @@ impl Resolver<'_> {
                     TopLevel::Interface(i)
                         if self.scopes[*i].types.contains_key(name.name.name.as_str()) =>
                     {
-                        Some(*n)
+                        Some(n.as_str())
                     }
                     _ => None,
                 })
@@ -751,7 +1070,10 @@ mod tests {
     use crate::source::FileId;
 
     fn analyze_str(text: &str) -> Result<hir::Program> {
-        analyze(&parse(tokenize(FileId(0), text)?)?)
+        analyze(
+            &parse(tokenize(FileId(0), text)?)?,
+            &Dependencies::default(),
+        )
     }
 
     /// Analyzes a program made of a global `g`, a function `f(n: u32, x: f64, b: bool) -> u32` and the given body.

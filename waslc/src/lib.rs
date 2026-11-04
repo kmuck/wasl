@@ -41,6 +41,9 @@ pub struct World {
     pub name: String,
     /// Interfaces exported by the world, in declaration order.
     pub exports: Vec<ExportedInterface>,
+    /// Interfaces imported by the world, in declaration order, with their WIT name:
+    /// `accounts`, `wasi:cli/stdout@0.2.6`.
+    pub imports: Vec<String>,
 }
 
 /// An interface exported by a world, with WaSL names.
@@ -76,8 +79,8 @@ pub fn analyze(package: &Package, sources: &SourceMap, deps: &Dependencies) -> R
         let tokens = lexer::tokenize(id, &sources.get(id).text)?;
         items.extend(parser::parse(tokens)?);
     }
-    let program = sema::analyze(&items)?;
-    let wit = wit::generate(&program, package)?;
+    let program = sema::analyze(&items, deps)?;
+    let wit = wit::generate(&program, package, deps)?;
     let interface_names = wit.canonical_interface_names(&program);
     let worlds = program
         .worlds
@@ -94,6 +97,14 @@ pub fn analyze(package: &Package, sources: &SourceMap, deps: &Dependencies) -> R
                         .iter()
                         .map(|&f| program.funcs[f].name.clone())
                         .collect(),
+                })
+                .collect(),
+            imports: world
+                .imports
+                .iter()
+                .map(|&iface| match &program.interfaces[iface].foreign {
+                    Some(f) => f.wit_name(),
+                    None => wit::kebab(&program.interfaces[iface].name),
                 })
                 .collect(),
         })
