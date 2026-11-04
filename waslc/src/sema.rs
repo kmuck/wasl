@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::ast::{self, ExprKind, Ident, InterfaceRef, Item, UnaryOp};
 use crate::deps::Dependencies;
-use crate::diag::{Code, Result, err};
+use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
 use crate::source::Span;
 use crate::types::{
@@ -44,7 +44,17 @@ impl TopLevel {
 
 /// Analyzes the package. Items must be given in the deterministic file order; `deps`
 /// holds the WIT of the packages it depends on (§ 3.5).
-pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
+///
+/// An error in the declarations (steps 2 to 8 of § 11.2) stops the analysis and is
+/// returned. The errors of function bodies and of calls to foreign interfaces (steps 9
+/// and 10) do not: each function stops at its first error, and the analysis goes on with
+/// the next one. They are pushed to `errors`, and the program is only valid when
+/// `errors` is empty.
+pub fn analyze(
+    items: &[Item],
+    deps: &Dependencies,
+    errors: &mut Vec<Diagnostic>,
+) -> Result<hir::Program> {
     let mut worlds = Vec::new();
     let mut interfaces = Vec::new();
     let mut globals = Vec::new();
@@ -730,56 +740,67 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
         });
     }
 
-    // 8. Function bodies.
+    // 8. Function bodies, one error at most per function (§ 11.2).
     let mut foreign_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
     for (id, func) in funcs.iter().enumerate() {
         let iface = program.funcs[id].interface;
         let ret = program.funcs[id].ret;
-        let mut cx = FnCx::new(
-            &program,
-            &mut types,
-            &resolver,
-            &global_ids,
-            Some(iface),
-            ret,
-        );
-        cx.scopes.push(Vec::new());
-        let mut params = program.funcs[id].params.iter();
-        if let hir::FuncKind::Method(_) = program.funcs[id].kind {
-            let (_, ty) = params.next().expect("self");
-            let this = Ident {
-                name: "self".into(),
-                span: func.name.span,
-            };
-            cx.declare(&this, *ty)?;
-        }
-        for (param, (_, ty)) in func.params.iter().zip(params) {
-            cx.declare(&param.name, *ty)?;
-        }
-        let body = cx.block(&func.body)?;
-        if ret.is_some() && !always_returns(&body) {
-            return err(
-                Code::MissingReturn,
-                func.name.span,
-                format!(
-                    "{} `{}` does not end with a `return` on every path",
-                    if func.name.name == "constructor" {
-                        "the constructor of"
-                    } else {
-                        "function"
-                    },
-                    func.name.name
-                ),
+        let checked = (|| {
+            let mut cx = FnCx::new(
+                &program,
+                &mut types,
+                &resolver,
+                &global_ids,
+                Some(iface),
+                ret,
             );
+            cx.scopes.push(Vec::new());
+            let mut params = program.funcs[id].params.iter();
+            if let hir::FuncKind::Method(_) = program.funcs[id].kind {
+                let (_, ty) = params.next().expect("self");
+                let this = Ident {
+                    name: "self".into(),
+                    span: func.name.span,
+                };
+                cx.declare(&this, *ty)?;
+            }
+            for (param, (_, ty)) in func.params.iter().zip(params) {
+                cx.declare(&param.name, *ty)?;
+            }
+            let body = cx.block(&func.body)?;
+            if ret.is_some() && !always_returns(&body) {
+                return err(
+                    Code::MissingReturn,
+                    func.name.span,
+                    format!(
+                        "{} `{}` does not end with a `return` on every path",
+                        if func.name.name == "constructor" {
+                            "the constructor of"
+                        } else {
+                            "function"
+                        },
+                        func.name.name
+                    ),
+                );
+            }
+            Ok((cx.locals, body, cx.foreign_calls))
+        })();
+        match checked {
+            Ok((locals, body, calls)) => {
+                foreign_calls.push(calls);
+                let def = &mut program.funcs[id];
+                def.locals = locals;
+                def.body = body;
+            }
+            Err(d) => {
+                errors.push(d);
+                foreign_calls.push(Vec::new());
+            }
         }
-        let locals = cx.locals;
-        foreign_calls.push(cx.foreign_calls);
-        let def = &mut program.funcs[id];
-        def.locals = locals;
-        def.body = body;
     }
 
     // 9. Calls to interfaces of other packages, world by world (E0221).
+    let mut reported: Vec<Span> = Vec::new();
     for (w, world) in program.worlds.iter().enumerate() {
         let (used, _) = program.reach(w);
         for (f, calls) in foreign_calls.iter().enumerate() {
@@ -797,7 +818,12 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                     .as_ref()
                     .unwrap()
                     .display();
-                return err(
+                // One error per call, even when several worlds reach it.
+                if reported.contains(&span) {
+                    continue;
+                }
+                reported.push(span);
+                errors.push(Diagnostic::new(
                     Code::UnimportedCall,
                     span,
                     format!(
@@ -811,7 +837,7 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                         caller.name,
                         world.name,
                     ),
-                );
+                ));
             }
         }
     }
@@ -1559,11 +1585,18 @@ mod tests {
     use crate::parser::parse;
     use crate::source::FileId;
 
+    /// Analyzes `text`, and returns its first error.
     fn analyze_str(text: &str) -> Result<hir::Program> {
-        analyze(
+        let mut errors = Vec::new();
+        let program = analyze(
             &parse(tokenize(FileId(0), text)?)?,
             &Dependencies::default(),
-        )
+            &mut errors,
+        )?;
+        match errors.into_iter().next() {
+            Some(d) => Err(d),
+            None => Ok(program),
+        }
     }
 
     /// Analyzes a program made of a global `g`, a function `f(n: u32, x: f64, b: bool) -> u32` and the given body.

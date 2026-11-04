@@ -13,6 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `weasel call` takes the world to run, as `build` does: `weasel call <world> <interface>::<function> [<arguments>…]` (§ 14.2). The function is always written with its interface; a function that the world does not export is an error that lists the functions of the world. `call` no longer looks for the function in every world.
+- `weasel init` takes the package as in WIT, `weasel init <namespace>:<name>[@<version>]` (§ 14.2), instead of a name and a `--namespace` option; the version defaults to `0.1.0`.
+- Each option of `weasel` has a single spelling, its long name (§ 14.1): `--help` and `--version`. The one-letter options `-h` and `-V` and the `help` command are removed.
+- `waslc::Analysis::world` returns a world of the package, or E9001 when the package does not define it.
+- A compilation reports several errors (§ 11.2): the first syntax error of each file, then, when there is none, the first error of the declarations, or the first error of each function body and every call to an interface that the world does not import. `weasel` shows the first ten, one per line, and counts the others (§ 14.1). `waslc::analyze` returns its errors as a `Vec<Diagnostic>`.
+
 ## [0.3.0] - 2026-11-04
 
 Composing with other components, implementing the [v0.3 specification](docs/spec_v0.3/README.md) (provisional until v0.4): dependencies, imports, resources and their handles, `?`, and implementations of the interfaces of WASI. The target programs, [`examples/catalog`](examples/catalog) with [`examples/checkout`](examples/checkout), and [`examples/hello`](examples/hello), build and run in the continuous integration.

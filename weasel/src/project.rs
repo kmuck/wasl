@@ -9,6 +9,9 @@ use crate::deps;
 use crate::error::{Error, Result};
 use crate::manifest::{self, Manifest};
 
+/// Number of compilation errors shown, like the Go compiler (§ 14.1).
+pub const MAX_ERRORS: usize = 10;
+
 /// Directory where components are written.
 pub const BUILD_DIR: &str = "build";
 
@@ -87,20 +90,33 @@ impl Project {
         self.analyze_with(&deps)
     }
 
-    /// Analyzes the whole project, with its dependencies already resolved.
+    /// Analyzes the whole project, with its dependencies already resolved. The error
+    /// shows the first [`MAX_ERRORS`] errors of the compilation, one per line (§ 14.1).
     pub fn analyze_with(&self, deps: &Dependencies) -> Result<Analysis> {
-        waslc::analyze(&self.package, &self.sources, deps).map_err(|d| {
-            if d.code.as_str() == "E0200" && d.span.is_none() {
-                // Errors of the dependencies are about the manifest (§ 11.2).
-                Error::rendered(format!(
-                    "{}: error[{}]: {}",
-                    display(&self.root.join(manifest::FILE_NAME)),
-                    d.code.as_str(),
-                    d.message
-                ))
-            } else {
-                Error::diagnostic(&d, &self.sources)
+        waslc::analyze(&self.package, &self.sources, deps).map_err(|errors| {
+            let mut lines: Vec<String> = errors
+                .iter()
+                .take(MAX_ERRORS)
+                .map(|d| {
+                    if d.code.as_str() == "E0200" && d.span.is_none() {
+                        // Errors of the dependencies are about the manifest (§ 11.2).
+                        format!(
+                            "{}: error[{}]: {}",
+                            display(&self.root.join(manifest::FILE_NAME)),
+                            d.code.as_str(),
+                            d.message
+                        )
+                    } else {
+                        d.display(&self.sources).to_string()
+                    }
+                })
+                .collect();
+            match errors.len().saturating_sub(MAX_ERRORS) {
+                0 => {}
+                1 => lines.push("error: 1 more error not shown".into()),
+                n => lines.push(format!("error: {n} more errors not shown")),
             }
+            Error::rendered(lines.join("\n"))
         })
     }
 

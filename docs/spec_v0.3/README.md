@@ -46,9 +46,9 @@ interface invoices {
 ```
 
 ```sh
-weasel build billing                                                            # → build/billing.wasm
-weasel call invoices::total '[{label: "pen", quantity: 3, unit-price: 150}]'    # → ok(450)
-weasel call invoices::total '[]'                                                # → err(no-lines)
+weasel build billing                                                                    # → build/billing.wasm
+weasel call billing invoices::total '[{label: "pen", quantity: 3, unit-price: 150}]'    # → ok(450)
+weasel call billing invoices::total '[]'                                                # → err(no-lines)
 ```
 
 ## Chapters

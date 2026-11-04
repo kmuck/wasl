@@ -18,9 +18,16 @@ src/math.wasl:3:12: error[E0400]: mismatched types: expected `u64`, found `u32`
 - `<code>` is a stable code (§ 11.3); `<message>` is an English sentence that explains the error and, when possible, how to fix it.
 - An error that is not located in a source file omits the location: `error[<code>]: <message>`.
 
-## 11.2 First error only
+## 11.2 Which errors are reported
 
-Compilation **stops at the first error**. Which error is first is fully determined, so that a given program always produces the same diagnostic. The package is analyzed in this order:
+A compilation reports **several errors**, but never an error that another one may have caused. The rule follows the steps below:
+
+- **Syntax**: each file reports its first lexical or syntax error, and every file is parsed. A package with a syntax error is not analyzed further: the declarations missing from the broken file would cause false errors.
+- **Declarations** (steps 2 to 8): the first error stops the compilation. Every function body depends on the declarations, so a wrong declaration would be reported again in each body that uses it.
+- **Function bodies** (step 9): each function reports its first error, and the analysis goes on with the next function. A function is analyzed alone, so its error cannot cause an error in another function.
+- **Calls to foreign interfaces** (step 10): every call that a world reaches without importing its interface is reported, once.
+
+The errors are reported in the order of the steps, which is fully determined, so that a given program always produces the same diagnostics. A tool may show only the first ones: `weasel` shows ten (§ 14.1). The package is analyzed in this order:
 
 1. **Lexing and parsing**, file by file in the order of § 3.3. Each file is entirely tokenized (lexical errors, E0001 to E0007), then parsed (syntax errors, E0100), before the next file.
 2. **Top-level names**, in file order then text order: duplicates (E0201).
@@ -34,9 +41,12 @@ Compilation **stops at the first error**. Which error is first is fully determin
 
 10. **Calls to foreign interfaces**, world by world: the functions reachable from its exports that call a function of an interface the world does not import (E0221).
 
-Errors of the dependencies (§ 3.5) are reported before step 1, with the location of the dependency: `wasl.toml` for its declaration, the files of a path dependency for its own errors.
+Errors of the dependencies (§ 3.5) are reported before step 1, with the location of the dependency: `wasl.toml` for its declaration, the files of a path dependency for its own errors. The first one stops the compilation.
 
-Reporting several errors per compilation is planned for a later version.
+```
+src/orders.wasl:7:12: error[E0300]: unknown name `totl`
+src/orders.wasl:19:12: error[E0400]: mismatched types: expected `u32`, found `u64`
+```
 
 ## 11.3 Error codes
 

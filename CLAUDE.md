@@ -34,7 +34,7 @@ Do not re-propose these unless Karim asks.
 - **Locals get the default value of their Wasm type** when they have no initializer: numbers are zero, an enum is its first case, an option is `none`; other heap types need an initializer (E0410). No definite-assignment analysis.
 - **Values are never ignored silently.** A call statement must call a function without a return value (E0413); `_ = f();` is the explicit `drop`.
 - **Recursive types** are accepted when they have a value (E0211), and stay internal, since WIT forbids them (E0208).
-- **Stop at the first error** for now; several errors per compilation are planned for 0.5.
+- **Several errors per compilation, without cascades** (§ 11.2): one syntax error per file, then no analysis; the first error of the declarations stops; one error per function body. `weasel` shows the first ten, like Go.
 - **Imported resource handles are released automatically** (0.3): when their local is overwritten and on every exit of the function, unless they were moved; no explicit `drop`. A resource of the package is a plain WasmGC value inside the component.
 - **Resource calls** (0.3): methods are called `c.add(x)`, constructors `carts::cart(…)` like a conversion.
 - **Imports** (0.3) cover interfaces of other packages and interfaces of the same package exported by another world; dependencies are fetched with the `wkg` crates.

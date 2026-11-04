@@ -21,16 +21,20 @@ struct Export {
     params: Vec<(String, Type)>,
 }
 
-/// Calls `function` (`interface::function`, or `function` if unambiguous) with the given
-/// arguments, written in WAVE (§ 14.5). Returns the result in WAVE, or `None` for a
+/// Calls `function` (`interface::function`), exported by the world `world`, with the
+/// given arguments, written in WAVE (§ 14.5). Returns the result in WAVE, or `None` for a
 /// function without one.
-///
-/// The function is looked up in every world of the project: an interface has a single
-/// implementation per package, so every world that exports it runs the same code. Only the
-/// component of one of those worlds is built.
-pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option<String>> {
+pub fn call(
+    project: &Project,
+    world: &str,
+    function: &str,
+    args: &[String],
+) -> Result<Option<String>> {
     let analysis = project.analyze()?;
-    let (world, display) = resolve(analysis.worlds(), function)?;
+    let exports = analysis
+        .world(world)
+        .map_err(|d| Error::diagnostic(&d, &project.sources))?;
+    let display = resolve(exports, function)?;
     // The imports of the world are provided by other components, composed with it, or
     // by the host (§ 14.2).
     let bytes = crate::compose::component(project, &analysis, world)?;
@@ -172,59 +176,45 @@ fn exported_functions(engine: &Engine, component: &Component) -> Vec<Export> {
     exports
 }
 
-/// Resolves `interface::function` or `function` among the functions exported by the
-/// worlds of the project. Returns a world that exports it, and its full WaSL name.
-fn resolve<'a>(worlds: &'a [waslc::World], function: &str) -> Result<(&'a str, String)> {
-    // Every exported function, listed once even if several worlds export its interface,
-    // with the first world that exports it, preferring a world without imports.
-    let mut functions: Vec<(String, &str)> = Vec::new();
-    let imports = |name: &str| {
-        worlds
+/// Checks that `function`, written `interface::function`, is exported by `world`, and
+/// returns it.
+fn resolve(world: &waslc::World, function: &str) -> Result<String> {
+    let functions: Vec<String> = world
+        .exports
+        .iter()
+        .flat_map(|i| i.functions.iter().map(|f| format!("{}::{f}", i.name)))
+        .collect();
+    if functions.iter().any(|f| f == function) {
+        return Ok(function.to_string());
+    }
+    let name = &world.name;
+    if functions.is_empty() {
+        return Err(Error::new(format!(
+            "world `{name}` does not export any function of the package: export one of its interfaces from the world"
+        )));
+    }
+    let list = functions
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !function.contains("::") {
+        // `add` instead of `math::add`: name the candidates with this function name.
+        let candidates: Vec<String> = functions
             .iter()
-            .find(|w| w.name == name)
-            .is_some_and(|w| !w.imports.is_empty())
-    };
-    for world in worlds {
-        for interface in &world.exports {
-            for name in &interface.functions {
-                let full = format!("{}::{name}", interface.name);
-                match functions.iter_mut().find(|(f, _)| *f == full) {
-                    None => functions.push((full, &world.name)),
-                    Some((_, w)) if imports(w) && world.imports.is_empty() => *w = &world.name,
-                    Some(_) => {}
-                }
-            }
+            .filter(|f| f.rsplit("::").next() == Some(function))
+            .map(|f| format!("`{f}`"))
+            .collect();
+        if !candidates.is_empty() {
+            return Err(Error::new(format!(
+                "write the function with its interface: {}",
+                candidates.join(", ")
+            )));
         }
     }
-
-    let matches: Vec<&(String, &str)> = if function.contains("::") {
-        functions.iter().filter(|(f, _)| f == function).collect()
-    } else {
-        functions
-            .iter()
-            .filter(|(f, _)| f.rsplit("::").next() == Some(function))
-            .collect()
-    };
-    let list = |items: &mut dyn Iterator<Item = &String>| {
-        items
-            .map(|f| format!("`{f}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    match matches.as_slice() {
-        [(full, world)] => Ok((world, full.clone())),
-        [] if functions.is_empty() => Err(Error::new(
-            "the project does not export any function: export an interface from a world",
-        )),
-        [] => Err(Error::new(format!(
-            "no exported function `{function}`; exported functions: {}",
-            list(&mut functions.iter().map(|(f, _)| f))
-        ))),
-        several => Err(Error::new(format!(
-            "`{function}` is ambiguous, write one of: {}",
-            list(&mut several.iter().map(|(f, _)| f))
-        ))),
-    }
+    Err(Error::new(format!(
+        "world `{name}` does not export `{function}`; its functions are: {list}"
+    )))
 }
 
 /// WIT name → WaSL name: `fib-rec` → `fib_rec`.

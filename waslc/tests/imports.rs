@@ -53,7 +53,7 @@ fn analyze(source: &str) -> waslc::Result<waslc::Analysis> {
     let package = Package::new("test", "app", "0.1.0").unwrap();
     let mut sources = SourceMap::default();
     sources.add("src/main.wasl".into(), source.to_string());
-    waslc::analyze(&package, &sources, &deps())
+    waslc::analyze(&package, &sources, &deps()).map_err(|mut e| e.remove(0))
 }
 
 fn build(source: &str, world: &str) -> Vec<u8> {
@@ -61,6 +61,7 @@ fn build(source: &str, world: &str) -> Vec<u8> {
     let mut sources = SourceMap::default();
     sources.add("src/main.wasl".into(), source.to_string());
     waslc::analyze(&package, &sources, &deps())
+        .map_err(|mut e| e.remove(0))
         .and_then(|analysis| analysis.build(world))
         .unwrap_or_else(|e| panic!("{}", e.display(&sources)))
 }

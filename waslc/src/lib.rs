@@ -63,24 +63,41 @@ pub struct Analysis {
 
 /// Analyzes a package: checks every source file and prepares the WIT of the package.
 ///
-/// Sources must be given in a deterministic order (by convention, sorted by path): that
-/// order decides which error is reported first. `deps` holds the WIT of the packages it
+/// Returns every error found, in the order of § 11.2: one per file with a syntax error;
+/// otherwise the first error of the declarations, or one per function body with an
+/// error. Sources must be given in a deterministic order (by convention, sorted by
+/// path): that order decides the order of the errors. `deps` holds the WIT of the packages it
 /// depends on (§ 3.5).
-pub fn analyze(package: &Package, sources: &SourceMap, deps: &Dependencies) -> Result<Analysis> {
+pub fn analyze(
+    package: &Package,
+    sources: &SourceMap,
+    deps: &Dependencies,
+) -> std::result::Result<Analysis, Vec<Diagnostic>> {
     let own = format!("{}:{}", package.namespace, package.name);
     if deps.names().any(|name| name == own) {
-        return Err(Diagnostic::without_span(
+        return Err(vec![Diagnostic::without_span(
             Code::Manifest,
             format!("the package `{own}` cannot depend on itself"),
-        ));
+        )]);
     }
+    // Each file is parsed even when another one has a syntax error, but a package with
+    // a syntax error is not analyzed: its missing declarations would cause false errors.
     let mut items = Vec::new();
+    let mut errors = Vec::new();
     for id in sources.ids() {
-        let tokens = lexer::tokenize(id, &sources.get(id).text)?;
-        items.extend(parser::parse(tokens)?);
+        match lexer::tokenize(id, &sources.get(id).text).and_then(parser::parse) {
+            Ok(file) => items.extend(file),
+            Err(d) => errors.push(d),
+        }
     }
-    let program = sema::analyze(&items, deps)?;
-    let wit = wit::generate(&program, package, deps)?;
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let program = sema::analyze(&items, deps, &mut errors).map_err(|d| vec![d])?;
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let wit = wit::generate(&program, package, deps).map_err(|d| vec![d])?;
     let interface_names = wit.canonical_interface_names(&program);
     let worlds = program
         .worlds
@@ -151,15 +168,15 @@ impl Analysis {
         self.wit.to_text()
     }
 
-    /// Builds the component of the world `world`.
-    pub fn build(&self, world: &str) -> Result<Vec<u8>> {
-        let Some(id) = self.program.worlds.iter().position(|w| w.name == world) else {
+    /// The world `world`, or E9001 when the package does not define it.
+    pub fn world(&self, world: &str) -> Result<&World> {
+        self.worlds.iter().find(|w| w.name == world).ok_or_else(|| {
             let names: Vec<String> = self
                 .worlds
                 .iter()
                 .map(|w| format!("`{}`", w.name))
                 .collect();
-            return Err(Diagnostic::without_span(
+            Diagnostic::without_span(
                 Code::UnknownWorld,
                 if names.is_empty() {
                     format!("unknown world `{world}`: the package does not define any world")
@@ -169,8 +186,19 @@ impl Analysis {
                         names.join(", ")
                     )
                 },
-            ));
-        };
+            )
+        })
+    }
+
+    /// Builds the component of the world `world`.
+    pub fn build(&self, world: &str) -> Result<Vec<u8>> {
+        self.world(world)?;
+        let id = self
+            .program
+            .worlds
+            .iter()
+            .position(|w| w.name == world)
+            .expect("the worlds of the analysis are those of the program");
         let module = codegen::generate(&self.program, id, &self.interface_names)?;
         component::build(module, &self.wit, world)
     }

@@ -8,23 +8,23 @@ Every command except `init` must be run from the **root of a WaSL project**, the
 
 | Command | Description |
 |---|---|
-| `weasel init <name>` | Creates a new project in the directory `<name>` |
+| `weasel init <namespace>:<name>[@<version>]` | Creates a new project in the directory `<name>` |
 | `weasel build <world>` | Compiles a world into its component: `build/<world>.wasm` |
 | `weasel check` | Checks the project for errors without producing components |
 | `weasel wit` | Prints the WIT of the package |
-| `weasel call <function> [args…]` | Calls a function exported by the project |
+| `weasel call <world> <function> [args…]` | Calls a function exported by a world |
 | `weasel clean` | Removes the `build/` directory |
 
-Run `weasel help <command>` for the options of a command.
+Run `weasel <command> --help` for the options of a command, and `weasel --version` for the version. Options have a single, long spelling: there is no `-h`, `-V` or `help` command.
 
 ### `weasel init`
 
 ```sh
-weasel init hello-world
-weasel init hello-world --namespace my-org
+weasel init my-org:hello-world
+weasel init my-org:hello-world@0.2.0
 ```
 
-The name is the package name, in kebab-case. The world is named after the project (`hello-world` → `hello_world`). The default namespace is `local`. The generated project:
+The package is written as in WIT: a namespace and a name, in kebab-case, and an optional version (`0.1.0` by default). The project goes in a directory named after the package name, and its world is named after it too (`hello-world` → `hello_world`). The generated project:
 
 ```
 hello-world/
@@ -45,16 +45,14 @@ A project with three worlds produces three components, with three builds.
 
 ### `weasel call`
 
-Compiles the project, then calls an exported function. The function is written as in WaSL source code: `interface::function`, or just `function` when no other exported interface has a function with that name. Each argument is parsed according to the type of the corresponding parameter.
+Compiles a world in memory, then calls one of its exported functions. The world is given first, as for `build`; the function is written as in WaSL source code, `interface::function`. Each argument is parsed according to the type of the corresponding parameter.
 
 ```sh
-weasel call math::fib 10          # 55
-weasel call fib 10                # 55, if `fib` is unambiguous
-weasel call math::clamp -50 0 10  # negative numbers need no escaping
+weasel call calculator math::fib 10          # 55
+weasel call calculator math::clamp -50 0 10  # negative numbers need no escaping
 ```
 
-- No world needs to be given: the function is looked up in every world of the project, and only the component of one world that exports it is built. An interface has a single implementation per package, so every world that exports it runs the same code.
-- Only functions of exported interfaces can be called; internal interfaces are not part of any component.
+- Only functions of the interfaces that the world exports can be called; internal interfaces are not part of any component.
 - The result is printed alone on standard output; nothing is printed for a function without a result.
 - A trap stops the call and is reported as an error:
 
@@ -144,12 +142,12 @@ Like `build`, `run` and `serve` work on a whole component, so they always take t
 | `weasel run <world> [args…]` | Runs the `wasi:cli/command` component of `<world>` |
 | `weasel serve <world>` | Serves the `wasi:http/service` component of `<world>` |
 | `weasel publish` | Publishes a component to a registry, with [wasm-pkg-tools](https://github.com/bytecodealliance/wasm-pkg-tools) |
-| `weasel init --template cli\|http` | Creates a project with a WASI entry point |
+| `weasel init <namespace>:<name> --template cli\|http` | Creates a project with a WASI entry point |
 
 ## Development
 
 ```sh
 cargo build
 cargo test
-cd ../examples/calc && cargo run --manifest-path ../../weasel/Cargo.toml -- call math::fib 10
+cd ../examples/calc && cargo run --manifest-path ../../weasel/Cargo.toml -- call calculator math::fib 10
 ```

@@ -12,27 +12,47 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 
 use error::{Error, Result};
 use project::{BUILD_DIR, Project};
 
+/// The command line has one spelling per option (§ 14.1): long options only, and no
+/// `help` command, so `--help` and `--version` replace clap's `-h`, `-V` and `weasel help`.
 #[derive(Parser)]
-#[command(name = "weasel", version, about = "Build tool for the WaSL language")]
+#[command(
+    name = "weasel",
+    version,
+    about = "Build tool for the WaSL language",
+    disable_help_flag = true,
+    disable_version_flag = true,
+    disable_help_subcommand = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    #[command(flatten)]
+    help: Help,
+    /// Print version
+    #[arg(long, action = ArgAction::Version)]
+    version: (),
+}
+
+/// `--help`, the only spelling of help, on `weasel` and on every command.
+#[derive(Args)]
+struct Help {
+    /// Print help
+    #[arg(long, action = ArgAction::Help, global = true)]
+    help: (),
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Create a new project in a new directory
     Init {
-        /// Project name (kebab-case), also used as the package name
-        name: String,
-        /// Package namespace
-        #[arg(long, default_value = "local")]
-        namespace: String,
+        /// Package of the project, `namespace:name` or `namespace:name@version`
+        /// (kebab-case); the directory is named after the package name
+        package: String,
     },
     /// Compile a world into a component (build/<world>.wasm)
     Build {
@@ -43,9 +63,11 @@ enum Command {
     Check,
     /// Print the WIT of the package
     Wit,
-    /// Call a function exported by a component of the project
+    /// Call a function exported by a world of the project
     Call {
-        /// Function to call: `interface::function`, or `function` if unambiguous
+        /// World whose component runs the function
+        world: String,
+        /// Function to call: `interface::function`
         function: String,
         /// Arguments, one per parameter
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -67,7 +89,7 @@ fn main() -> ExitCode {
 
 fn run(command: Command) -> Result<()> {
     match command {
-        Command::Init { name, namespace } => init::init(&name, &namespace),
+        Command::Init { package } => init::init(&package),
         Command::Build { world } => build(&world),
         Command::Check => {
             let project = Project::load()?;
@@ -84,8 +106,12 @@ fn run(command: Command) -> Result<()> {
             print!("{wit}");
             Ok(())
         }
-        Command::Call { function, args } => {
-            if let Some(result) = call::call(&Project::load()?, &function, &args)? {
+        Command::Call {
+            world,
+            function,
+            args,
+        } => {
+            if let Some(result) = call::call(&Project::load()?, &world, &function, &args)? {
                 println!("{result}");
             }
             Ok(())
