@@ -12,7 +12,7 @@ fn analyze(source: &str) -> waslc::Result<waslc::Analysis> {
     let package = Package::new("example", "catalog", "0.1.0").unwrap();
     let mut sources = SourceMap::default();
     sources.add("src/catalog.wasl".into(), source.to_string());
-    waslc::analyze(&package, &sources, &Dependencies::default())
+    waslc::analyze(&package, &sources, &Dependencies::default()).map_err(|mut e| e.remove(0))
 }
 
 fn fails(source: &str, code: Code, message: &str) {

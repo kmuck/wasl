@@ -664,3 +664,26 @@ fn command_line() {
         assert_eq!(run.code, Some(2), "weasel {args:?}: {}", run.stderr);
     }
 }
+
+/// Several errors per compilation: one per function, the first ten shown (§ 11.2, § 14.1).
+#[test]
+fn several_errors() {
+    let mut source = String::from("world app {\n  export i;\n}\n\ninterface i {\n");
+    for n in 0..12 {
+        source.push_str(&format!("  func f{n}() -> u32 {{ return x{n}; }}\n"));
+    }
+    source.push_str("}\n");
+    let dir = project(&[("src/app.wasl", &source)]);
+    let err = fails(dir.path(), &["check"]);
+    let lines: Vec<&str> = err.lines().collect();
+    assert_eq!(lines.len(), 11, "{err}");
+    assert_eq!(
+        lines[0],
+        "src/app.wasl:6:29: error[E0300]: unknown name `x0`"
+    );
+    assert_eq!(
+        lines[9],
+        "src/app.wasl:15:29: error[E0300]: unknown name `x9`"
+    );
+    assert_eq!(lines[10], "error: 2 more errors not shown");
+}

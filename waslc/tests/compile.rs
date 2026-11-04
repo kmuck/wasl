@@ -2,7 +2,16 @@
 
 use waslc::diag::Code;
 use waslc::source::SourceMap;
-use waslc::{Analysis, Package, analyze};
+use waslc::{Analysis, Dependencies, Diagnostic, Package};
+
+/// Analyzes a package, and returns its first error.
+fn analyze(
+    package: &Package,
+    sources: &SourceMap,
+    deps: &Dependencies,
+) -> Result<Analysis, Diagnostic> {
+    waslc::analyze(package, sources, deps).map_err(|mut e| e.remove(0))
+}
 
 fn package() -> Package {
     Package::new("example", "calc", "0.1.0").unwrap()
@@ -618,4 +627,52 @@ fn valid_v2_bodies() {
     if let Err(e) = analyze(&package(), &sources, &Default::default()) {
         panic!("{}", e.display(&sources));
     }
+}
+
+/// Every error of a compilation, rendered as the user sees them.
+fn all_errors(files: &[(&str, &str)]) -> Vec<String> {
+    let sources = sources(files);
+    match waslc::analyze(&package(), &sources, &Default::default()) {
+        Ok(_) => panic!("accepted: {files:?}"),
+        Err(errors) => errors
+            .iter()
+            .map(|e| e.display(&sources).to_string())
+            .collect(),
+    }
+}
+
+/// Several errors per compilation (§ 11.2).
+#[test]
+fn several_errors() {
+    // One error per function: the second error of `f` is not reported, `g` is analyzed.
+    assert_eq!(
+        all_errors(&[(
+            "src/a.wasl",
+            "interface i {\n  func f() -> u32 {\n    local x: u8 = 256;\n    return true;\n  }\n  func g() -> u32 {\n    return y;\n  }\n  func h() -> u32 {\n    return 1;\n  }\n}\n",
+        )]),
+        [
+            "src/a.wasl:3:19: error[E0401]: literal out of range for type `u8` (0 … 255)",
+            "src/a.wasl:7:12: error[E0300]: unknown name `y`",
+        ]
+    );
+
+    // One syntax error per file, in file order; the package is then not analyzed, so
+    // the unknown name of `c.wasl` is not reported.
+    assert_eq!(
+        all_errors(&[
+            ("src/a.wasl", "interface i {\n  func f( {\n}\n"),
+            ("src/b.wasl", "interface j {\n  func g() -> u32 { return @; }\n}\n"),
+            ("src/c.wasl", "interface k {\n  func h() -> u32 { return z; }\n}\n"),
+        ])
+        .len(),
+        2
+    );
+
+    // An error in the declarations stops the analysis before the bodies.
+    let errors = all_errors(&[(
+        "src/a.wasl",
+        "interface i {\n  func f() -> u32 { return y; }\n  func f() -> u32 { return 1; }\n}\n",
+    )]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("E0202"), "{errors:?}");
 }

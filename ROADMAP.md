@@ -59,7 +59,6 @@ Target: a hello-world command-line program and a small HTTP service served by wa
 
 - A standard library written in WaSL: text and formatting, console, HTTP routing, JSON.
 - `weasel test`, `weasel fmt`, `weasel build --all`, `weasel publish`.
-- Several errors reported per compilation.
 
 Target: a small version of the reference use case, a project with two or three worlds (`account`, `order`…) sharing their types and business logic.
 

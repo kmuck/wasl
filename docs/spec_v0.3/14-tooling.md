@@ -14,6 +14,7 @@ WaSL comes with two programs: the build tool `weasel`, used by developers, and t
 - **Standard output** only receives results: the value returned by `call`, the WIT printed by `wit`.
 - **Standard error** receives progress messages (`Built …`) and errors.
 - Compilation errors use the format of § 11.1, manifest errors the format of § 11.4, other errors `error: <message>` (§ 11.5).
+- A compilation shows its **first ten errors** (§ 11.2), one per line, as the Go compiler does; the others are counted on a last line: `error: 3 more errors not shown`.
 - **Exit code**: `0` on success, `1` on any error (including a trap during `call`), `2` for an invalid command line (unknown command, missing argument).
 - Each option has a single spelling, its long name: `weasel --help` and `weasel <command> --help` describe the commands, `weasel --version` prints the version. There are no one-letter options (`-h`, `-V`) and no `help` command.
 
@@ -149,7 +150,8 @@ deps.include(&catalog_deps)?;                                   // the dependenc
 deps.add_wit("example:catalog", "../catalog/wasl.toml", &wit)?;  // …then its WIT, `analysis.wit()`
 // A dependency whose WIT does not declare its package, or a package at two versions: E0200.
 
-// 1. Analysis of the whole package (chapters 4 to 9, 11).
+// 1. Analysis of the whole package (chapters 4 to 9, 11). Its error is a
+//    Vec<Diagnostic>: every error of the compilation, in the order of § 11.2.
 let analysis = waslc::analyze(&package, &sources, &deps)?;
 
 // Worlds of the package, with their exported interfaces and functions (WaSL names).

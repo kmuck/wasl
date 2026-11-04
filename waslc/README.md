@@ -38,7 +38,7 @@ Errors are returned as a [`Diagnostic`](src/diag.rs) with a stable code from the
 src/math.wasl:12:5: error[E0400]: mismatched types: expected `u64`, found `u32`
 ```
 
-Analysis stops at the first error. Sources must be added in a deterministic order (by convention, sorted by path), since that order decides which error is reported first.
+`analyze` returns every error of the compilation (§ 11.2): one per file with a syntax error; otherwise the first error of the declarations, or one per function body. Sources must be added in a deterministic order (by convention, sorted by path), since that order decides the order of the errors.
 
 ## Pipeline
 
@@ -90,7 +90,7 @@ waslc/
 
 ## Implementation choices
 
-- **Stop at the first error**: every stage returns `Result<_, Diagnostic>`, and `?` propagates the first error to the caller.
+- **One error per unit**: every stage returns `Result<_, Diagnostic>`, and `?` propagates the first error of its unit. The units are a file for the lexer and the parser, the declarations for the start of `sema`, and a function body for the rest (§ 11.2); `analyze` collects the errors of the units into a `Vec<Diagnostic>`.
 - **Deterministic order**: files are processed in the order they are given, then in text order, so a given error is always reported the same way.
 - **Stable error codes** (`E0001`…), defined in `diag.rs` as in the specification.
 - **No WAT text step**: the module is encoded directly in binary with `wasm-encoder`.

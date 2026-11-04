@@ -18,6 +18,7 @@ impl Runner {
         let mut sources = SourceMap::default();
         sources.add("src/main.wasl".into(), source.to_string());
         let bytes = waslc::analyze(&package, &sources, &Default::default())
+            .map_err(|mut e| e.remove(0))
             .and_then(|analysis| analysis.build(world))
             .unwrap_or_else(|e| panic!("{}", e.display(&sources)));
         let engine = Engine::default();
