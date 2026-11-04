@@ -288,7 +288,7 @@ fn f64_result(name: &str, args: &[Val]) -> f64 {
     }
 }
 
-/// Whether the call traps with `integer overflow` (§ v2.5.6).
+/// Whether the call traps with `integer overflow` (§ 10.2).
 fn overflows(name: &str, args: &[Val]) -> bool {
     match Runner::new().try_call(name, args) {
         Ok(v) => panic!("{name}{args:?} returned {v:?}"),

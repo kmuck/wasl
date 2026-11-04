@@ -1,9 +1,9 @@
-//! The component boundary (§ v2.7): layout of the Canonical ABI, adapters of the exported
+//! The component boundary (§ 13): layout of the Canonical ABI, adapters of the exported
 //! functions, lifting and lowering through linear memory, `realloc` and post-return.
 //!
 //! Values cross the boundary as deep copies. Lifting reads the flat values and the bytes
 //! of linear memory and builds new WasmGC objects; lowering writes them back, in memory
-//! allocated by the bump allocator of § v2.7.4.
+//! allocated by the bump allocator of § 13.7.
 
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, MemArg, ValType};
 
@@ -25,7 +25,7 @@ pub(crate) enum Boundary {
     Realloc,
     /// Post-return of every function whose result is in memory: frees the scratch buffer.
     PostReturn,
-    /// The core export of an exported function (§ v2.7.5).
+    /// The core export of an exported function (§ 13.8).
     Adapter(FuncId),
     /// `(ptr) -> T'`: lifts a value stored at `ptr`.
     LiftMem(Type),
@@ -216,7 +216,7 @@ pub(super) fn result_in_memory(types: &Types, func: &FuncDef) -> bool {
         .is_some_and(|t| has_list(types, t) || flat(types, t).len() > MAX_FLAT_RESULTS)
 }
 
-/// Whether an exported function needs linear memory (§ v2.7.3).
+/// Whether an exported function needs linear memory (§ 13.6).
 pub(super) fn needs_memory(types: &Types, func: &FuncDef) -> bool {
     func.params.iter().any(|(_, t)| has_list(types, *t))
         || params_flat(types, func).len() > MAX_FLAT_PARAMS
@@ -796,7 +796,7 @@ fn lower_list(cx: &mut ModuleCx, ty: Type) -> (Vec<ValType>, Vec<ValType>, Funct
     g.finish(vec![ValType::I32, ValType::I32])
 }
 
-/// The bump allocator of § v2.7.4. Locals: old_ptr = 0, old_size = 1, align = 2,
+/// The bump allocator of § 13.7. Locals: old_ptr = 0, old_size = 1, align = 2,
 /// new_size = 3, ptr = 4.
 fn realloc(cx: &mut ModuleCx) -> (Vec<ValType>, Vec<ValType>, Function) {
     let mut g = Gen::new(cx, vec![ValType::I32; 4]);
@@ -861,7 +861,7 @@ fn realloc(cx: &mut ModuleCx) -> (Vec<ValType>, Vec<ValType>, Function) {
     g.finish(vec![ValType::I32])
 }
 
-/// The core export of an exported function (§ v2.7.5): lifts the arguments, frees the
+/// The core export of an exported function (§ 13.8): lifts the arguments, frees the
 /// scratch buffer, calls the function, lowers the result.
 fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
     let types = cx.types;

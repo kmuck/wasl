@@ -1,6 +1,6 @@
 # WaSL v0.2 Specification
 
-Status: **accepted, provisional, implemented by `waslc` 0.2**. This version is the reference for v0.2, but it is not final before v0.3: it may still change with what the implementation of the compiler teaches. This version is written from its target program, [`examples/invoice`](../../examples/invoice), following the example-driven rule of § 16.1 of v0.1; `waslc` 0.2 compiles it and the continuous integration runs it.
+Status: **frozen, implemented by `waslc` 0.2**. This version no longer changes: it is merged with v0.1, without any change of rule, into the complete [v0.3 specification](../spec_v0.3/README.md), which is the reference from now on. This version is written from its target program, [`examples/invoice`](../../examples/invoice), following the example-driven rule of § 16.1 of v0.1; `waslc` 0.2 compiles it and the continuous integration runs it.
 
 Version 0.2 adds **data on the WasmGC heap**, and with it every WIT type except resources and async types: `char`, `string`, `list<T>`, `tuple<…>`, `option<T>`, `result<T, E>`, `record`, `enum`, `variant` and `flags`. Values of these types live in the garbage-collected heap of the runtime, are shared by reference inside a component, and are copied through linear memory only when they cross the boundary of a component.
 

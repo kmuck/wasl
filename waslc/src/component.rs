@@ -1,4 +1,4 @@
-//! Component assembly: core module + WIT (§ 13.5).
+//! Component assembly: core module + WIT (§ 13.9).
 
 use wit_component::{ComponentEncoder, StringEncoding, embed_component_metadata};
 

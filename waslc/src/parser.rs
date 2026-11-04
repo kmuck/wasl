@@ -109,7 +109,7 @@ impl Parser {
         Ok(())
     }
 
-    /// A type (§ v2.3.3).
+    /// A type (§ 5.2).
     fn ty(&mut self) -> Result<TypeExpr> {
         let start = self.span();
         let kind = match self.peek().clone() {
@@ -257,7 +257,7 @@ impl Parser {
         Ok(Interface { name, items })
     }
 
-    /// `record`, `enum`, `variant` or `flags` declaration (§ v2.2.3).
+    /// `record`, `enum`, `variant` or `flags` declaration (§ 7.7).
     fn type_decl(&mut self) -> Result<TypeDecl> {
         let keyword = self.bump().kind;
         let name = self.ident("a type name")?;
@@ -564,7 +564,7 @@ impl Parser {
         Ok(If { cond, then, else_ })
     }
 
-    /// `match (e) { case c { … } case d(x) { … } else { … } }` (§ v2.4.9).
+    /// `match (e) { case c { … } case d(x) { … } else { … } }` (§ 8.16).
     fn match_(&mut self) -> Result<Match> {
         self.bump();
         let scrutinee = self.condition("match")?;
@@ -627,7 +627,7 @@ impl Parser {
         Ok(cond)
     }
 
-    /// A name, or a path of up to three names separated by `::` (§ v2.3.3). The first name
+    /// A name, or a path of up to three names separated by `::` (§ 5.2). The first name
     /// may be one of the built-in types that have functions or cases.
     fn path_segments(&mut self) -> Result<Vec<Ident>> {
         let head = match self.peek().clone() {
@@ -823,7 +823,7 @@ impl Parser {
         })
     }
 
-    /// A primary expression followed by field accesses and indexes (§ v2.3.5).
+    /// A primary expression followed by field accesses and indexes (§ 8.4).
     fn postfix(&mut self) -> Result<Expr> {
         let mut expr = self.primary()?;
         loop {
@@ -897,7 +897,7 @@ impl Parser {
             | TokenKind::KwList
             | TokenKind::KwOption
             | TokenKind::KwResult => self.name_expr()?,
-            // `u32::wrapping_add(…)`: a built-in function of an integer type (§ v2.4.11).
+            // `u32::wrapping_add(…)`: a built-in function of an integer type (§ 8.17).
             TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
                 self.name_expr()?
             }
@@ -955,7 +955,7 @@ impl Parser {
         let mut segments = self.path_segments()?;
         match self.peek() {
             TokenKind::LParen => Ok(ExprKind::Call(self.call_args(segments)?)),
-            // `{` right after a type name: a record or flags literal (§ v2.3.4).
+            // `{` right after a type name: a record or flags literal (§ 5.3).
             TokenKind::LBrace if !builtin_head && segments.len() <= 2 => {
                 let name = segments.pop().expect("a path has a name");
                 let ty = TypeName {

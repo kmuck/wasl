@@ -129,7 +129,7 @@ fn first_error_follows_file_order() {
     assert!(err.starts_with("src/a.wasl:"), "{err}");
 }
 
-/// Invalid programs from the specification (§ 15.3) and their expected error code.
+/// Invalid programs from the specification (§ 15.4) and their expected error code.
 #[test]
 fn invalid_programs() {
     let cases: &[(&str, Code)] = &[
@@ -193,7 +193,7 @@ fn invalid_programs() {
 }
 
 /// Types in the WIT: declarations, `use` of types-only interfaces, erased `mut`
-/// (§ v2.7.1).
+/// (§ 13.1).
 #[test]
 fn wit_of_types() {
     let analysis = analyze_files(&[(
@@ -246,7 +246,7 @@ fn wit_of_types() {
     assert!(!wit.contains("hidden"), "{wit}");
 }
 
-/// Types that appear in the WIT cannot change (§ v2.2.7): E0214.
+/// Types that appear in the WIT cannot change (§ 7.11): E0214.
 #[test]
 fn mutable_types_stay_inside() {
     let program = |exported: &str| {
@@ -311,7 +311,7 @@ fn mutable_types_stay_inside() {
 
 const INVOICE: &str = include_str!("../../examples/invoice/src/invoice.wasl");
 
-/// The target program of v0.2 and its WIT (§ v2.10.1).
+/// The target program of v0.2 and its WIT (§ 15.3).
 #[test]
 fn invoice_example() {
     let sources = sources(&[("src/invoice.wasl", INVOICE)]);
@@ -321,7 +321,7 @@ fn invoice_example() {
         Err(e) => panic!("{}", e.display(&sources)),
     };
     let wit = analysis.wit().unwrap();
-    let spec = include_str!("../../docs/spec_v0.2/10-examples.md");
+    let spec = include_str!("../../docs/spec_v0.3/15-examples.md");
     let start = spec.find("package example:invoice@0.1.0;").unwrap();
     let end = start + spec[start..].find("```").unwrap();
     // The printer separates functions with blank lines; the specification does not.
@@ -333,11 +333,11 @@ fn invoice_example() {
     };
     assert_eq!(lines(&wit), lines(&spec[start..end]));
 
-    // It builds, with an adapter for each exported function (§ v2.7.5).
+    // It builds, with an adapter for each exported function (§ 13.8).
     analysis.build("billing").unwrap();
 }
 
-/// Invalid programs of v0.2 (§ v2.10.2): each line in a function of the target program.
+/// Invalid programs of v0.2 (§ 15.4): each line in a function of the target program.
 #[test]
 fn invalid_v2_programs() {
     let cases: &[(&str, Code)] = &[

@@ -205,7 +205,7 @@ pub struct Token {
     pub span: Span,
 }
 
-/// Words reserved for future versions and for compatibility with WIT (§ v2.3.2).
+/// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
     "import",
     "package",
@@ -300,7 +300,7 @@ impl Lexer<'_> {
             let prev = tokens.last().map(|t: &Token| &t.kind);
             let kind = match c {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident()?,
-                // Right after `.`, digits are a tuple index, never a float (§ v2.3.1).
+                // Right after `.`, digits are a tuple index, never a float (§ 4.8).
                 b'0'..=b'9' if prev == Some(&TokenKind::Dot) => self.tuple_index()?,
                 b'0'..=b'9' => self.number()?,
                 b'"' => self.string()?,
@@ -472,7 +472,7 @@ impl Lexer<'_> {
         Ok(TokenKind::Int(digits.parse().unwrap_or(u128::MAX)))
     }
 
-    /// String literal (§ v2.3.1).
+    /// String literal (§ 4.8).
     fn string(&mut self) -> Result<TokenKind> {
         let start = self.pos;
         self.pos += 1;
@@ -493,7 +493,7 @@ impl Lexer<'_> {
         }
     }
 
-    /// Char literal (§ v2.3.1).
+    /// Char literal (§ 4.8).
     fn char(&mut self) -> Result<TokenKind> {
         let start = self.pos;
         self.pos += 1;

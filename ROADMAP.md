@@ -1,6 +1,6 @@
 # Roadmap
 
-This is the direction WaSL follows from one version to the next. It is a guideline, not a commitment: versions may be reordered or split when the implementation teaches something new. It supersedes the list of planned features in [chapter 16 of the v0.1 specification](docs/spec_v0.1/16-roadmap.md), which is frozen with v0.1.
+This is the direction WaSL follows from one version to the next. It is a guideline, not a commitment: versions may be reordered or split when the implementation teaches something new. It supersedes the list of planned features in [chapter 16 of the v0.1 specification](docs/spec_v0.1/16-roadmap.md), which is frozen with v0.1. The current specification is [v0.3](docs/spec_v0.3/README.md).
 
 ## How versions are built
 
@@ -26,23 +26,26 @@ Numbers, booleans, functions, globals, control flow, interfaces and worlds; comp
 
 Target: [`examples/calc`](examples/calc). Specification: [v0.1](docs/spec_v0.1/README.md).
 
-### 0.2: data on the WasmGC heap
+### 0.2: data on the WasmGC heap (done)
 
-- Implement the [v0.2 specification](docs/spec_v0.2/README.md): `char`, `string`, `list<T>` and `list<mut T>`, `tuple`, `option`, `result`, `record`, `enum`, `variant`, `flags`, `match`, copies at the component boundary.
+- Implement the [v0.2 specification](docs/spec_v0.2/README.md), now frozen: `char`, `string`, `list<T>` and `list<mut T>`, `tuple`, `option`, `result`, `record`, `enum`, `variant`, `flags`, `match`, copies at the component boundary.
 - Feed back into the specification the problems the implementation reveals: v0.2 is provisional until v0.3.
 
 Target: [`examples/invoice`](examples/invoice), called with `weasel call`.
 
 ### 0.3: composing with other components
 
-- `import` in worlds, and direct calls to imported functions.
-- WIT dependencies declared in `wasl.toml` and fetched with `wkg`.
-- Worlds implementing foreign interfaces (the model of § 2.4.2).
-- Resources: `resource`, `own<T>`, `borrow<T>`, released automatically at the end of the scope that owns them.
-- Likely an error propagation operator such as `?` (§ v2.11, question 1), since imports multiply `result`s.
-- The v0.2 specification is frozen, and v0.1, v0.2 and v0.3 are merged into one complete specification.
+- The v0.2 specification is frozen, and v0.1 and v0.2 are merged into one complete specification, [v0.3](docs/spec_v0.3/README.md), which receives the features below.
+- `import` in worlds, and direct calls to imported functions: interfaces of other packages, and interfaces of the same package exported by another world, so that the services of one project call each other.
+- WIT dependencies declared in `wasl.toml`: paths to other WaSL projects or WIT folders, and packages of a registry fetched with the `wkg` libraries.
+- Worlds implementing foreign interfaces (the model of § 2.4.2), the entry points of WASI.
+- Resources: `resource` with private state, `own<T>`, `borrow<T>`, method calls `c.add(x)`. Imported handles are released automatically when their local is overwritten and when the function returns, unless they were moved.
+- The error propagation operator `?` on `option` and `result` (§ 16, question 1), since imports multiply `result`s.
 
-Target: two WaSL components composed with `wac`, one importing the interface of the other, with a resource crossing the boundary.
+Targets:
+
+- two WaSL projects, `catalog` and `checkout`, composed into one component: `checkout` imports the `carts` interface of `catalog` and uses its `cart` resource;
+- `hello`, a command-line program for WASI 0.2 that implements `wasi:cli/run` and prints with `wasi:cli/stdout`, run with `wasmtime run`.
 
 ### 0.4: async and WASI 0.3
 
@@ -74,8 +77,8 @@ These land whenever a version needs them, rather than being tied to one:
 
 - hexadecimal and binary literals, digit separators, exponents;
 - `///` documentation comments copied into the WIT;
-- unqualified constructors where the expected type is known (§ v2.11, question 2);
-- structural equality of heap values (§ v2.11, question 4).
+- unqualified constructors where the expected type is known (§ 16, question 2);
+- structural equality of heap values (§ 16, question 4).
 
 ## Further out
 
@@ -93,4 +96,4 @@ What the project will need beyond the language itself:
 Some versions depend on the standards and runtimes WaSL builds on:
 
 - WASI 0.3 and Component Model async in wasmtime, for 0.4;
-- the `gc` option of the Canonical ABI, to remove the copies at component boundaries (§ v2.11, question 8).
+- the `gc` option of the Canonical ABI, to remove the copies at component boundaries (§ 16).

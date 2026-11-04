@@ -30,11 +30,14 @@ Do not re-propose these unless Karim asks.
 - **No user-defined generics.** Genericity exists only in the WIT type constructors (`list<T>`, `option<T>`, `result<T, E>`, `tuple<…>`) and in built-in functions, like Go before 1.18. WIT has no generics, so they could not be exported.
 - **No `mut` in the WIT.** WIT has no mutability: a `mut` field or a `list<mut T>` in a type that appears in the WIT is an error (E0214). There is no `with` record update; build a new record.
 - **`list<T>` is immutable for everyone, `list<mut T>` is mutable**, and `list::freeze(xs)` (a copy) is the only conversion. No `vec` or `map` types for now; a growable list waits until a target program needs it, and `map<K, V>` will come from the Component Model.
-- **Integer arithmetic and conversions give the exact result or trap.** Wrapping and checked arithmetic are explicit: `T::wrapping_add`, `T::checked_add`… (§ v2.5.6).
+- **Integer arithmetic and conversions give the exact result or trap.** Wrapping and checked arithmetic are explicit: `T::wrapping_add`, `T::checked_add`… (§ 10.2).
 - **Locals get the default value of their Wasm type** when they have no initializer: numbers are zero, an enum is its first case, an option is `none`; other heap types need an initializer (E0410). No definite-assignment analysis.
 - **Values are never ignored silently.** A call statement must call a function without a return value (E0413); `_ = f();` is the explicit `drop`.
 - **Recursive types** are accepted when they have a value (E0211), and stay internal, since WIT forbids them (E0208).
 - **Stop at the first error** for now; several errors per compilation are planned for 0.5.
+- **Imported resource handles are released automatically** (0.3): when their local is overwritten and on every exit of the function, unless they were moved; no explicit `drop`. A resource of the package is a plain WasmGC value inside the component.
+- **Resource calls** (0.3): methods are called `c.add(x)`, constructors `carts::cart(…)` like a conversion.
+- **Imports** (0.3) cover interfaces of other packages and interfaces of the same package exported by another world; dependencies are fetched with the `wkg` crates.
 
 ## Repository
 
@@ -56,7 +59,7 @@ examples/       the target program of each version (calc for 0.1, invoice for 0.
 ## Specification
 
 - The specification is the reference. A language change starts in the spec, and the compiler follows; behavior found during implementation is written back into the spec.
-- v0.1 is frozen. v0.2 ([docs/spec_v0.2](docs/spec_v0.2/README.md)) extends it and is **provisional until v0.3**, which freezes it and merges v0.1 and v0.2 into one complete specification. References are written `§ 8.2` for v0.1 and `§ v2.4.3` for v0.2.
+- v0.1 and v0.2 are frozen. [docs/spec_v0.3](docs/spec_v0.3/README.md) merges them into one complete specification, the reference, and receives the features of 0.3; it is **provisional until v0.4**. References are written `§ 8.2`, and point to v0.3; its README maps the old `§ v2.x.y` numbers.
 - Each version is **example-driven**: its target program in `examples/` is written first, and the version is done when that program builds and runs in CI.
 
 ## Workflow
@@ -73,7 +76,7 @@ examples/       the target program of each version (calc for 0.1, invoice for 0.
 - Add a line to the `[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md) for every user-visible change (language, compiler output, error, tool).
 - **Versioning**: both crates share one SemVer version. In `0.x`, the minor version is the spec version (`0.2.x` implements spec v0.2); patches only fix bugs.
 - **Releases**: an annotated tag `vX.Y.Z` on `main` and a GitHub Release. Karim creates tags and releases himself; agents prepare the CHANGELOG and the version bump.
-- Commit messages: a short imperative title, then a body explaining what changes and why, citing the spec sections (`§ v2.4.16`) and error codes involved.
+- Commit messages: a short imperative title, then a body explaining what changes and why, citing the spec sections (`§ 9.6`) and error codes involved.
 
 ## Writing style
 

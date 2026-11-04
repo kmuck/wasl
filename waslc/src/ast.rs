@@ -61,7 +61,7 @@ pub enum InterfaceItem {
     Type(TypeDecl),
 }
 
-/// Declaration of a `record`, `enum`, `variant` or `flags` type (§ v2.2.3).
+/// Declaration of a `record`, `enum`, `variant` or `flags` type (§ 7.7).
 #[derive(Debug)]
 pub struct TypeDecl {
     pub name: Ident,
@@ -89,7 +89,7 @@ pub struct Case {
     pub payload: Option<TypeExpr>,
 }
 
-/// A type as written in the source (§ v2.3.3).
+/// A type as written in the source (§ 5.2).
 #[derive(Debug, Clone)]
 pub struct TypeExpr {
     pub kind: TypeExprKind,
@@ -186,11 +186,11 @@ pub enum StmtKind {
     Continue,
     Return(Option<Expr>),
     Call(Call),
-    /// `_ = f(…);`: a call whose value is discarded (§ v2.4.16).
+    /// `_ = f(…);`: a call whose value is discarded (§ 9.6).
     Discard(Call),
 }
 
-/// Target of an assignment: a name followed by field accesses and indexes (§ v2.3.4).
+/// Target of an assignment: a name followed by field accesses and indexes (§ 5.3).
 #[derive(Debug)]
 pub struct Place {
     pub name: Ident,
@@ -235,7 +235,7 @@ pub enum Else {
 }
 
 /// A call `name(…)`, `a::name(…)` or `a::b::name(…)`: a function, a built-in function or
-/// a constructor with a payload, told apart by semantic analysis (§ v2.4.2).
+/// a constructor with a payload, told apart by semantic analysis (§ 9.8).
 #[derive(Debug)]
 pub struct Call {
     /// The names before the last `::`: none, one or two.
@@ -258,7 +258,7 @@ pub enum ExprKind {
     Str(String),
     Char(char),
     Name(String),
-    /// `a::b` or `a::b::c`: a case, or a constructor without payload (§ v2.4.2).
+    /// `a::b` or `a::b::c`: a case, or a constructor without payload (§ 9.8).
     Path(Vec<Ident>),
     Call(Call),
     /// `T(x)`, where `T` is a primitive type, `char` or `string`.

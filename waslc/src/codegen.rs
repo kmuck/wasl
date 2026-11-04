@@ -1,4 +1,4 @@
-//! Generation of the core WebAssembly module of a world (§ 12, § v2.6).
+//! Generation of the core WebAssembly module of a world (§ 12, § 12).
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ use boundary::Boundary;
 use helpers::Helper;
 
 /// String literals longer than this are built from a data segment rather than with
-/// `array.new_fixed` (§ v2.6.4).
+/// `array.new_fixed` (§ 12.8).
 const MAX_FIXED: usize = 1000;
 
 /// Produces the core module of world `world`: its exported functions, the functions they
@@ -72,7 +72,7 @@ pub fn generate(
         .iter()
         .any(|&f| boundary::needs_memory(types, &program.funcs[f]));
 
-    // Shared immutable values (§ v2.6.4, § v2.6.2): string literals and cases without
+    // Shared immutable values (§ 12.8, § 12.6): string literals and cases without
     // payload. Their globals come first, so that the initializers of the program's
     // globals can read them.
     for (id, func) in program.funcs.iter().enumerate() {
@@ -95,7 +95,7 @@ pub fn generate(
             })
         })
         .collect();
-    // The top of the scratch buffer (§ v2.7.4) comes after the program's globals.
+    // The top of the scratch buffer (§ 13.7) comes after the program's globals.
     cx.scratch_top = memory.then_some(next);
 
     let mut bodies = Vec::new();
@@ -109,7 +109,7 @@ pub fn generate(
         signatures.push(cx.signature(params, results));
         bodies.push(FuncGen::run(&mut cx, func));
     }
-    // Core exports (§ v2.7.5): an adapter for each function that takes or returns a heap
+    // Core exports (§ 13.8): an adapter for each function that takes or returns a heap
     // value, the function itself otherwise.
     let mut core_exports: Vec<(FuncId, u32, Option<u32>)> = Vec::new();
     for &f in &exported {
@@ -172,7 +172,7 @@ pub fn generate(
         );
     }
 
-    // Standard Component Model export names (§ 13.3, § v2.7.3).
+    // Standard Component Model export names (§ 13.3, § 13.6).
     let mut exports = ExportSection::new();
     for (f, index, post_return) in core_exports {
         let func = &program.funcs[f];
@@ -198,7 +198,7 @@ pub fn generate(
         exports.export("cm32p2_realloc", ExportKind::Func, realloc);
     }
 
-    // Types: the GC types in one recursion group, then the function types (§ v2.6.6).
+    // Types: the GC types in one recursion group, then the function types (§ 12.1).
     let mut type_section = TypeSection::new();
     let gc_types = cx.rec.len() as u32;
     if gc_types > 0 {
@@ -389,7 +389,7 @@ fn field(val: ValType, mutable: bool) -> FieldType {
 struct ModuleCx<'a> {
     program: &'a Program,
     types: &'a Types,
-    /// The GC types, in one recursion group (§ v2.6.1).
+    /// The GC types, in one recursion group (§ 12.5).
     rec: Vec<SubType>,
     /// Struct or array type of each heap type other than an option.
     heap: HashMap<Type, u32>,
@@ -411,7 +411,7 @@ struct ModuleCx<'a> {
     strings: HashMap<String, u32>,
     shared_cases: HashMap<(Type, u32), u32>,
     global_index: Vec<Option<u32>>,
-    /// The global `$scratch_top` (§ v2.7.4), when the module has a memory.
+    /// The global `$scratch_top` (§ 13.7), when the module has a memory.
     scratch_top: Option<u32>,
     /// Passive data segments of the long string literals.
     data: Vec<Vec<u8>>,
@@ -456,7 +456,7 @@ impl<'a> ModuleCx<'a> {
 
     // ---- Types ----
 
-    /// Wasm value type of a WaSL type (§ v2.6.1).
+    /// Wasm value type of a WaSL type (§ 12.5).
     fn val(&mut self, ty: Type) -> ValType {
         let types = self.types;
         match types.kind(ty) {
@@ -470,7 +470,7 @@ impl<'a> ModuleCx<'a> {
         }
     }
 
-    /// Whether `option<inner>` boxes its payload (§ v2.6.3).
+    /// Whether `option<inner>` boxes its payload (§ 12.7).
     fn boxed(&self, inner: Type) -> bool {
         self.types.is_scalar(inner) || matches!(self.types.kind(inner), TypeKind::Option(_))
     }
@@ -485,7 +485,7 @@ impl<'a> ModuleCx<'a> {
         }
     }
 
-    /// Storage type of the elements of a list (§ v2.6.1).
+    /// Storage type of the elements of a list (§ 12.5).
     fn storage(&mut self, elem: Type) -> StorageType {
         match self.types.kind(elem) {
             TypeKind::Prim(Prim::Bool | Prim::S8 | Prim::U8) => StorageType::I8,
@@ -571,7 +571,7 @@ impl<'a> ModuleCx<'a> {
         index
     }
 
-    /// The types of a variant or result (§ v2.6.2): the tag struct, then one subtype per
+    /// The types of a variant or result (§ 12.6): the tag struct, then one subtype per
     /// case with a payload.
     fn variant(&mut self, ty: Type, payloads: &[Option<Type>]) -> u32 {
         let base = self.reserve(ty);
@@ -781,7 +781,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                     Some(e) => self.expr(e),
                     None => {
                         // A local may be redeclared on every loop iteration: reset it to the
-                        // default value of its Wasm type (§ v2.4.13).
+                        // default value of its Wasm type (§ 9.4).
                         let ty = self.cx.val(self.local_types[*local as usize]);
                         self.zero(ty);
                     }
@@ -863,7 +863,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         }
     }
 
-    /// `match` (§ v2.6.2): one block per arm, plus one for `else`, around a `br_table`
+    /// `match` (§ 12.6): one block per arm, plus one for `else`, around a `br_table`
     /// on the case of the scrutinee. Arm `i` runs after the end of the `i`-th
     /// innermost block, then leaves the outer block.
     fn match_(&mut self, scrutinee: &Expr, arms: &[MatchArm], else_: Option<&[Stmt]>) {
@@ -1177,7 +1177,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 self.emit(Instruction::ArrayLen);
                 return;
             }
-            // A string never changes: its bytes are the same array (§ v2.4.11).
+            // A string never changes: its bytes are the same array (§ 8.17).
             Builtin::StringBytes => return,
             Builtin::StringFromBytes => Helper::FromBytes,
             Builtin::StringChars => Helper::Chars,
@@ -1332,7 +1332,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
     }
 
     /// `+`, `-`, `*` or unary `-` on an integer type, with the operands on the stack: the
-    /// exact result, or a trap (§ v2.5.6).
+    /// exact result, or a trap (§ 10.2).
     fn trapping_arith(&mut self, op: Arith, ty: Type) {
         let r = self.arith_overflow(op, ty);
         self.trap_if_overflow();
@@ -1340,7 +1340,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
     }
 
     /// Traps with `integer overflow` if the `i32` on the stack is not 0, by dividing
-    /// `i32::MIN` by -1 as for the division of § 12.2 (§ v2.6.5). The trap is inline: a call
+    /// `i32::MIN` by -1 as for the division of § 12.2 (§ 12.9). The trap is inline: a call
     /// to a helper would make the hot path save its registers around the call.
     fn trap_if_overflow(&mut self) {
         self.emit(Instruction::If(BlockType::Empty));
@@ -1353,7 +1353,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
 
     /// Integer arithmetic with the operands on the stack: stores the result modulo 2ⁿ in a
     /// scratch local, which it returns, and leaves on the stack whether the exact result
-    /// does not fit in `ty` (§ v2.6.5).
+    /// does not fit in `ty` (§ 12.9).
     fn arith_overflow(&mut self, op: Arith, ty: Type) -> u32 {
         use Instruction as I;
         let vt = ty.val_type();
@@ -1532,7 +1532,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 (_, _, false) => I::F64ConvertI64U,
             });
         } else if to.is_int() {
-            // `trunc` traps on NaN and on values out of the range of its result (§ v2.5.6).
+            // `trunc` traps on NaN and on values out of the range of its result (§ 10.5).
             let f32_src = from == Type::F32;
             if to.is_small_int() {
                 self.emit(if f32_src {
@@ -1562,7 +1562,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
     }
 
     /// With an integer of type `from` on the stack: traps if its value does not fit in the
-    /// integer type `to` (§ v2.5.6).
+    /// integer type `to` (§ 10.5).
     fn check_fits(&mut self, from: Type, to: Type) {
         use Instruction as I;
         let (from_min, from_max) = from.int_range();

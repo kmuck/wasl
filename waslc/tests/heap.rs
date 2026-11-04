@@ -1,5 +1,5 @@
-//! Runs code that uses the heap types of v0.2 (specification v0.2, chapters v2.5 and
-//! v2.6). The heap values stay inside the component: the exported functions only take and
+//! Runs code that uses the heap types (specification, chapters 10 and 12). The heap
+//! values stay inside the component: the exported functions only take and
 //! return scalars.
 
 use std::sync::OnceLock;
@@ -53,7 +53,7 @@ interface geo {
     branch(list<tree>),
   }
 
-  // Recursive without `option` or `list`: `lit` is a value (§ v2.2.5).
+  // Recursive without `option` or `list`: `lit` is a value (§ 7.9).
   variant expr {
     lit(s32),
     neg(expr),
@@ -257,7 +257,7 @@ interface h {
 
   // ---- Records, tuples ----
 
-  // Two locals that hold the same record see the same object (§ v2.5.1).
+  // Two locals that hold the same record see the same object (§ 10.8).
   func record_sharing() -> s32 {
     local p: geo::point = geo::point { x: 3, y: 4 };
     local q: geo::point = p;
@@ -295,7 +295,7 @@ interface h {
   }
 
   // Locals without an initial value start at the default value of their Wasm type
-  // (§ v2.4.13), on every iteration: 3 × 1111.
+  // (§ 9.4), on every iteration: 3 × 1111.
   func default_locals() -> u32 {
     local total: u32;
     local i: u32;
@@ -448,7 +448,7 @@ interface h {
     return e[0] == "a" && c[0] == "z" && c[1] == "b";
   }
 
-  // `list::filled` shares its element (§ v2.5.1).
+  // `list::filled` shares its element (§ 10.8).
   func filled_shares() -> s32 {
     local ps: list<geo::point> = list::filled(3, geo::point { x: 0, y: 0 });
     ps[0].y = 5;
@@ -567,7 +567,7 @@ interface h {
 }
 "#;
 
-/// Length of the long literal: above the 1,000 bytes of `array.new_fixed` (§ v2.6.4).
+/// Length of the long literal: above the 1,000 bytes of `array.new_fixed` (§ 12.8).
 const LONG: usize = 1500;
 
 fn engine_and_component() -> &'static (Engine, Component) {
@@ -762,7 +762,7 @@ fn options_and_results() {
     assert_eq!(call("res-unit", &[U32(1)]), Bool(true));
 }
 
-/// The functions of the target program (§ v2.10.1), called from an interface whose
+/// The functions of the target program (§ 15.3), called from an interface whose
 /// functions only take and return scalars.
 const INVOICE_PROBE: &str = r#"
 world probe {
@@ -890,7 +890,7 @@ fn invoice_functions() {
     assert_eq!(call("initial", &[]), Char('A'));
     assert_eq!(call("stats-sum", &[]), U64(3 * 1170));
     // `mark_paid` returns a new record and leaves `inv` unpaid, inside the component as
-    // outside (§ v2.2.7).
+    // outside (§ 7.11).
     assert_eq!(call("unpaid-after-mark", &[]), U32(2));
     assert_eq!(call("number-text", &[U32(0)]), U32(1));
     assert_eq!(call("number-text", &[U32(4294967295)]), U32(10));

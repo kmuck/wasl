@@ -13,7 +13,7 @@ mod body;
 
 use body::{FnCx, always_returns};
 
-/// Maximum number of flags of a flags type (§ v2.2.3).
+/// Maximum number of flags of a flags type (§ 7.7).
 const MAX_FLAGS: usize = 32;
 
 /// Top-level declaration.
@@ -68,7 +68,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         names.insert(&name.name, entry);
     }
 
-    // 2. Items of the interfaces (§ 6.3, § v2.2.3).
+    // 2. Items of the interfaces (§ 6.3, § 7.7).
     let mut program = hir::Program::default();
     let mut types = Types::default();
     types.interface_names = interfaces.iter().map(|i| i.name.name.clone()).collect();
@@ -165,7 +165,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         });
     }
 
-    // 3. Types: fields, payloads and signatures, interface by interface (§ v2.8.1).
+    // 3. Types: fields, payloads and signatures, interface by interface (§ 11.2).
     let resolver = Resolver {
         names: &names,
         scopes: &scopes,
@@ -289,8 +289,8 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         });
     }
 
-    // 4. Exported functions: types that can cross the boundary (§ v2.2.7). They have no
-    //    parameter limit (§ v2.7.3).
+    // 4. Exported functions: types that can cross the boundary (§ 7.11). They have no
+    //    parameter limit (§ 13.6).
     for world in &program.worlds {
         for &iface_id in &world.exports {
             let iface = interfaces[iface_id];
@@ -307,7 +307,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
                     "exported function",
                 )?;
             }
-            // The types of an exported interface all appear in the WIT (§ v2.7.1).
+            // The types of an exported interface all appear in the WIT (§ 13.1).
             for decl in iface.types() {
                 let ty = types.decl_type_of(scopes[iface_id].types[decl.name.name.as_str()]);
                 check_boundary_types(
@@ -322,7 +322,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         }
     }
 
-    // Interfaces that appear in the WIT cannot use each other's types in a cycle (§ v2.7.1).
+    // Interfaces that appear in the WIT cannot use each other's types in a cycle (§ 13.1).
     if let Some(cycle) = crate::wit::use_cycle(&types, &program) {
         let steps: Vec<String> = cycle
             .iter()
@@ -344,7 +344,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
         );
     }
 
-    // 5. Globals (§ 6.4, § v2.4.12).
+    // 5. Globals (§ 6.4, § 8.18).
     let mut global_ids = HashMap::new();
     for global in &globals {
         let ty = resolver.resolve(&mut types, &global.ty, None)?;
@@ -410,7 +410,7 @@ pub fn analyze(items: &[Item]) -> Result<hir::Program> {
     Ok(program)
 }
 
-/// Constant expression, the only initial value of a global (§ v2.4.12). Calls are
+/// Constant expression, the only initial value of a global (§ 8.18). Calls are
 /// accepted here when their arguments are constant; [`is_constant_hir`] then keeps only
 /// constructors.
 fn is_constant(e: &ast::Expr) -> bool {
@@ -487,7 +487,7 @@ fn check_members(decl: &ast::TypeDecl) -> Result<()> {
     Ok(())
 }
 
-/// Which declared types have a value (§ v2.2.5): a record has one if all its fields have
+/// Which declared types have a value (§ 7.9): a record has one if all its fields have
 /// one, a variant if at least one of its cases has one (a case without payload always
 /// has one), an enum and a flags type always. Among the other types, a tuple has a value
 /// if all its elements have one, a `result` if one of its cases has one, and the others
@@ -555,7 +555,7 @@ fn why_empty(types: &Types, inhabited: &[bool], id: DeclId) -> String {
     }
 }
 
-/// Types used at the boundary of a component by `world` (§ v2.2.7): no recursive type
+/// Types used at the boundary of a component by `world` (§ 7.11): no recursive type
 /// (E0208), only types of interfaces that the world exports or that have no function
 /// (E0209), and nothing that can change (E0214).
 fn check_boundary_types(
@@ -621,7 +621,7 @@ fn check_boundary_types(
     Ok(())
 }
 
-/// Resolves the types written in the source (§ v2.2.4).
+/// Resolves the types written in the source (§ 7.8).
 struct Resolver<'a> {
     names: &'a HashMap<&'a str, TopLevel>,
     scopes: &'a [InterfaceScope<'a>],
@@ -942,7 +942,7 @@ mod tests {
             code("interface i { record a { b: b } record b { r: result<a, a> } }"),
             Code::EmptyType
         );
-        // A variant has a value as soon as one of its cases has one (§ v2.2.5).
+        // A variant has a value as soon as one of its cases has one (§ 7.9).
         ok("interface i { variant expr { lit(u32), neg(expr), add(tuple<expr, expr>) } }");
         ok("interface i { variant v { a(v), b } }");
         assert_eq!(

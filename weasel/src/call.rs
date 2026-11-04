@@ -21,7 +21,7 @@ struct Export {
 }
 
 /// Calls `function` (`interface::function`, or `function` if unambiguous) with the given
-/// arguments, written in WAVE (§ v2.9.1). Returns the result in WAVE, or `None` for a
+/// arguments, written in WAVE (§ 14.5). Returns the result in WAVE, or `None` for a
 /// function without one.
 ///
 /// The function is looked up in every world of the project: an interface has a single
@@ -104,7 +104,7 @@ pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option
     Ok(results.first().map(format_value))
 }
 
-/// The wasmtime engine, with WasmGC and its prerequisites (§ v2.9.2).
+/// The wasmtime engine, with WasmGC and its prerequisites (§ 14.6).
 fn engine() -> Result<Engine> {
     let mut config = Config::new();
     config
@@ -206,7 +206,7 @@ fn parse_value(text: &str, ty: &Type) -> std::result::Result<Val, String> {
 }
 
 /// Formats a result in WAVE, on one line. Floats keep the format of v0.1 (`3.0`, a valid
-/// WAVE float), except NaN, written `nan` (§ v2.9.1). Every field of a record is
+/// WAVE float), except NaN, written `nan` (§ 14.5). Every field of a record is
 /// written, `none` included.
 fn format_value(value: &Val) -> String {
     let mut out = String::new();

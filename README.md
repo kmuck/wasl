@@ -4,7 +4,7 @@
 
 A compiled WaSL project is a standard **`.wasm` component**: the code as Wasm instructions, with its WIT interfaces embedded. Any Component Model tool can read it, run it, or compose it with components written in other languages.
 
-> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds) and v0.2 (data on the WasmGC heap) are specified and implemented. The [v0.2 specification](docs/spec_v0.2/README.md) is provisional until v0.3.
+> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds) and v0.2 (data on the WasmGC heap) are specified and implemented. Both are merged into the [v0.3 specification](docs/spec_v0.3/README.md), the reference, which v0.3 extends with imports and resources.
 
 ```wasl
 world billing {
@@ -104,7 +104,7 @@ WebAssembly and WasmGC are W3C standards, shipped in every major browser. The Co
 
 | Part | Role |
 |---|---|
-| [`docs/`](docs) | The language specification, one frozen folder per version: [v0.1](docs/spec_v0.1/README.md), [v0.2](docs/spec_v0.2/README.md) |
+| [`docs/`](docs) | The language specification, one folder per version: [v0.3](docs/spec_v0.3/README.md), complete and in progress; [v0.1](docs/spec_v0.1/README.md) and [v0.2](docs/spec_v0.2/README.md), frozen |
 | [`waslc/`](waslc) | The compiler, a Rust library built on the `wasm-tools` crates. It never touches the filesystem. |
 | [`weasel/`](weasel) | The build tool, in the spirit of `cargo`: `init`, `build`, `check`, `wit`, `call`, `clean`. It runs components with wasmtime. |
 | [`examples/`](examples) | The target program of each version, built and run in CI |

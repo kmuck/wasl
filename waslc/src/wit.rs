@@ -57,7 +57,7 @@ impl Wit {
             .print(&self.resolve, self.package, &[])
             .map_err(internal)?;
         // WIT elaboration adds `import types;` to a world for the types-only interfaces it
-        // uses; WaSL worlds never import, so these lines are not written (§ v2.7.1).
+        // uses; WaSL worlds never import, so these lines are not written (§ 13.1).
         let mut text = String::new();
         let mut lines = printer
             .output
@@ -81,7 +81,7 @@ impl Wit {
     }
 }
 
-/// Produces the WIT: the interfaces that appear in it (§ v2.7.1), then the worlds.
+/// Produces the WIT: the interfaces that appear in it (§ 13.1), then the worlds.
 /// Internal interfaces, their types and globals do not appear in it.
 pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
     // Every identifier is prefixed with `%`, which avoids any clash with a WIT keyword.
@@ -229,7 +229,7 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
     Ok(Wit { resolve, package })
 }
 
-/// Which interfaces appear in the WIT (§ v2.7.1): those exported by a world, and those
+/// Which interfaces appear in the WIT (§ 13.1): those exported by a world, and those
 /// whose types an interface that appears uses.
 pub fn appears(types: &Types, program: &Program) -> Vec<bool> {
     let mut appears: Vec<bool> = (0..program.interfaces.len())
@@ -354,7 +354,7 @@ fn wit_type(types: &Types, ty: Type, names: &HashMap<DeclId, String>) -> String 
         TypeKind::Prim(p) => p.name().to_string(),
         TypeKind::Char => "char".into(),
         TypeKind::String => "string".into(),
-        // `mut` is erased (§ v2.7.1).
+        // `mut` is erased (§ 13.1).
         TypeKind::List { elem, .. } => format!("list<{}>", wit_type(types, *elem, names)),
         TypeKind::Tuple(elems) => format!(
             "tuple<{}>",
