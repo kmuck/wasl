@@ -65,7 +65,7 @@ Target: a small version of the reference use case, a project with two or three w
 WaSL reaches 1.0 when:
 
 - the specification no longer changes incompatibly;
-- the multi-service backend described in the [README](README.md#where-wasl-is-going) runs end to end;
+- the multi-service backend described in the [README](README.md#what-for) runs end to end;
 - the standard library covers HTTP, JSON and console output.
 
 ## Small features, without a version
