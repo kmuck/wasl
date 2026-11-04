@@ -85,14 +85,14 @@ impl Interface {
     pub fn funcs(&self) -> impl Iterator<Item = &Func> {
         self.items.iter().filter_map(|item| match item {
             InterfaceItem::Func(f) => Some(f),
-            InterfaceItem::Type(_) => None,
+            InterfaceItem::Type(_) | InterfaceItem::Resource(_) => None,
         })
     }
 
     pub fn types(&self) -> impl Iterator<Item = &TypeDecl> {
         self.items.iter().filter_map(|item| match item {
             InterfaceItem::Type(t) => Some(t),
-            InterfaceItem::Func(_) => None,
+            InterfaceItem::Func(_) | InterfaceItem::Resource(_) => None,
         })
     }
 }
@@ -101,6 +101,30 @@ impl Interface {
 pub enum InterfaceItem {
     Func(Func),
     Type(TypeDecl),
+    Resource(ResourceDecl),
+}
+
+/// Declaration of a `resource` (§ 7.12): its private fields, then its constructor,
+/// methods and static functions, in declaration order.
+#[derive(Debug)]
+pub struct ResourceDecl {
+    pub name: Ident,
+    pub fields: Vec<Field>,
+    pub funcs: Vec<ResourceFunc>,
+}
+
+#[derive(Debug)]
+pub struct ResourceFunc {
+    pub kind: ResourceFuncKind,
+    /// For the constructor, the name is `constructor` and there is no return type.
+    pub func: Func,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceFuncKind {
+    Constructor,
+    Method,
+    Static,
 }
 
 /// Declaration of a `record`, `enum`, `variant` or `flags` type (§ 7.7).
@@ -156,6 +180,8 @@ pub enum TypeExprKind {
     },
     /// A declared type: `line` or `invoices::line`.
     Named(TypeName),
+    /// `borrow<cart>` (§ 7.12).
+    Borrow(TypeName),
 }
 
 /// Name of a declared type, with the interface that declares it if written.
@@ -351,6 +377,12 @@ pub enum ExprKind {
     Paren(Box<Expr>),
     /// `e?` (§ 8.19)
     Try(Box<Expr>),
+    /// `e.m(…)`: a method call (§ 8.20).
+    Method {
+        receiver: Box<Expr>,
+        name: Ident,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

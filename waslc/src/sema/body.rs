@@ -196,6 +196,7 @@ impl<'a> FnCx<'a> {
                 init,
             } => {
                 let ty = self.resolver.resolve(self.types, written, self.iface)?;
+                super::no_borrow(self.types, ty, written.span)?;
                 // Without an initial value, a local starts at the default value of its Wasm
                 // type: zero for a scalar, null (`option::none`) for an option. The other
                 // types are non-nullable references, which have none (§ 9.4).
@@ -378,6 +379,51 @@ impl<'a> FnCx<'a> {
                 }
                 hir::Stmt::Call(call_expr)
             }
+            StmtKind::Call(ast::Expr {
+                kind:
+                    ExprKind::Method {
+                        receiver,
+                        name,
+                        args,
+                    },
+                span,
+            }) => {
+                let call_expr = self.method(receiver, name, args, *span)?;
+                if let Some(ty) = call_expr.ty {
+                    return err(
+                        Code::IgnoredValue,
+                        stmt.span,
+                        format!(
+                            "the value of `.{}(…)` (`{}`) is ignored: use it, or write `_ =` before the statement to discard it",
+                            name.name,
+                            self.show(ty)
+                        ),
+                    );
+                }
+                hir::Stmt::Call(call_expr)
+            }
+            StmtKind::Discard(ast::Expr {
+                kind:
+                    ExprKind::Method {
+                        receiver,
+                        name,
+                        args,
+                    },
+                span,
+            }) => {
+                let call_expr = self.method(receiver, name, args, *span)?;
+                if call_expr.ty.is_none() {
+                    return err(
+                        Code::TypeMismatch,
+                        stmt.span,
+                        format!(
+                            "method `{}` does not return a value, so there is nothing to discard: remove `_ =`",
+                            name.name
+                        ),
+                    );
+                }
+                hir::Stmt::Call(call_expr)
+            }
             StmtKind::Call(_) | StmtKind::Discard(_) => {
                 unreachable!("the parser only builds calls and `?` in call statements")
             }
@@ -547,6 +593,21 @@ impl<'a> FnCx<'a> {
                 }
                 result
             }
+            ExprKind::Method {
+                receiver,
+                name,
+                args,
+            } => {
+                let result = self.method(receiver, name, args, e.span)?;
+                if result.ty.is_none() {
+                    return err(
+                        Code::TypeMismatch,
+                        e.span,
+                        format!("method `{}` does not return a value", name.name),
+                    );
+                }
+                result
+            }
             ExprKind::Convert { ty, arg } => self.convert(ty, arg)?,
             ExprKind::Str(text) => typed(hir::ExprKind::Str(text.clone()), Type::STRING),
             ExprKind::Char(c) => typed(hir::ExprKind::Const(Const::I32(*c as i32)), Type::CHAR),
@@ -555,6 +616,18 @@ impl<'a> FnCx<'a> {
                 return self.construct(target, segments.last().unwrap(), None, e.span, expected);
             }
             ExprKind::Record { ty, fields } => self.record(ty, fields, e.span)?,
+            // `r {}` builds a resource without fields.
+            ExprKind::Flags { ty, flags }
+                if flags.is_empty()
+                    && matches!(
+                        self.resolver
+                            .decl(ty, self.iface)
+                            .map(|d| &self.types.decls[d].kind),
+                        Ok(DeclKind::Resource(_))
+                    ) =>
+            {
+                self.record(ty, &[], e.span)?
+            }
             ExprKind::Flags { ty, flags } => self.flags(ty, flags)?,
             ExprKind::List(elems) => return self.list(elems, e.span, expected),
             ExprKind::Tuple(elems) => return self.tuple(elems, e.span, expected),
@@ -570,9 +643,146 @@ impl<'a> FnCx<'a> {
         };
         let ty = result.value_ty();
         match expected {
-            Some(exp) if exp != ty => self.mismatch(e.span, exp, ty),
+            Some(exp) if exp != ty => {
+                // A resource can be lent where a `borrow` of it is expected (§ 7.12).
+                if let TypeKind::Borrow(inner) = self.types.kind(exp)
+                    && *inner == ty
+                {
+                    return Ok(result);
+                }
+                if let TypeKind::Borrow(inner) = self.types.kind(ty)
+                    && *inner == exp
+                {
+                    return err(
+                        Code::BorrowMisuse,
+                        e.span,
+                        format!(
+                            "this value is a `{}`: it is only lent to the function, which cannot keep it, return it or give it away",
+                            self.show(ty)
+                        ),
+                    );
+                }
+                self.mismatch(e.span, exp, ty)
+            }
             _ => Ok(result),
         }
+    }
+
+    /// `receiver.name(args)`: a method call (§ 8.20). The result has `ty: None` for a
+    /// method without a return value.
+    fn method(
+        &mut self,
+        receiver: &ast::Expr,
+        name: &Ident,
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let base = self.expr(receiver, None)?;
+        let ty = base.value_ty();
+        let Some((decl, def)) = self.types.resource(ty) else {
+            return err(
+                Code::UnknownMethod,
+                name.span,
+                format!(
+                    "`{}` has no methods: only resources have methods",
+                    self.show(ty)
+                ),
+            );
+        };
+        let Some(&(_, func_id)) = def.methods.iter().find(|(m, _)| *m == name.name) else {
+            let resource = self.show(self.types.decl_type_of(decl));
+            let hint = if def.statics.iter().any(|(s, _)| *s == name.name) {
+                format!(
+                    "; `{}` is a static function, called `{resource}::{}(…)`",
+                    name.name, name.name
+                )
+            } else {
+                String::new()
+            };
+            return err(
+                Code::UnknownMethod,
+                name.span,
+                format!("resource `{resource}` has no method `{}`{hint}", name.name),
+            );
+        };
+        let func = &self.program.funcs[func_id];
+        if func.params.len() - 1 != args.len() {
+            return err(
+                Code::ArgCount,
+                name.span,
+                format!(
+                    "`{}` expects {} argument(s), {} given",
+                    func.name,
+                    func.params.len() - 1,
+                    args.len()
+                ),
+            );
+        }
+        let param_types: Vec<Type> = func.params[1..].iter().map(|(_, t)| *t).collect();
+        let ret = func.ret;
+        let mut all = Vec::with_capacity(args.len() + 1);
+        all.push(base);
+        for (arg, ty) in args.iter().zip(param_types) {
+            all.push(self.expr(arg, Some(ty))?);
+        }
+        let _ = span;
+        Ok(hir::Expr {
+            kind: hir::ExprKind::Call {
+                func: func_id,
+                args: all,
+            },
+            ty: ret,
+        })
+    }
+
+    /// The constructor of the resource `decl`, called `written` (E0308).
+    fn constructor(&self, decl: DeclId, written: &Ident) -> Result<PathTarget> {
+        let DeclKind::Resource(def) = &self.types.decls[decl].kind else {
+            unreachable!("a resource")
+        };
+        match def.constructor {
+            Some(f) => Ok(PathTarget::Func(f)),
+            None => err(
+                Code::UnknownMethod,
+                written.span,
+                format!(
+                    "resource `{}` has no constructor: it is created by the functions of its interface",
+                    written.name
+                ),
+            ),
+        }
+    }
+
+    /// The static function `name` of the resource `decl`, written `ty::name` (E0308).
+    fn static_of(&self, decl: DeclId, ty: &Ident, name: &Ident) -> Result<PathTarget> {
+        let DeclKind::Resource(def) = &self.types.decls[decl].kind else {
+            unreachable!("a resource")
+        };
+        match def.statics.iter().find(|(s, _)| *s == name.name) {
+            Some(&(_, f)) => Ok(PathTarget::Func(f)),
+            None => {
+                let hint = if def.methods.iter().any(|(m, _)| *m == name.name) {
+                    format!(
+                        "; `{}` is a method, called on a value: `x.{}(…)`",
+                        name.name, name.name
+                    )
+                } else {
+                    String::new()
+                };
+                err(
+                    Code::UnknownMethod,
+                    name.span,
+                    format!(
+                        "resource `{}` has no static function `{}`{hint}",
+                        ty.name, name.name
+                    ),
+                )
+            }
+        }
+    }
+
+    fn is_resource(&self, decl: DeclId) -> bool {
+        matches!(self.types.decls[decl].kind, DeclKind::Resource(_))
     }
 
     fn unknown_name<T>(&self, name: &Ident) -> Result<T> {
@@ -919,6 +1129,11 @@ impl<'a> FnCx<'a> {
         if let Some(&id) = scopes[iface].funcs.get(call.name.name.as_str()) {
             return Ok(PathTarget::Func(id));
         }
+        if let Some(&decl) = scopes[iface].types.get(call.name.name.as_str())
+            && self.is_resource(decl)
+        {
+            return self.constructor(decl, &call.name);
+        }
         let iface_name = &self.program.interfaces[iface].name;
         let mut message = format!(
             "interface `{iface_name}` has no function `{}`",
@@ -987,6 +1202,9 @@ impl<'a> FnCx<'a> {
             if let Some(iface) = self.iface
                 && let Some(&decl) = scopes[iface].types.get(head.name.as_str())
             {
+                if self.is_resource(decl) {
+                    return self.static_of(decl, head, name);
+                }
                 return self.case_of(decl, head, name);
             }
         }
@@ -1013,6 +1231,7 @@ impl<'a> FnCx<'a> {
                 return e;
             }
             return match scope.types.get(ty.name.as_str()) {
+                Some(&decl) if self.is_resource(decl) => self.static_of(decl, ty, name),
                 Some(&decl) => self.case_of(decl, ty, name),
                 None => err(
                     Code::UnknownType,
@@ -1023,6 +1242,11 @@ impl<'a> FnCx<'a> {
         }
         if let Some(e) = scope.unavailable(&head.name, name) {
             return e;
+        }
+        if let Some(&decl) = scope.types.get(name.name.as_str())
+            && self.is_resource(decl)
+        {
+            return self.constructor(decl, name);
         }
         match scope.funcs.get(name.name.as_str()) {
             Some(&id) => Ok(PathTarget::Func(id)),
@@ -1510,6 +1734,10 @@ impl<'a> FnCx<'a> {
         let decl = self.resolver.decl(name, self.iface)?;
         let defs: Vec<(String, Type)> = match &self.types.decls[decl].kind {
             DeclKind::Record(defs) => defs.iter().map(|f| (f.name.clone(), f.ty)).collect(),
+            DeclKind::Resource(def) => {
+                self.private(decl, name.span())?;
+                def.fields.iter().map(|f| (f.name.clone(), f.ty)).collect()
+            }
             other => {
                 return err(
                     Code::UnknownType,
@@ -1692,8 +1920,55 @@ impl<'a> FnCx<'a> {
         self.field_of(base, name)
     }
 
+    /// The fields of a resource can only be named in its interface (E0309).
+    fn private(&self, decl: DeclId, span: Span) -> Result<()> {
+        let owner = self.types.decls[decl].interface;
+        if self.iface == Some(owner) {
+            return Ok(());
+        }
+        err(
+            Code::PrivateField,
+            span,
+            format!(
+                "the fields of resource `{}` are private to interface `{}`: use its constructor and its methods",
+                self.show(self.types.decl_type_of(decl)),
+                self.program.interfaces[owner].name
+            ),
+        )
+    }
+
     fn field_of(&mut self, base: hir::Expr, name: &Ident) -> Result<hir::Expr> {
         let ty = base.value_ty();
+        if let Some((decl, def)) = self.types.resource(ty) {
+            let Some(i) = def.fields.iter().position(|f| f.name == name.name) else {
+                let hint = if def.methods.iter().any(|(m, _)| *m == name.name) {
+                    format!(
+                        "; `{}` is a method: call it, `.{}(…)`",
+                        name.name, name.name
+                    )
+                } else {
+                    String::new()
+                };
+                return err(
+                    Code::UnknownField,
+                    name.span,
+                    format!(
+                        "resource `{}` has no field `{}`{hint}",
+                        self.show(self.types.decl_type_of(decl)),
+                        name.name
+                    ),
+                );
+            };
+            self.private(decl, name.span)?;
+            let field_ty = def.fields[i].ty;
+            return Ok(typed(
+                hir::ExprKind::Field {
+                    expr: Box::new(base),
+                    field: i as u32,
+                },
+                field_ty,
+            ));
+        }
         let (kind, field_ty) = match self.types.decl(ty).map(|(_, d)| &d.kind) {
             Some(DeclKind::Record(fields)) => match fields.iter().position(|f| f.name == name.name)
             {
@@ -1843,6 +2118,31 @@ impl<'a> FnCx<'a> {
             };
         }
         let ty = base.value_ty();
+        if let (ast::Selector::Field(field), Some((decl, def))) = (last, self.types.resource(ty)) {
+            let Some(i) = def.fields.iter().position(|f| f.name == field.name) else {
+                return self.field_of(base, field).map(|_| unreachable!());
+            };
+            self.private(decl, field.span)?;
+            if !def.fields[i].mutable {
+                return err(
+                    Code::AssignReadOnly,
+                    field.span,
+                    format!(
+                        "field `{}` of resource `{}` is not `mut`: it is set once, when the object is created",
+                        field.name,
+                        self.show(self.types.decl_type_of(decl))
+                    ),
+                );
+            }
+            let field_ty = def.fields[i].ty;
+            return Ok((
+                Place::Field {
+                    record: base,
+                    field: i as u32,
+                },
+                field_ty,
+            ));
+        }
         match last {
             ast::Selector::Field(field) => match self.types.decl(ty).map(|(_, d)| &d.kind) {
                 Some(DeclKind::Record(fields)) => {

@@ -14,10 +14,10 @@ use wasm_encoder::{
 use crate::ast::{BinOp, UnaryOp};
 use crate::diag::Result;
 use crate::hir::{
-    Arith, Builtin, Const, Expr, ExprKind, FuncDef, FuncId, GlobalId, MatchArm, Place, Program,
-    Stmt, visit_expr, visit_stmts,
+    Arith, Builtin, Const, Expr, ExprKind, FuncDef, FuncId, FuncKind, GlobalId, MatchArm, Place,
+    Program, Stmt, visit_expr, visit_stmts,
 };
-use crate::types::{DeclKind, Prim, Type, TypeKind, Types};
+use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
 use crate::wit::kebab;
 
 mod boundary;
@@ -56,15 +56,28 @@ pub fn generate(
         }
     }
 
-    // Imported functions come first in the function index space (§ 13.10).
+    // The resources of the exported interfaces, which other components reach through
+    // handles (§ 13.11).
+    let resources: Vec<DeclId> = world
+        .exports
+        .iter()
+        .flat_map(|&i| program.interfaces[i].types.iter().copied())
+        .filter(|&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
+        .collect();
+
+    // Imported functions come first in the function index space (§ 13.10), then the
+    // intrinsics of the resources: `new`, `rep` and `drop`.
+    let import_count = (imported.len() + 3 * resources.len()) as u32;
     let mut func_index = index_map(&used_funcs);
     for index in func_index.iter_mut().flatten() {
-        *index += imported.len() as u32;
+        *index += import_count;
     }
     for (k, &f) in imported.iter().enumerate() {
         func_index[f] = Some(k as u32);
     }
+    let defined = used_funcs.iter().filter(|&&u| u).count() as u32;
     let mut cx = ModuleCx::new(program, func_index);
+    cx.helper_base = import_count + defined;
     cx.imports = imported.clone();
     let exported: Vec<FuncId> = world
         .exports
@@ -99,8 +112,28 @@ pub fn generate(
             })
         })
         .collect();
-    // The top of the scratch buffer (§ 13.7) comes after the program's globals.
+    // The top of the scratch buffer (§ 13.7) comes after the program's globals, then the
+    // rep tables of the resources.
     cx.scratch_top = memory.then_some(next);
+    if memory {
+        next += 1;
+    }
+    for (k, &decl) in resources.iter().enumerate() {
+        let first = imported.len() as u32 + 3 * k as u32;
+        cx.resources.insert(
+            decl,
+            ResourceRt {
+                new: first,
+                rep: first + 1,
+                drop: first + 2,
+                reps: next,
+                frees: next + 1,
+                nfree: next + 2,
+                used: next + 3,
+            },
+        );
+        next += 4;
+    }
 
     let mut bodies = Vec::new();
     let mut signatures = Vec::new();
@@ -128,6 +161,10 @@ pub fn generate(
         }
     }
     let realloc = memory.then(|| cx.helper(Helper::Boundary(Boundary::Realloc)));
+    let dtors: Vec<(DeclId, u32)> = resources
+        .iter()
+        .map(|&d| (d, cx.helper(Helper::Boundary(Boundary::Dtor(d)))))
+        .collect();
     // Helpers can request other helpers.
     let mut done = 0;
     while done < cx.helpers.len() {
@@ -175,6 +212,33 @@ pub fn generate(
             &ConstExpr::i32_const(0),
         );
     }
+    for &decl in &resources {
+        let rt = cx.resources[&decl];
+        debug_assert_eq!(rt.reps as usize, globals.len() as usize);
+        let object = cx.heap(types.decl_type_of(decl));
+        let reps = cx.array(StorageType::Val(ref_type(object, true)));
+        let frees = cx.array(StorageType::Val(ValType::I32));
+        for array in [reps, frees] {
+            globals.global(
+                GlobalType {
+                    val_type: ref_type(array, true),
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::ref_null(HeapType::Concrete(array)),
+            );
+        }
+        for _ in 0..2 {
+            globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+        }
+    }
 
     // Imports (§ 13.10), with the standard names of the Component Model.
     let mut import_section = ImportSection::new();
@@ -184,6 +248,16 @@ pub fn generate(
         let (params, results) = boundary::import_signature(types, func);
         import_sigs.push(cx.signature(params, results));
     }
+    let intrinsic_sigs: Vec<[u32; 3]> = resources
+        .iter()
+        .map(|_| {
+            [
+                cx.signature(vec![ValType::I32], vec![ValType::I32]),
+                cx.signature(vec![ValType::I32], vec![ValType::I32]),
+                cx.signature(vec![ValType::I32], vec![]),
+            ]
+        })
+        .collect();
 
     // Standard Component Model export names (§ 13.3, § 13.6).
     let mut exports = ExportSection::new();
@@ -192,11 +266,22 @@ pub fn generate(
         let path = interface_names[func.interface]
             .as_deref()
             .expect("exported interface present in the WIT");
-        let name = format!("cm32p2|{path}|{}", kebab(&func.name));
+        let name = format!("cm32p2|{path}|{}", wit_func_name(types, func));
         exports.export(&name, ExportKind::Func, index);
         if let Some(post_return) = post_return {
             exports.export(&format!("{name}_post"), ExportKind::Func, post_return);
         }
+    }
+    for &(decl, dtor) in &dtors {
+        let path = interface_names[types.decls[decl].interface]
+            .as_deref()
+            .expect("exported interface present in the WIT");
+        let name = kebab(&types.decls[decl].name);
+        exports.export(
+            &format!("cm32p2|{path}|{name}_dtor"),
+            ExportKind::Func,
+            dtor,
+        );
     }
     let mut memories = MemorySection::new();
     if let Some(realloc) = realloc {
@@ -229,9 +314,22 @@ pub fn generate(
             .expect("imported interface present in the WIT");
         import_section.import(
             &format!("cm32p2|{path}"),
-            &kebab(&func.name),
+            &wit_func_name(types, func),
             EntityType::Function(gc_types + sig),
         );
+    }
+    for (&decl, sigs) in resources.iter().zip(intrinsic_sigs) {
+        let path = interface_names[types.decls[decl].interface]
+            .as_deref()
+            .expect("exported interface present in the WIT");
+        let name = kebab(&types.decls[decl].name);
+        for (suffix, sig) in ["new", "rep", "drop"].iter().zip(sigs) {
+            import_section.import(
+                &format!("cm32p2|_ex_{path}"),
+                &format!("{name}_{suffix}"),
+                EntityType::Function(gc_types + sig),
+            );
+        }
     }
     let mut functions = FunctionSection::new();
     for sig in signatures {
@@ -244,7 +342,7 @@ pub fn generate(
 
     let mut module = Module::new();
     module.section(&type_section);
-    if !imported.is_empty() {
+    if import_count > 0 {
         module.section(&import_section);
     }
     module.section(&functions);
@@ -267,6 +365,18 @@ pub fn generate(
         module.section(&data);
     }
     Ok(module.finish())
+}
+
+/// The name of a function in the core module (§ 13.3): the WIT name of a free function,
+/// `[constructor]r`, `[method]r.m` or `[static]r.s` for the functions of a resource.
+fn wit_func_name(types: &Types, func: &FuncDef) -> String {
+    let resource = |d: DeclId| kebab(&types.decls[d].name);
+    match func.kind {
+        FuncKind::Free => kebab(&func.name),
+        FuncKind::Constructor(d) => format!("[constructor]{}", resource(d)),
+        FuncKind::Method(d) => format!("[method]{}.{}", resource(d), kebab(&func.name)),
+        FuncKind::Static(d) => format!("[static]{}.{}", resource(d), kebab(&func.name)),
+    }
 }
 
 /// Maps each used item to its index in the module.
@@ -373,6 +483,25 @@ struct ModuleCx<'a> {
     /// Passive data segments of the long string literals.
     data: Vec<Vec<u8>>,
     data_index: HashMap<String, u32>,
+    /// Index of the first helper function.
+    helper_base: u32,
+    /// The runtime of each exported resource (§ 12.10).
+    resources: HashMap<DeclId, ResourceRt>,
+}
+
+/// The functions and globals behind the handles of an exported resource (§ 12.10): the
+/// intrinsics `new`, `rep` and `drop` of the Component Model, the table of the objects
+/// that have a handle (`reps`), and the stack of its free slots (`frees`, `nfree`).
+/// `used` is the number of slots handed out so far.
+#[derive(Clone, Copy)]
+struct ResourceRt {
+    new: u32,
+    rep: u32,
+    drop: u32,
+    reps: u32,
+    frees: u32,
+    nfree: u32,
+    used: u32,
 }
 
 impl<'a> ModuleCx<'a> {
@@ -397,6 +526,8 @@ impl<'a> ModuleCx<'a> {
             scratch_top: None,
             data: Vec::new(),
             data_index: HashMap::new(),
+            helper_base: 0,
+            resources: HashMap::new(),
         }
     }
 
@@ -506,7 +637,8 @@ impl<'a> ModuleCx<'a> {
             }
             TypeKind::Result { ok, err } => return self.variant(ty, &[*ok, *err]),
             TypeKind::Decl(d) => match &types.decls[*d].kind {
-                DeclKind::Record(fields) => {
+                DeclKind::Record(fields)
+                | DeclKind::Resource(crate::types::ResourceDef { fields, .. }) => {
                     let i = self.reserve(ty);
                     let fields = fields
                         .iter()
@@ -521,6 +653,7 @@ impl<'a> ModuleCx<'a> {
                 }
                 DeclKind::Enum(_) | DeclKind::Flags(_) => unreachable!("scalar type"),
             },
+            TypeKind::Borrow(inner) => return self.heap(*inner),
             TypeKind::Prim(_) | TypeKind::Char | TypeKind::Option(_) => {
                 unreachable!("not a heap type")
             }
@@ -636,8 +769,7 @@ impl<'a> ModuleCx<'a> {
         if let Some(&i) = self.helper_index.get(&helper) {
             return i;
         }
-        let users = self.func_index.iter().flatten().count() as u32;
-        let i = users + self.helpers.len() as u32;
+        let i = self.helper_base + self.helpers.len() as u32;
         self.helpers.push(helper);
         self.helper_index.insert(helper, i);
         i

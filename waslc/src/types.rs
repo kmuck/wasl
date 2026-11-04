@@ -235,8 +235,10 @@ pub enum TypeKind {
         ok: Option<Type>,
         err: Option<Type>,
     },
-    /// A `record`, `enum`, `variant` or `flags` type declared in an interface.
+    /// A `record`, `enum`, `variant`, `flags` or `resource` type declared in an interface.
     Decl(DeclId),
+    /// `borrow<r>`, where `r` is a resource (§ 7.12): only the type of a parameter.
+    Borrow(Type),
 }
 
 /// A type declared in an interface (§ 7.7).
@@ -254,6 +256,17 @@ pub enum DeclKind {
     Enum(Vec<String>),
     Variant(Vec<CaseDef>),
     Flags(Vec<String>),
+    Resource(ResourceDef),
+}
+
+/// A resource (§ 7.12): its private fields, and its functions by name, as ids of
+/// [`crate::hir::Program::funcs`].
+#[derive(Debug, Default)]
+pub struct ResourceDef {
+    pub fields: Vec<FieldDef>,
+    pub constructor: Option<usize>,
+    pub methods: Vec<(String, usize)>,
+    pub statics: Vec<(String, usize)>,
 }
 
 impl DeclKind {
@@ -263,6 +276,7 @@ impl DeclKind {
             DeclKind::Enum(_) => "enum",
             DeclKind::Variant(_) => "variant",
             DeclKind::Flags(_) => "flags",
+            DeclKind::Resource(_) => "resource",
         }
     }
 }
@@ -363,10 +377,12 @@ impl Types {
             TypeKind::Tuple(elems) => elems.clone(),
             TypeKind::Option(inner) => vec![*inner],
             TypeKind::Result { ok, err } => ok.iter().chain(err).copied().collect(),
+            TypeKind::Borrow(inner) => vec![*inner],
             TypeKind::Decl(id) => match &self.decls[*id].kind {
                 DeclKind::Record(fields) => fields.iter().map(|f| f.ty).collect(),
                 DeclKind::Variant(cases) => cases.iter().filter_map(|c| c.payload).collect(),
-                DeclKind::Enum(_) | DeclKind::Flags(_) => Vec::new(),
+                // The fields of a resource are private: they never cross the boundary.
+                DeclKind::Enum(_) | DeclKind::Flags(_) | DeclKind::Resource(_) => Vec::new(),
             },
         }
     }
@@ -437,6 +453,24 @@ impl Types {
         false
     }
 
+    /// The resource of a resource type or of a `borrow` of one.
+    pub fn resource(&self, ty: Type) -> Option<(DeclId, &ResourceDef)> {
+        let ty = match self.kind(ty) {
+            TypeKind::Borrow(inner) => *inner,
+            _ => ty,
+        };
+        match self.decl(ty) {
+            Some((
+                id,
+                TypeDecl {
+                    kind: DeclKind::Resource(r),
+                    ..
+                },
+            )) => Some((id, r)),
+            _ => None,
+        }
+    }
+
     /// Whether the type is a scalar: a primitive type, `char`, an enum or a flags type
     /// (§ 7.5).
     pub fn is_scalar(&self, ty: Type) -> bool {
@@ -475,6 +509,7 @@ impl Types {
                     .join(", ")
             ),
             TypeKind::Option(inner) => format!("option<{}>", self.display_in(*inner, iface)),
+            TypeKind::Borrow(inner) => format!("borrow<{}>", self.display_in(*inner, iface)),
             TypeKind::Result { ok, err } => match (ok, err) {
                 (None, None) => "result".into(),
                 (Some(ok), None) => format!("result<{}>", self.display_in(*ok, iface)),

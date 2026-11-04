@@ -218,12 +218,12 @@ module: cm32p2|<interface>         name: <function>
 
 **Same package.** For `import accounts;` the component imports the functions of `accounts` that it calls, under the name of the package; the functions of `accounts` are not compiled into it (§ 2.5). The component of the world that exports `accounts` provides them when the two are composed (§ 14.2).
 
-## 13.11 Resources at the boundary (specified, not available yet)
+## 13.11 Resources at the boundary
 
 A resource `r` of an exported interface `i` is a WasmGC struct inside the component (§ 12.10), but the Component Model gives other components an `i32` handle whose **representation** (`rep`) is chosen by the component. A WasmGC reference cannot be a `rep`, so the module keeps a **rep table**:
 
-- a mutable global `$reps_r`, a growable `(array (mut (ref null $r)))`, and a free list of its empty slots;
-- `rep` is an index in this array. Each handle given out gets its own slot, which holds the object, and keeps it alive, until the handle is released.
+- a mutable global `$reps_r`, a growable `(array (mut (ref null $r)))`, and a stack of its empty slots, `$frees_r`, an `(array (mut i32))` as large as `$reps_r`, with the count of its entries;
+- `rep` is an index in this array. Each handle given out gets its own slot, which holds the object, and keeps it alive, until the handle is released. A new handle takes the last freed slot, or else the next unused one; when the array is full, both arrays are replaced by arrays twice as large (8 slots at first), and the objects are copied with `array.copy`.
 
 The module imports the intrinsics of the Component Model for `r`, under the module `cm32p2|_ex_<interface>`, and exports its destructor:
 

@@ -258,7 +258,7 @@ interface counters {          // exported by a world
 }
 ```
 
-## 7.12 Resources (specified, not available yet)
+## 7.12 Resources
 
 A resource is the object of the Component Model: a type with a private state and **methods**. Other components never see its state; they hold a **handle** to it and call its methods. A resource is declared in an interface, like the other types:
 
@@ -307,7 +307,7 @@ interface carts {
 
 - The **fields** of a resource are its private state. They are declared like the fields of a record, each followed by `,`, and may be `mut`. A resource may have no field.
 - The fields never appear in the WIT, which only has the constructor, the methods and the static functions. A `mut` field is therefore allowed in a resource of an exported interface: E0214 does not apply to it (§ 7.11).
-- The fields can only be named inside the interface that declares the resource (E0309): `self.items`, `c.items` for any `c` of type `cart`, and the **resource literal** `cart { items: 0, amount: 0 }`, written like a record literal (§ 8.11), which creates a new object. Outside the interface, a resource is only reached through its constructor, its methods and its static functions.
+- The fields can only be named inside the interface that declares the resource (E0309): `self.items`, `c.items` for any `c` of type `cart`, and the **resource literal** `cart { items: 0, amount: 0 }`, written like a record literal (§ 8.11), which creates a new object. A resource without field is written `cart {}`. Outside the interface, a resource is only reached through its constructor, its methods and its static functions.
 
 ### Constructor, methods, static functions
 
@@ -322,6 +322,8 @@ A resource has two representations, depending on where its object lives (§ 12.1
 
 - A resource of an interface of the package that the world does **not** import is a WasmGC struct inside the component, exactly like a record whose fields are private: values are references, shared and reclaimed by the runtime like any heap value (§ 10.8). When it crosses the boundary, the component gives the other side a handle to it, and gets it back when the other side gives the handle back.
 - A resource of an interface of another package, or of an interface of the package that the world imports, lives in another component. The component only holds **handles** to it: `i32` indexes into the handle table that the Component Model keeps for the instance. A handle must be given back to its owner when it is no longer needed; WaSL does it automatically (§ 9.9).
+
+Handle types are *specified, not available yet*: a world cannot import an interface that declares a resource yet (E0215).
 
 A **handle type** is a resource type declared in an interface of another package, or in an interface of the package that at least one world imports. The rules below apply to handle types everywhere in the package except in the interface that declares the resource, so that the same code is valid in every world, whatever the representation the world gives it:
 

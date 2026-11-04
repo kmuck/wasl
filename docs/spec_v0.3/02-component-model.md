@@ -190,9 +190,9 @@ world calculator {
 
 Each component embeds the WIT of its world: tools such as `wasm-tools component wit` read it back from the `.wasm` file. The source code is the only source of truth; no `.wit` file is written by hand. The exact generation rules are in § 13.1, including the interfaces that only appear because another one uses their types.
 
-## 2.7 Resources (specified, not available yet)
+## 2.7 Resources
 
 A **resource** is the Component Model's object: a type with an identity, a private state and methods, which other components reach only through a **handle**. WaSL declares resources in interfaces, like WIT (§ 7.12):
 
 - a resource **of the package** is a WasmGC object inside its component, like a record whose fields nobody else can see; a handle to it is created only when it leaves the component;
-- a resource of an **imported** interface lives in another component; the component only holds handles to it, which the compiler gives back to their owner when the code no longer needs them (§ 9.9).
+- a resource of an **imported** interface (*specified, not available yet*) lives in another component; the component only holds handles to it, which the compiler gives back to their owner when the code no longer needs them (§ 9.9).

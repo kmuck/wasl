@@ -121,6 +121,7 @@ impl<'r> Converter<'r> {
                     scope.funcs.insert(name.clone(), first_func + funcs.len());
                     funcs.push(hir::FuncDef {
                         name,
+                        kind: hir::FuncKind::Free,
                         interface: hir_id,
                         params,
                         ret,

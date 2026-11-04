@@ -1,6 +1,5 @@
 // Target program of WaSL v0.3 (docs/spec_v0.3), with examples/checkout: a resource
 // defined by this package and used by another component.
-// It is written before the compiler supports it, and the v0.2 compiler rejects it.
 
 world catalog {
   export carts;
