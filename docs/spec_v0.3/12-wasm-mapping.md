@@ -246,7 +246,7 @@ The table of handles that other components hold on these objects is part of the 
 
 `option<r>`, where `r` is a handle type, boxes the `i32` (§ 12.7); variants and results hold it as an `i32` payload. Releases are emitted at each exit of a block, before its `br` or `return`, in the reverse order of the declarations (§ 10.11).
 
-## 12.11 Error propagation (specified, not available yet)
+## 12.11 Error propagation
 
 `e?` compiles to the instructions of the equivalent `match` (§ 8.19), without the `br_table`:
 

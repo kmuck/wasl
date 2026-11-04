@@ -81,6 +81,7 @@ pub enum TokenKind {
     AndAnd,
     OrOr,
     Bang,
+    Question,
     Dot,
     LBracket,
     RBracket,
@@ -184,6 +185,7 @@ impl TokenKind {
             TokenKind::AndAnd => "&&",
             TokenKind::OrOr => "||",
             TokenKind::Bang => "!",
+            TokenKind::Question => "?",
             TokenKind::Dot => ".",
             TokenKind::LBracket => "[",
             TokenKind::RBracket => "]",
@@ -649,6 +651,7 @@ impl Lexer<'_> {
             (b'=', _) => (TokenKind::Eq, 1),
             (b'!', Some(b'=')) => (TokenKind::Ne, 2),
             (b'!', _) => (TokenKind::Bang, 1),
+            (b'?', _) => (TokenKind::Question, 1),
             (b'<', Some(b'<')) => (TokenKind::Shl, 2),
             (b'<', Some(b'=')) => (TokenKind::Le, 2),
             (b'<', _) => (TokenKind::Lt, 1),
@@ -868,6 +871,6 @@ mod tests {
     fn invalid_chars() {
         assert_eq!(error_code("élan"), Code::InvalidChar);
         assert_eq!(error_code("a @ b"), Code::InvalidChar);
-        assert_eq!(error_code("a ? b"), Code::InvalidChar);
+        assert_eq!(error_code("a # b"), Code::InvalidChar);
     }
 }

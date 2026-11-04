@@ -185,9 +185,10 @@ pub enum StmtKind {
     Break,
     Continue,
     Return(Option<Expr>),
-    Call(Call),
-    /// `_ = f(…);`: a call whose value is discarded (§ 9.6).
-    Discard(Call),
+    /// A call statement (§ 5.3): a call, possibly followed by `?`.
+    Call(Expr),
+    /// `_ = f(…);`: a call statement whose value is discarded (§ 9.6).
+    Discard(Expr),
 }
 
 /// Target of an assignment: a name followed by field accesses and indexes (§ 5.3).
@@ -306,6 +307,8 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     Paren(Box<Expr>),
+    /// `e?` (§ 8.19)
+    Try(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

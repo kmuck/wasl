@@ -56,6 +56,8 @@ pub enum Code {
     NotMatchable,
     FlagsOrder,
     IgnoredValue,
+    TryOperand,
+    TryReturn,
     // Control flow
     AssignImmutable,
     BreakOutsideLoop,
@@ -118,6 +120,8 @@ impl Code {
             Code::NotMatchable => "E0411",
             Code::FlagsOrder => "E0412",
             Code::IgnoredValue => "E0413",
+            Code::TryOperand => "E0414",
+            Code::TryReturn => "E0415",
             Code::AssignImmutable => "E0500",
             Code::BreakOutsideLoop => "E0501",
             Code::MissingReturnValue => "E0502",

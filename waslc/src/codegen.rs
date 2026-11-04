@@ -338,7 +338,8 @@ fn visit_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
         | ExprKind::Some(expr)
         | ExprKind::Field { expr, .. }
         | ExprKind::Elem { expr, .. }
-        | ExprKind::Flag { expr, .. } => visit_expr(expr, f),
+        | ExprKind::Flag { expr, .. }
+        | ExprKind::Try { expr, .. } => visit_expr(expr, f),
         ExprKind::Binary { lhs: a, rhs: b, .. } | ExprKind::Index { expr: a, index: b } => {
             visit_expr(a, f);
             visit_expr(b, f);
@@ -638,6 +639,19 @@ impl<'a> ModuleCx<'a> {
                     ];
                     let g = self.shared_global(ref_type(base, false), init);
                     self.shared_cases.insert((ty, *case), g);
+                }
+            }
+            ExprKind::Try { expr, ret } => {
+                // `?` on a result returns the `err` of the function's result type: without
+                // a payload, its shared instance.
+                if let TypeKind::Result { err: None, .. } = self.types.kind(*ret)
+                    && let TypeKind::Result { .. } = self.types.kind(expr.value_ty())
+                    && !self.shared_cases.contains_key(&(*ret, 1))
+                {
+                    let base = self.heap(*ret);
+                    let init = vec![Instruction::I32Const(1), Instruction::StructNew(base)];
+                    let g = self.shared_global(ref_type(base, false), init);
+                    self.shared_cases.insert((*ret, 1), g);
                 }
             }
             _ => {}
@@ -959,6 +973,81 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         self.frames.pop();
     }
 
+    /// `e?` (§ 12.11): leaves the payload of `ok` or `some` on the stack, or returns the
+    /// `err` or `none` of the function's return type `ret`.
+    fn try_(&mut self, e: &Expr, ret: Type) {
+        let types = self.types();
+        let ty = e.value_ty();
+        self.expr(e);
+        let val = self.cx.val(ty);
+        let s = self.scratch(val);
+        self.emit(Instruction::LocalSet(s));
+        self.emit(Instruction::LocalGet(s));
+        match types.kind(ty) {
+            TypeKind::Result { ok, err } => {
+                let base = self.cx.heap(ty);
+                self.emit(Instruction::StructGet {
+                    struct_type_index: base,
+                    field_index: 0,
+                });
+                self.emit(Instruction::If(BlockType::Empty));
+                // Tag 1: `err`. The error is rebuilt in the function's result type, which
+                // is a different struct family (§ 12.6).
+                match err {
+                    Some(_) => {
+                        let from = self.cx.case_type(ty, 1);
+                        let to = self.cx.case_type(ret, 1);
+                        self.emit(Instruction::I32Const(1));
+                        self.emit(Instruction::LocalGet(s));
+                        self.emit(Instruction::RefCastNonNull(HeapType::Concrete(from)));
+                        self.emit(Instruction::StructGet {
+                            struct_type_index: from,
+                            field_index: 1,
+                        });
+                        self.emit(Instruction::StructNew(to));
+                    }
+                    None => {
+                        let g = self.cx.shared_cases[&(ret, 1)];
+                        self.emit(Instruction::GlobalGet(g));
+                    }
+                }
+                self.emit(Instruction::Return);
+                self.emit(Instruction::End);
+                if ok.is_some() {
+                    let case = self.cx.case_type(ty, 0);
+                    self.emit(Instruction::LocalGet(s));
+                    self.emit(Instruction::RefCastNonNull(HeapType::Concrete(case)));
+                    self.emit(Instruction::StructGet {
+                        struct_type_index: case,
+                        field_index: 1,
+                    });
+                }
+            }
+            TypeKind::Option(inner) => {
+                self.emit(Instruction::RefIsNull);
+                self.emit(Instruction::If(BlockType::Empty));
+                let TypeKind::Option(ret_inner) = types.kind(ret) else {
+                    unreachable!("checked: `?` on an option returns an option")
+                };
+                let none = self.cx.option_heap(*ret_inner);
+                self.emit(Instruction::RefNull(HeapType::Concrete(none)));
+                self.emit(Instruction::Return);
+                self.emit(Instruction::End);
+                self.emit(Instruction::LocalGet(s));
+                if self.cx.boxed(*inner) {
+                    let boxed = self.cx.option_heap(*inner);
+                    self.emit(Instruction::StructGet {
+                        struct_type_index: boxed,
+                        field_index: 0,
+                    });
+                } else {
+                    self.emit(Instruction::RefAsNonNull);
+                }
+            }
+            _ => unreachable!("checked: `?` applies to a result or an option"),
+        }
+    }
+
     fn branch(&mut self, target: Frame) {
         let index = self
             .frames
@@ -1059,6 +1148,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                     }
                 }
             }
+            ExprKind::Try { expr, ret } => self.try_(expr, *ret),
             ExprKind::Some(value) => {
                 self.expr(value);
                 let inner = value.value_ty();

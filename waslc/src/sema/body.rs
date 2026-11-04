@@ -293,7 +293,41 @@ impl<'a> FnCx<'a> {
                     );
                 }
             },
-            StmtKind::Call(call) => {
+            StmtKind::Call(ast::Expr {
+                kind: ExprKind::Try(inner),
+                span,
+            }) => {
+                let value = self.try_(inner, *span)?;
+                if let Some(ty) = value.ty {
+                    return err(
+                        Code::IgnoredValue,
+                        stmt.span,
+                        format!(
+                            "the value of this `?` (`{}`) is ignored: use it, or write `_ =` before the statement to discard it",
+                            self.show(ty)
+                        ),
+                    );
+                }
+                hir::Stmt::Call(value)
+            }
+            StmtKind::Discard(ast::Expr {
+                kind: ExprKind::Try(inner),
+                span,
+            }) => {
+                let value = self.try_(inner, *span)?;
+                if value.ty.is_none() {
+                    return err(
+                        Code::TypeMismatch,
+                        stmt.span,
+                        "this `?` has no value, so there is nothing to discard: remove `_ =`",
+                    );
+                }
+                hir::Stmt::Call(value)
+            }
+            StmtKind::Call(ast::Expr {
+                kind: ExprKind::Call(call),
+                ..
+            }) => {
                 let target = self.call_target(call)?;
                 if !matches!(target, PathTarget::Func(_) | PathTarget::Builtin(_)) {
                     return err(
@@ -316,7 +350,10 @@ impl<'a> FnCx<'a> {
                 }
                 hir::Stmt::Call(call_expr)
             }
-            StmtKind::Discard(call) => {
+            StmtKind::Discard(ast::Expr {
+                kind: ExprKind::Call(call),
+                ..
+            }) => {
                 let target = self.call_target(call)?;
                 if !matches!(target, PathTarget::Func(_) | PathTarget::Builtin(_)) {
                     return err(
@@ -338,7 +375,93 @@ impl<'a> FnCx<'a> {
                 }
                 hir::Stmt::Call(call_expr)
             }
+            StmtKind::Call(_) | StmtKind::Discard(_) => {
+                unreachable!("the parser only builds calls and `?` in call statements")
+            }
         })
+    }
+
+    /// `e?` (§ 8.19). The result has no type when `e` is a `result` whose `ok` has no
+    /// payload.
+    fn try_(&mut self, inner: &ast::Expr, span: Span) -> Result<hir::Expr> {
+        let operand = self.expr(inner, None)?;
+        let ty = operand.value_ty();
+        let types = &*self.types;
+        let ret = self.ret;
+        let ret_kind = ret.map(|r| types.kind(r));
+        let value = match types.kind(ty) {
+            TypeKind::Result { ok, err: e } => {
+                match ret_kind {
+                    Some(TypeKind::Result { err: re, .. }) if re == e => {}
+                    Some(TypeKind::Result { .. }) => {
+                        return err(
+                            Code::TryReturn,
+                            span,
+                            format!(
+                                "`?` cannot propagate the error of `{}` from a function that returns `{}`: the error types differ; use `match` to convert the error",
+                                self.show(ty),
+                                self.show(ret.unwrap())
+                            ),
+                        );
+                    }
+                    _ => {
+                        let error = match e {
+                            Some(e) => format!("result<…, {}>", self.show(*e)),
+                            None => "result<…>".to_string(),
+                        };
+                        return err(
+                            Code::TryReturn,
+                            span,
+                            format!(
+                                "`?` on a `{}` needs a function that returns a `{error}`, but this function returns {}",
+                                self.show(ty),
+                                self.returns(),
+                            ),
+                        );
+                    }
+                }
+                *ok
+            }
+            TypeKind::Option(inner_ty) => {
+                if !matches!(ret_kind, Some(TypeKind::Option(_))) {
+                    return err(
+                        Code::TryReturn,
+                        span,
+                        format!(
+                            "`?` on an `{}` needs a function that returns an `option`, but this function returns {}",
+                            self.show(ty),
+                            self.returns(),
+                        ),
+                    );
+                }
+                Some(*inner_ty)
+            }
+            _ => {
+                return err(
+                    Code::TryOperand,
+                    inner.span,
+                    format!(
+                        "`?` applies to a `result` or an `option`, not to `{}`",
+                        self.show(ty)
+                    ),
+                );
+            }
+        };
+        Ok(hir::Expr {
+            kind: hir::ExprKind::Try {
+                expr: Box::new(operand),
+                ret: ret.expect("checked above"),
+            },
+            ty: value,
+        })
+    }
+
+    /// The return type of the function, as written in messages.
+    fn returns(&self) -> String {
+        match self.ret {
+            Some(ty) => format!("`{}`", self.show(ty)),
+            None => "no value".to_string(),
+        }
     }
 
     fn if_(&mut self, if_: &ast::If) -> Result<hir::Stmt> {
@@ -383,6 +506,17 @@ impl<'a> FnCx<'a> {
             ExprKind::Float(s) => return self.float_literal(s, e.span, expected),
             ExprKind::Bool(b) => typed(hir::ExprKind::Const(Const::bool(*b)), Type::BOOL),
             ExprKind::Paren(inner) => return self.expr(inner, expected),
+            ExprKind::Try(inner) => {
+                let result = self.try_(inner, e.span)?;
+                if result.ty.is_none() {
+                    return err(
+                        Code::TypeMismatch,
+                        e.span,
+                        "this `?` has no value: the `ok` of its `result` has no payload, so it can only be used as a statement",
+                    );
+                }
+                result
+            }
             ExprKind::Name(name) => {
                 if let Some(id) = self.lookup_local(name) {
                     typed(hir::ExprKind::Local(id), self.locals[id as usize])

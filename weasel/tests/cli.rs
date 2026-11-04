@@ -250,3 +250,89 @@ fn invoice_example() {
         "error: `invoices::total` expects 1 argument(s) (inv: invoice), 0 given\n"
     );
 }
+
+/// `?` on `result` and `option` (§ 8.19, § 12.11).
+#[test]
+fn error_propagation() {
+    let dir = project(&[(
+        "src/calc.wasl",
+        "
+world app {
+  export calc;
+}
+
+interface calc {
+  enum calc_error {
+    negative,
+    too_big,
+  }
+
+  func check(x: s32) -> result<u32, calc_error> {
+    if (x < 0) {
+      return result::err(calc_error::negative);
+    }
+    if (x > 100) {
+      return result::err(calc_error::too_big);
+    }
+    return result::ok(u32(x));
+  }
+
+  func validate(x: s32) -> result<_, calc_error> {
+    _ = check(x)?;
+    return result::ok;
+  }
+
+  func sum(a: s32, b: s32) -> result<u64, calc_error> {
+    validate(a)?;
+    local s: u32 = check(a)? + check(b)?;
+    return result::ok(u64(s));
+  }
+
+  func first(xs: list<u32>) -> option<u32> {
+    if (list::len(xs) == 0) {
+      return option::none;
+    }
+    return option::some(xs[0]);
+  }
+
+  func first_plus_one(xs: list<u32>) -> option<u32> {
+    return option::some(first(xs)? + 1);
+  }
+
+  func name(n: u32) -> option<string> {
+    if (n == 0) {
+      return option::none;
+    }
+    return option::some(\"x\");
+  }
+
+  func shout(n: u32) -> option<string> {
+    return option::some(name(n)? + \"!\");
+  }
+
+  func flag(ok: bool) -> result {
+    if (ok) {
+      return result::ok;
+    }
+    return result::err;
+  }
+
+  func twice(ok: bool) -> result<u32> {
+    flag(ok)?;
+    return result::ok(2);
+  }
+}
+",
+    )]);
+    let dir = dir.path();
+    assert_eq!(ok(dir, &["call", "sum", "2", "3"]), "ok(5)\n");
+    assert_eq!(ok(dir, &["call", "sum", "-1", "3"]), "err(negative)\n");
+    assert_eq!(ok(dir, &["call", "sum", "2", "200"]), "err(too-big)\n");
+    assert_eq!(ok(dir, &["call", "validate", "7"]), "ok\n");
+    assert_eq!(ok(dir, &["call", "first_plus_one", "[]"]), "none\n");
+    assert_eq!(ok(dir, &["call", "first_plus_one", "[4, 9]"]), "some(5)\n");
+    assert_eq!(ok(dir, &["call", "shout", "0"]), "none\n");
+    assert_eq!(ok(dir, &["call", "shout", "1"]), "some(\"x!\")\n");
+    assert_eq!(ok(dir, &["call", "twice", "true"]), "ok(2)\n");
+    assert_eq!(ok(dir, &["call", "twice", "false"]), "err\n");
+}

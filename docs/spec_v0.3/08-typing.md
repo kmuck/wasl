@@ -318,7 +318,7 @@ global no_discount: option<invoices::discount> = option::none;
 
 A global that is not `mut` always designates the same value, but that value can have `mut` fields or be a `list<mut T>`, whose contents can change. Its type is written with a path when it is a declared type (§ 7.8).
 
-## 8.19 Error propagation `?` (specified, not available yet)
+## 8.19 Error propagation `?`
 
 `e?` unwraps a `result` or an `option`, and returns from the function in the other case:
 
