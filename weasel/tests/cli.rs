@@ -523,3 +523,45 @@ fn registry_dependencies() {
         run.stderr
     );
 }
+
+/// Imports of interfaces of a dependency (§ 2.5).
+#[test]
+fn imports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(&root.join("lib/wasl.toml"), &manifest("lib", ""));
+    write(&root.join("lib/src/lib.wasl"), LIB);
+    write(
+        &root.join("app/wasl.toml"),
+        &manifest("app", "\"demo:lib\" = { path = \"../lib\" }\n"),
+    );
+    write(
+        &root.join("app/src/app.wasl"),
+        "world main {\n  import demo:lib/i;\n  export calls;\n}\n\nworld plain {\n  export util;\n}\n\n\
+         interface calls {\n  func twice() -> u32 {\n    return i::f() + i::f();\n  }\n}\n\n\
+         interface util {\n  func one() -> u32 {\n    return 1;\n  }\n}\n",
+    );
+    let app = root.join("app");
+    let wit = ok(&app, &["wit"]);
+    assert!(
+        wit.contains("world main {\n  import demo:lib/i@0.1.0;\n\n  export calls;\n}"),
+        "{wit}"
+    );
+    ok(&app, &["build", "main"]);
+    assert!(app.join("build/main.wasm").is_file());
+    assert_eq!(ok(&app, &["call", "one"]), "1\n");
+    assert_eq!(
+        fails(&app, &["call", "twice"]),
+        "error: `calls::twice` is only exported by world `main`, which imports `demo:lib/i@0.1.0`: `weasel call` cannot provide imports yet\n"
+    );
+
+    // Every package named in the source must be a dependency (E0215).
+    write(
+        &root.join("app/src/app.wasl"),
+        "world main {\n  import demo:other/i;\n}\n",
+    );
+    assert_eq!(
+        fails(&app, &["check"]),
+        "src/app.wasl:2:10: error[E0215]: `demo:other` is not a dependency of the package: add `\"demo:other\"` to `[dependencies]` in `wasl.toml`\n"
+    );
+}

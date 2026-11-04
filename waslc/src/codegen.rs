@@ -5,16 +5,17 @@ use std::collections::HashMap;
 
 use wasm_encoder::{
     ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
-    DataCountSection, DataSection, ExportKind, ExportSection, FieldType, Function, FunctionSection,
-    GlobalSection, GlobalType, HeapType, Ieee32, Ieee64, Instruction, MemorySection, MemoryType,
-    Module, RefType, StorageType, StructType, SubType, TypeSection, ValType,
+    DataCountSection, DataSection, EntityType, ExportKind, ExportSection, FieldType, Function,
+    FunctionSection, GlobalSection, GlobalType, HeapType, Ieee32, Ieee64, ImportSection,
+    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType,
+    TypeSection, ValType,
 };
 
 use crate::ast::{BinOp, UnaryOp};
 use crate::diag::Result;
 use crate::hir::{
     Arith, Builtin, Const, Expr, ExprKind, FuncDef, FuncId, GlobalId, MatchArm, Place, Program,
-    Stmt,
+    Stmt, visit_expr, visit_stmts,
 };
 use crate::types::{DeclKind, Prim, Type, TypeKind, Types};
 use crate::wit::kebab;
@@ -38,31 +39,33 @@ pub fn generate(
     world: usize,
     interface_names: &[Option<String>],
 ) -> Result<Vec<u8>> {
+    let (used_funcs, imported) = program.reach(world);
     let world = &program.worlds[world];
     let types = &program.types;
 
-    // Functions and globals reachable from the exports.
-    let mut used_funcs = vec![false; program.funcs.len()];
+    // Globals used by the functions reachable from the exports.
     let mut used_globals = vec![false; program.globals.len()];
-    let mut work: Vec<FuncId> = world
-        .exports
-        .iter()
-        .flat_map(|&i| program.interfaces[i].funcs.iter().copied())
-        .collect();
-    while let Some(f) = work.pop() {
-        if std::mem::replace(&mut used_funcs[f], true) {
-            continue;
+    for (f, func) in program.funcs.iter().enumerate() {
+        if used_funcs[f] {
+            visit_stmts(&func.body, &mut |e| {
+                if let ExprKind::Global(g) = e.kind {
+                    used_globals[g] = true;
+                }
+            });
+            mark_assigned_globals(&func.body, &mut used_globals);
         }
-        visit_stmts(&program.funcs[f].body, &mut |e| match e.kind {
-            ExprKind::Call { func, .. } if !used_funcs[func] => work.push(func),
-            ExprKind::Global(g) => used_globals[g] = true,
-            _ => {}
-        });
-        mark_assigned_globals(&program.funcs[f].body, &mut used_globals);
     }
 
-    let func_index = index_map(&used_funcs);
+    // Imported functions come first in the function index space (§ 13.10).
+    let mut func_index = index_map(&used_funcs);
+    for index in func_index.iter_mut().flatten() {
+        *index += imported.len() as u32;
+    }
+    for (k, &f) in imported.iter().enumerate() {
+        func_index[f] = Some(k as u32);
+    }
     let mut cx = ModuleCx::new(program, func_index);
+    cx.imports = imported.clone();
     let exported: Vec<FuncId> = world
         .exports
         .iter()
@@ -70,6 +73,7 @@ pub fn generate(
         .collect();
     let memory = exported
         .iter()
+        .chain(&imported)
         .any(|&f| boundary::needs_memory(types, &program.funcs[f]));
 
     // Shared immutable values (§ 12.8, § 12.6): string literals and cases without
@@ -172,6 +176,15 @@ pub fn generate(
         );
     }
 
+    // Imports (§ 13.10), with the standard names of the Component Model.
+    let mut import_section = ImportSection::new();
+    let mut import_sigs = Vec::new();
+    for &f in &imported {
+        let func = &program.funcs[f];
+        let (params, results) = boundary::import_signature(types, func);
+        import_sigs.push(cx.signature(params, results));
+    }
+
     // Standard Component Model export names (§ 13.3, § 13.6).
     let mut exports = ExportSection::new();
     for (f, index, post_return) in core_exports {
@@ -209,6 +222,17 @@ pub fn generate(
             .ty()
             .function(params.iter().copied(), results.iter().copied());
     }
+    for (&f, sig) in imported.iter().zip(import_sigs) {
+        let func = &program.funcs[f];
+        let path = interface_names[func.interface]
+            .as_deref()
+            .expect("imported interface present in the WIT");
+        import_section.import(
+            &format!("cm32p2|{path}"),
+            &kebab(&func.name),
+            EntityType::Function(gc_types + sig),
+        );
+    }
     let mut functions = FunctionSection::new();
     for sig in signatures {
         functions.function(gc_types + sig);
@@ -220,6 +244,9 @@ pub fn generate(
 
     let mut module = Module::new();
     module.section(&type_section);
+    if !imported.is_empty() {
+        module.section(&import_section);
+    }
     module.section(&functions);
     if realloc.is_some() {
         module.section(&memories);
@@ -280,79 +307,6 @@ fn mark_assigned_globals(stmts: &[Stmt], used: &mut [bool]) {
     }
 }
 
-/// Visits every expression of a list of statements.
-fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
-    for stmt in stmts {
-        match stmt {
-            Stmt::Local { init, .. } => init.iter().for_each(|e| visit_expr(e, f)),
-            Stmt::Assign { place, value } => {
-                match place {
-                    Place::Local(_) | Place::Global(_) => {}
-                    Place::Field { record, .. } => visit_expr(record, f),
-                    Place::Index { list, index } => {
-                        visit_expr(list, f);
-                        visit_expr(index, f);
-                    }
-                }
-                visit_expr(value, f);
-            }
-            Stmt::Match {
-                scrutinee,
-                arms,
-                else_,
-            } => {
-                visit_expr(scrutinee, f);
-                for arm in arms {
-                    visit_stmts(&arm.body, f);
-                }
-                if let Some(else_) = else_ {
-                    visit_stmts(else_, f);
-                }
-            }
-            Stmt::If { cond, then, else_ } => {
-                visit_expr(cond, f);
-                visit_stmts(then, f);
-                visit_stmts(else_, f);
-            }
-            Stmt::While { cond, body } => {
-                visit_expr(cond, f);
-                visit_stmts(body, f);
-            }
-            Stmt::Return(value) => value.iter().for_each(|e| visit_expr(e, f)),
-            Stmt::Call(e) => visit_expr(e, f),
-            Stmt::Break | Stmt::Continue => {}
-        }
-    }
-}
-
-fn visit_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
-    f(e);
-    match &e.kind {
-        ExprKind::Call { args, .. }
-        | ExprKind::Builtin { args, .. }
-        | ExprKind::Record(args)
-        | ExprKind::List(args)
-        | ExprKind::Tuple(args) => args.iter().for_each(|a| visit_expr(a, f)),
-        ExprKind::Unary { expr, .. }
-        | ExprKind::Convert(expr)
-        | ExprKind::Some(expr)
-        | ExprKind::Field { expr, .. }
-        | ExprKind::Elem { expr, .. }
-        | ExprKind::Flag { expr, .. }
-        | ExprKind::Try { expr, .. } => visit_expr(expr, f),
-        ExprKind::Binary { lhs: a, rhs: b, .. } | ExprKind::Index { expr: a, index: b } => {
-            visit_expr(a, f);
-            visit_expr(b, f);
-        }
-        ExprKind::Case { payload, .. } => payload.iter().for_each(|p| visit_expr(p, f)),
-        ExprKind::Const(_)
-        | ExprKind::Local(_)
-        | ExprKind::Global(_)
-        | ExprKind::Str(_)
-        | ExprKind::None => {}
-    }
-}
-
 fn ref_type(index: u32, nullable: bool) -> ValType {
     ValType::Ref(RefType {
         nullable,
@@ -403,6 +357,8 @@ struct ModuleCx<'a> {
     signatures: Vec<(Vec<ValType>, Vec<ValType>)>,
 
     func_index: Vec<Option<u32>>,
+    /// Functions of other components that the module imports, in index order.
+    imports: Vec<FuncId>,
     helpers: Vec<Helper>,
     helper_index: HashMap<Helper, u32>,
 
@@ -431,6 +387,7 @@ impl<'a> ModuleCx<'a> {
             cases: HashMap::new(),
             signatures: Vec::new(),
             func_index,
+            imports: Vec::new(),
             helpers: Vec::new(),
             helper_index: HashMap::new(),
             shared_globals: Vec::new(),
@@ -661,6 +618,17 @@ impl<'a> ModuleCx<'a> {
     fn shared_global(&mut self, ty: ValType, init: Vec<Instruction<'static>>) -> u32 {
         self.shared_globals.push((ty, init));
         self.shared_globals.len() as u32 - 1
+    }
+
+    /// The function a call to `f` calls: the reverse adapter of an imported function
+    /// that needs one (§ 13.10), the function itself otherwise.
+    fn call_index(&mut self, f: FuncId) -> u32 {
+        if self.imports.contains(&f)
+            && boundary::import_needs_adapter(self.types, &self.program.funcs[f])
+        {
+            return self.helper(Helper::Boundary(Boundary::Import(f)));
+        }
+        self.func_index[f].expect("used function")
     }
 
     /// Index of a helper function; its body is generated after the program's functions.
@@ -1089,7 +1057,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 for arg in args {
                     self.expr(arg);
                 }
-                let index = self.cx.func_index[*func].expect("used function");
+                let index = self.cx.call_index(*func);
                 self.emit(Instruction::Call(index));
             }
             ExprKind::Unary { op, expr } => self.unary(*op, expr),

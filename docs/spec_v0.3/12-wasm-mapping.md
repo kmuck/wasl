@@ -11,7 +11,7 @@ For a world `w`, the module contains:
 - **types**: the type definitions of § 12.5 used by the included functions and globals, then one function type per distinct signature;
 - **functions**: every function of the interfaces exported by `w`, plus every function they call, directly or transitively, whatever its interface. Other functions of the package are not included. To these are added the helpers they use (§ 12.8) and the boundary adapters of the exported functions (§ 13.8);
 - **globals**: every global read or assigned by those functions, one immutable global per distinct string literal and per shared case without payload (§ 12.6), then the globals of § 13.7 when the module has a memory;
-- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10 (specified, not available yet);
+- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10 (resources: specified, not available yet); they come first in the function index space;
 - **exports**: one export per function of each interface exported by `w`, with the name of § 13.3, and the functions of the resources of these interfaces (§ 13.11);
 - **memory**, **realloc** and **post-return** functions only when an exported function needs them (§ 13.6).
 

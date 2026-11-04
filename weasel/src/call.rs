@@ -30,6 +30,18 @@ struct Export {
 pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option<String>> {
     let analysis = project.analyze()?;
     let (world, display) = resolve(analysis.worlds(), function)?;
+    if let Some(w) = analysis.worlds().iter().find(|w| w.name == world)
+        && !w.imports.is_empty()
+    {
+        return Err(Error::new(format!(
+            "`{display}` is only exported by world `{world}`, which imports {}: `weasel call` cannot provide imports yet",
+            w.imports
+                .iter()
+                .map(|i| format!("`{i}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
     let bytes = project.build(&analysis, world)?;
 
     let engine = engine()?;
@@ -141,14 +153,23 @@ fn exported_functions(engine: &Engine, component: &Component) -> Vec<Export> {
 /// Resolves `interface::function` or `function` among the functions exported by the
 /// worlds of the project. Returns a world that exports it, and its full WaSL name.
 fn resolve<'a>(worlds: &'a [waslc::World], function: &str) -> Result<(&'a str, String)> {
-    // Every exported function, listed once even if several worlds export its interface.
+    // Every exported function, listed once even if several worlds export its interface,
+    // with the first world that exports it, preferring a world without imports.
     let mut functions: Vec<(String, &str)> = Vec::new();
+    let imports = |name: &str| {
+        worlds
+            .iter()
+            .find(|w| w.name == name)
+            .is_some_and(|w| !w.imports.is_empty())
+    };
     for world in worlds {
         for interface in &world.exports {
             for name in &interface.functions {
                 let full = format!("{}::{name}", interface.name);
-                if !functions.iter().any(|(f, _)| *f == full) {
-                    functions.push((full, &world.name));
+                match functions.iter_mut().find(|(f, _)| *f == full) {
+                    None => functions.push((full, &world.name)),
+                    Some((_, w)) if imports(w) && world.imports.is_empty() => *w = &world.name,
+                    Some(_) => {}
                 }
             }
         }

@@ -26,6 +26,122 @@ impl Program {
     pub fn is_exported(&self, iface: InterfaceId) -> bool {
         self.worlds.iter().any(|w| w.exports.contains(&iface))
     }
+
+    /// Whether an interface of the package is in the WIT with its functions: a world
+    /// exports or imports it (§ 2.5, § 13.1).
+    pub fn has_wit_funcs(&self, iface: InterfaceId) -> bool {
+        self.interfaces[iface].foreign.is_none()
+            && self
+                .worlds
+                .iter()
+                .any(|w| w.exports.contains(&iface) || w.imports.contains(&iface))
+    }
+
+    /// The functions compiled into the component of `world`: those reachable from its
+    /// exports, without entering the functions of the interfaces it imports and of the
+    /// interfaces of other packages (§ 2.3, § 2.5). Also returns the functions of other
+    /// components that they call, in order of their id.
+    pub fn reach(&self, world: usize) -> (Vec<bool>, Vec<FuncId>) {
+        let world = &self.worlds[world];
+        let mut used = vec![false; self.funcs.len()];
+        let mut called = vec![false; self.funcs.len()];
+        let mut work: Vec<FuncId> = world
+            .exports
+            .iter()
+            .flat_map(|&i| self.interfaces[i].funcs.iter().copied())
+            .collect();
+        while let Some(f) = work.pop() {
+            if std::mem::replace(&mut used[f], true) {
+                continue;
+            }
+            visit_stmts(&self.funcs[f].body, &mut |e| {
+                if let ExprKind::Call { func, .. } = e.kind {
+                    let iface = self.funcs[func].interface;
+                    if world.imports.contains(&iface) || self.interfaces[iface].foreign.is_some() {
+                        called[func] = true;
+                    } else if !used[func] {
+                        work.push(func);
+                    }
+                }
+            });
+        }
+        let called = (0..self.funcs.len()).filter(|&f| called[f]).collect();
+        (used, called)
+    }
+}
+
+/// Visits every expression of a list of statements.
+pub fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Local { init, .. } => init.iter().for_each(|e| visit_expr(e, f)),
+            Stmt::Assign { place, value } => {
+                match place {
+                    Place::Local(_) | Place::Global(_) => {}
+                    Place::Field { record, .. } => visit_expr(record, f),
+                    Place::Index { list, index } => {
+                        visit_expr(list, f);
+                        visit_expr(index, f);
+                    }
+                }
+                visit_expr(value, f);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_,
+            } => {
+                visit_expr(scrutinee, f);
+                for arm in arms {
+                    visit_stmts(&arm.body, f);
+                }
+                if let Some(else_) = else_ {
+                    visit_stmts(else_, f);
+                }
+            }
+            Stmt::If { cond, then, else_ } => {
+                visit_expr(cond, f);
+                visit_stmts(then, f);
+                visit_stmts(else_, f);
+            }
+            Stmt::While { cond, body } => {
+                visit_expr(cond, f);
+                visit_stmts(body, f);
+            }
+            Stmt::Return(value) => value.iter().for_each(|e| visit_expr(e, f)),
+            Stmt::Call(e) => visit_expr(e, f),
+            Stmt::Break | Stmt::Continue => {}
+        }
+    }
+}
+
+/// Visits an expression and every expression inside it.
+pub fn visit_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    match &e.kind {
+        ExprKind::Call { args, .. }
+        | ExprKind::Builtin { args, .. }
+        | ExprKind::Record(args)
+        | ExprKind::List(args)
+        | ExprKind::Tuple(args) => args.iter().for_each(|a| visit_expr(a, f)),
+        ExprKind::Unary { expr, .. }
+        | ExprKind::Convert(expr)
+        | ExprKind::Some(expr)
+        | ExprKind::Field { expr, .. }
+        | ExprKind::Elem { expr, .. }
+        | ExprKind::Flag { expr, .. }
+        | ExprKind::Try { expr, .. } => visit_expr(expr, f),
+        ExprKind::Binary { lhs: a, rhs: b, .. } | ExprKind::Index { expr: a, index: b } => {
+            visit_expr(a, f);
+            visit_expr(b, f);
+        }
+        ExprKind::Case { payload, .. } => payload.iter().for_each(|p| visit_expr(p, f)),
+        ExprKind::Const(_)
+        | ExprKind::Local(_)
+        | ExprKind::Global(_)
+        | ExprKind::Str(_)
+        | ExprKind::None => {}
+    }
 }
 
 #[derive(Debug)]
@@ -39,16 +155,52 @@ pub struct GlobalDef {
 
 #[derive(Debug)]
 pub struct InterfaceDef {
+    /// The name code uses: the last part of the name for an interface of another
+    /// package (§ 2.5).
     pub name: String,
     pub funcs: Vec<FuncId>,
-    /// Declared types, in declaration order.
+    /// Declared types, in declaration order. Empty for an interface of another package.
     pub types: Vec<DeclId>,
+    /// For an interface of another package, where it comes from.
+    pub foreign: Option<Foreign>,
+}
+
+/// An interface of another package, from the WIT of the dependencies (§ 3.5).
+#[derive(Debug, Clone)]
+pub struct Foreign {
+    /// The id of the interface in [`crate::Dependencies::resolve`].
+    pub id: wit_parser::InterfaceId,
+    /// The WIT name of its package, `wasi:cli`.
+    pub package: String,
+    /// The WIT name of the interface, `stdout`.
+    pub name: String,
+    /// The version of its package, if it has one.
+    pub version: Option<String>,
+}
+
+impl Foreign {
+    /// The WIT name with the version: `wasi:cli/stdout@0.2.6`.
+    pub fn wit_name(&self) -> String {
+        match &self.version {
+            Some(v) => format!("{}/{}@{v}", self.package, self.name),
+            None => format!("{}/{}", self.package, self.name),
+        }
+    }
+
+    /// The name as written in WaSL: `wasi:cli/stdout`.
+    pub fn display(&self) -> String {
+        format!("{}/{}", self.package, self.name).replace('-', "_")
+    }
 }
 
 #[derive(Debug)]
 pub struct WorldDef {
     pub name: String,
     pub exports: Vec<InterfaceId>,
+    /// Imported interfaces: of the package (§ 2.5) or of other packages.
+    pub imports: Vec<InterfaceId>,
+    /// The imports (`true`) and exports, in source order.
+    pub items: Vec<(bool, InterfaceId)>,
 }
 
 #[derive(Debug)]

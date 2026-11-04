@@ -94,6 +94,8 @@ pub(super) struct FnCx<'a> {
     /// Nested scopes: visible names and their variable.
     pub(super) scopes: Vec<Vec<(String, LocalId)>>,
     loop_depth: u32,
+    /// The calls to functions of other packages, with their location (E0221).
+    pub(super) foreign_calls: Vec<(hir::FuncId, Span)>,
 }
 
 impl<'a> FnCx<'a> {
@@ -115,6 +117,7 @@ impl<'a> FnCx<'a> {
             locals: Vec::new(),
             scopes: Vec::new(),
             loop_depth: 0,
+            foreign_calls: Vec::new(),
         }
     }
 
@@ -1006,6 +1009,9 @@ impl<'a> FnCx<'a> {
         };
         let scope = &scopes[iface];
         if let [_, ty] = path {
+            if let Some(e) = scope.unavailable(&head.name, ty) {
+                return e;
+            }
             return match scope.types.get(ty.name.as_str()) {
                 Some(&decl) => self.case_of(decl, ty, name),
                 None => err(
@@ -1014,6 +1020,9 @@ impl<'a> FnCx<'a> {
                     format!("interface `{}` has no type `{}`", head.name, ty.name),
                 ),
             };
+        }
+        if let Some(e) = scope.unavailable(&head.name, name) {
+            return e;
         }
         match scope.funcs.get(name.name.as_str()) {
             Some(&id) => Ok(PathTarget::Func(id)),
@@ -1075,6 +1084,10 @@ impl<'a> FnCx<'a> {
             other => return self.construct(other, &call.name, Some(&call.args), span, expected),
         };
         let func = &self.program.funcs[func_id];
+        if self.program.interfaces[func.interface].foreign.is_some() {
+            let start = call.path.first().unwrap_or(&call.name).span;
+            self.foreign_calls.push((func_id, start.to(call.name.span)));
+        }
         if func.params.len() != call.args.len() {
             return err(
                 Code::ArgCount,

@@ -216,16 +216,42 @@ impl Parser {
         self.bump();
         let name = self.ident("a world name")?;
         self.expect(&TokenKind::LBrace, "`{`")?;
-        let mut exports = Vec::new();
+        let mut items = Vec::new();
         while !self.eat(&TokenKind::RBrace) {
-            if *self.peek() != TokenKind::Export {
-                return Err(self.unexpected("`export` or `}`"));
-            }
+            let import = match self.peek() {
+                TokenKind::Import => true,
+                TokenKind::Export => false,
+                _ => return Err(self.unexpected("`import`, `export` or `}`")),
+            };
             self.bump();
-            exports.push(self.ident("an interface name")?);
+            let first = self.ident("an interface name")?;
+            let iface = if self.eat(&TokenKind::Colon) {
+                let package = self.ident("a package name")?;
+                self.expect(&TokenKind::Slash, "`/` and the name of an interface")?;
+                let name = self.ident("an interface name")?;
+                InterfaceRef::Foreign(ForeignName {
+                    namespace: first,
+                    package,
+                    name,
+                })
+            } else {
+                InterfaceRef::Local(first)
+            };
+            if !import && let InterfaceRef::Foreign(f) = &iface {
+                return err(
+                    Code::Syntax,
+                    iface.span(),
+                    format!(
+                        "exporting `{}`, an interface of another package, is not available yet: it needs its implementation in the world (`export {} {{ … }}`, § 2.4.2)",
+                        f.display(),
+                        f.display()
+                    ),
+                );
+            }
             self.expect(&TokenKind::Semi, "`;`")?;
+            items.push(WorldItem { import, iface });
         }
-        Ok(World { name, exports })
+        Ok(World { name, items })
     }
 
     fn interface(&mut self) -> Result<Interface> {

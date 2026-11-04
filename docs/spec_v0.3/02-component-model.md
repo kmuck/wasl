@@ -99,7 +99,7 @@ world main {
 }
 ```
 
-## 2.5 Imports (specified, not available yet)
+## 2.5 Imports
 
 A world can also **import** interfaces: interfaces whose implementation is provided by the host (WASI interfaces such as `wasi:cli/stdout` or `wasi:filesystem/types`) or by another component.
 
@@ -139,6 +139,8 @@ Rules:
 - Two interfaces that code can name, the interfaces of the package and the interfaces of other packages that a world of the package imports or exports, cannot have the same last name (E0217): `example:catalog/carts` cannot coexist with an `interface carts` of the package.
 - A function reachable from the exports of a world that calls a function of another package must belong to a world that imports that interface (E0221). An interface of the package that a world does not import is compiled into its component, as in § 2.3.
 - An imported interface has no implementation in the component: its functions are imported functions of the core module (§ 13.10). Its resources are **handles** (§ 7.12).
+- An item of an interface of another package that WaSL cannot use, because its name gives no WaSL identifier (§ 13.2), or because it is or uses a resource or an `async` function (*not available yet*), or a WIT type WaSL does not have (`stream`, `future`, `map`), can be named, but naming it is an error (E0215) that says why. The other items of the interface stay usable.
+- A type alias of another package (`type instant = u64;`) is named like a declared type (`clocks::instant`) and designates the type it aliases.
 
 Why this model:
 

@@ -110,7 +110,7 @@ error: `math::div` trapped: integer divide by zero
 
 Each `call` runs on a fresh instance: globals start from their initial values.
 
-**Imports** (specified, not available yet). When the world imports interfaces, `call` composes its component in memory before running it, with `wac-graph`:
+**Imports** (specified, not available yet: `call` picks a world without imports that exports the function, and reports an error when only worlds with imports export it). When the world imports interfaces, `call` composes its component in memory before running it, with `wac-graph`:
 
 - an interface of the package is provided by the component of the first world, in declaration order, that exports it; an interface of a path dependency that is a WaSL project, by the first world of that project that exports it. Their components are built in memory and composed in turn if they have imports of their own;
 - an interface of WASI 0.2 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`) is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1);

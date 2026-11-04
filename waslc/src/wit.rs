@@ -9,6 +9,7 @@ use std::fmt::Write;
 use wit_component::WitPrinter;
 use wit_parser::{PackageId, Resolve, WorldId};
 
+use crate::deps::Dependencies;
 use crate::diag::{Code, Diagnostic, Result};
 use crate::hir::{InterfaceId, Program};
 use crate::package::Package;
@@ -25,8 +26,12 @@ pub(crate) fn internal(e: anyhow::Error) -> Diagnostic {
 
 /// WIT of the package, parsed by `wit-parser`.
 pub struct Wit {
+    /// The package, with the packages of the dependencies.
     pub resolve: Resolve,
     pub package: PackageId,
+    /// The imports written in each world, as `wit-component` prints them
+    /// (`accounts`, `wasi:cli/stdout@0.2.6`).
+    imports: HashMap<String, Vec<String>>,
 }
 
 impl Wit {
@@ -44,7 +49,10 @@ impl Wit {
             .interfaces
             .iter()
             .map(|iface| {
-                let id = *package.interfaces.get(&kebab(&iface.name))?;
+                let id = match &iface.foreign {
+                    Some(f) => f.id,
+                    None => *package.interfaces.get(&kebab(&iface.name))?,
+                };
                 self.resolve.canonicalized_id_of(id)
             })
             .collect()
@@ -57,8 +65,9 @@ impl Wit {
             .print(&self.resolve, self.package, &[])
             .map_err(internal)?;
         // WIT elaboration adds `import types;` to a world for the types-only interfaces it
-        // uses; WaSL worlds never import, so these lines are not written (§ 13.1).
+        // uses; only the imports written in the world are kept (§ 13.1).
         let mut text = String::new();
+        let mut world: Option<&Vec<String>> = None;
         let mut lines = printer
             .output
             .to_string()
@@ -68,7 +77,18 @@ impl Wit {
             .into_iter()
             .peekable();
         while let Some(line) = lines.next() {
-            if line.starts_with("  import ") {
+            if let Some(name) = line.strip_prefix("world ") {
+                let name = name.trim_end_matches(" {").trim_start_matches('%');
+                world = self.imports.get(name);
+            }
+            let written = |l: &str| {
+                let name = l
+                    .trim_start_matches("  import ")
+                    .trim_end_matches(';')
+                    .replace('%', "");
+                world.is_some_and(|w| w.contains(&name))
+            };
+            if line.starts_with("  import ") && !written(&line) {
                 if lines.peek().is_some_and(|l| l.is_empty()) {
                     lines.next();
                 }
@@ -83,7 +103,7 @@ impl Wit {
 
 /// Produces the WIT: the interfaces that appear in it (§ 13.1), then the worlds.
 /// Internal interfaces, their types and globals do not appear in it.
-pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
+pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Result<Wit> {
     // Every identifier is prefixed with `%`, which avoids any clash with a WIT keyword.
     let types = &program.types;
     let mut text = String::new();
@@ -96,10 +116,10 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
 
     let appears = appears(types, program);
     for (id, iface) in program.interfaces.iter().enumerate() {
-        if !appears[id] {
+        if !appears[id] || iface.foreign.is_some() {
             continue;
         }
-        let exported = program.is_exported(id);
+        let exported = program.has_wit_funcs(id);
         writeln!(text, "\ninterface %{} {{", kebab(&iface.name)).unwrap();
 
         // Types of other interfaces: `use other.{a, b as other-b};`. A name is renamed
@@ -119,7 +139,10 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
             let decl = &types.decls[d];
             let name = kebab(&decl.name);
             let local = if taken.contains(&name) {
-                format!("{}-{name}", kebab(&program.interfaces[decl.interface].name))
+                format!(
+                    "{}-{name}",
+                    kebab(&program.interfaces[decl.interface].name).replace(':', "-")
+                )
             } else {
                 name.clone()
             };
@@ -137,13 +160,11 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
         }
         uses.sort_by_key(|(i, _)| *i);
         for (other, items) in &uses {
-            writeln!(
-                text,
-                "  use %{}.{{{}}};",
-                kebab(&program.interfaces[*other].name),
-                items.join(", ")
-            )
-            .unwrap();
+            let path = match &program.interfaces[*other].foreign {
+                Some(f) => f.wit_name(),
+                None => format!("%{}", kebab(&program.interfaces[*other].name)),
+            };
+            writeln!(text, "  use {path}.{{{}}};", items.join(", ")).unwrap();
         }
 
         for &d in &iface.types {
@@ -211,35 +232,49 @@ pub fn generate(program: &Program, package: &Package) -> Result<Wit> {
         writeln!(text, "}}").unwrap();
     }
 
+    let mut imports = HashMap::new();
     for world in &program.worlds {
         writeln!(text, "\nworld %{} {{", kebab(&world.name)).unwrap();
-        for &iface in &world.exports {
-            writeln!(
-                text,
-                "  export %{};",
-                kebab(&program.interfaces[iface].name)
-            )
-            .unwrap();
+        let mut written = Vec::new();
+        for &(import, iface) in &world.items {
+            let (name, printed) = match &program.interfaces[iface].foreign {
+                Some(f) => (f.wit_name(), f.wit_name()),
+                None => {
+                    let name = kebab(&program.interfaces[iface].name);
+                    (format!("%{name}"), name)
+                }
+            };
+            let keyword = if import { "import" } else { "export" };
+            writeln!(text, "  {keyword} {name};").unwrap();
+            if import {
+                written.push(printed);
+            }
         }
         writeln!(text, "}}").unwrap();
+        imports.insert(kebab(&world.name), written);
     }
 
-    let mut resolve = Resolve::default();
+    let mut resolve = deps.resolve().clone();
     let package = resolve.push_str("wasl.wit", &text).map_err(internal)?;
-    Ok(Wit { resolve, package })
+    Ok(Wit {
+        resolve,
+        package,
+        imports,
+    })
 }
 
 /// Which interfaces appear in the WIT (§ 13.1): those exported by a world, and those
 /// whose types an interface that appears uses.
 pub fn appears(types: &Types, program: &Program) -> Vec<bool> {
     let mut appears: Vec<bool> = (0..program.interfaces.len())
-        .map(|i| program.is_exported(i))
+        .map(|i| program.has_wit_funcs(i))
         .collect();
     let mut work: Vec<InterfaceId> = (0..appears.len()).filter(|&i| appears[i]).collect();
     while let Some(i) = work.pop() {
-        for d in foreign_decls(types, program, i, program.is_exported(i)) {
+        for d in foreign_decls(types, program, i, program.has_wit_funcs(i)) {
             let other = types.decls[d].interface;
-            if !appears[other] {
+            // The interfaces of other packages are in the WIT of their package.
+            if !appears[other] && program.interfaces[other].foreign.is_none() {
                 appears[other] = true;
                 work.push(other);
             }
@@ -258,9 +293,11 @@ pub fn use_cycle(types: &Types, program: &Program) -> Option<Vec<(InterfaceId, D
         .map(|i| {
             let mut out: Vec<(InterfaceId, DeclId)> = Vec::new();
             if appears[i] {
-                for d in foreign_decls(types, program, i, program.is_exported(i)) {
+                for d in foreign_decls(types, program, i, program.has_wit_funcs(i)) {
                     let other = types.decls[d].interface;
-                    if !out.iter().any(|&(o, _)| o == other) {
+                    if program.interfaces[other].foreign.is_none()
+                        && !out.iter().any(|&(o, _)| o == other)
+                    {
                         out.push((other, d));
                     }
                 }

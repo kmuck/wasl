@@ -23,7 +23,8 @@ deps.add_wit_binary("wasi:cli", "0.2.6", &bytes)?;
 // 1. Analysis of the whole package.
 let analysis = waslc::analyze(&package, &sources, &deps)?;
 for world in analysis.worlds() {
-    // world.name, world.exports: exported interfaces and their functions
+    // world.name, world.exports: exported interfaces and their functions;
+    // world.imports: imported interfaces, `wasi:cli/stdout@0.2.6`
 }
 let wit = analysis.wit()?;
 
