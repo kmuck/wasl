@@ -651,7 +651,7 @@ Each line is written in `examples/checkout` (§ 15.5), unless it says otherwise.
 | `stdout::get_stdout()` in `checkout` | E0300: `stdout` is not an interface that `checkout` can name; import `wasi:cli/stdout` and add `wasi:cli` to its dependencies |
 | in `hello`, `world quiet { export greeting; }` with a call to `stdout::get_stdout()` in `greeting::text` | E0221: `greeting::text` is reachable from `quiet`, which does not import `wasi:cli/stdout` |
 
-## 15.5 Two components: `catalog` and `checkout` (specified, not available yet)
+## 15.5 Two components: `catalog` and `checkout`
 
 The target program of version 0.3 is two projects. `examples/catalog` defines a resource, a shopping cart, and `examples/checkout` uses it from another component: it imports the interface of `catalog`, creates carts and calls their methods. The two components are built separately and composed when they run.
 

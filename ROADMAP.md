@@ -33,7 +33,7 @@ Target: [`examples/calc`](examples/calc). Specification: [v0.1](docs/spec_v0.1/R
 
 Target: [`examples/invoice`](examples/invoice), called with `weasel call`.
 
-### 0.3: composing with other components
+### 0.3: composing with other components (done)
 
 - The v0.2 specification is frozen, and v0.1 and v0.2 are merged into one complete specification, [v0.3](docs/spec_v0.3/README.md), which receives the features below.
 - `import` in worlds, and direct calls to imported functions: interfaces of other packages, and interfaces of the same package exported by another world, so that the services of one project call each other.

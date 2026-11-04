@@ -52,12 +52,12 @@ Each decision follows from the principles of § 1.2. The rest of this specificat
 
 With these, every WIT type except resources (`own`, `borrow`) and async types (`stream`, `future`) has its WaSL equivalent.
 
-**Added in 0.3** (specified, being implemented; each section says "specified, not available yet" until the compiler supports it):
+**Added in 0.3**:
 
-- dependencies on other packages, declared in `wasl.toml` and resolved from a path or a registry (§ 3.2, § 3.5), already implemented;
-- imports of interfaces of other packages and of the same package (§ 2.5), already implemented except the resources of other packages, and implementations of interfaces defined by other packages, such as `wasi:cli/run` (§ 2.4.2);
+- dependencies on other packages, declared in `wasl.toml` and resolved from a path or a registry (§ 3.2, § 3.5);
+- imports of interfaces of other packages and of the same package (§ 2.5), and implementations of interfaces defined by other packages, such as `wasi:cli/run` (§ 2.4.2);
 - resources: their declaration, constructors, methods and static functions (§ 7.12), handles and their automatic release (§ 9.9);
-- the error propagation operator `?` on `result` and `option` (§ 8.19), already implemented.
+- the error propagation operator `?` on `result` and `option` (§ 8.19).
 
 With these, every WIT type except async types (`stream`, `future`) has its WaSL equivalent, and a WaSL component can run as a WASI 0.2 command (§ 15.6).
 

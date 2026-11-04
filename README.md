@@ -4,7 +4,7 @@
 
 A compiled WaSL project is a standard **`.wasm` component**: the code as Wasm instructions, with its WIT interfaces embedded. Any Component Model tool can read it, run it, or compose it with components written in other languages.
 
-> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds) and v0.2 (data on the WasmGC heap) are specified and implemented. Both are merged into the [v0.3 specification](docs/spec_v0.3/README.md), the reference, which v0.3 extends with imports and resources.
+> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds), v0.2 (data on the WasmGC heap) and v0.3 (imports, resources, WASI 0.2 commands) are specified and implemented, in the [v0.3 specification](docs/spec_v0.3/README.md), the reference.
 
 ```wasl
 world billing {
