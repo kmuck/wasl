@@ -66,7 +66,8 @@ error: `math::div` trapped: integer divide by zero
 
 ```
 my-project/
-├── wasl.toml        # package identity
+├── wasl.toml        # package identity and dependencies
+├── wkg.lock         # exact versions of the registry dependencies, written by weasel
 ├── src/             # all the `.wasl` files, in any sub-directory
 └── build/           # produced by `weasel build`
 ```
@@ -75,9 +76,15 @@ my-project/
 # wasl.toml
 [package]
 namespace = "example"
-name = "calc"
+name = "checkout"
 version = "0.1.0"
+
+[dependencies]
+"example:catalog" = { path = "../catalog" }   # a WaSL project, or a directory of .wit files
+"wasi:cli" = "0.2.6"                          # a WIT package from a registry
 ```
+
+Every command except `init` resolves the dependencies first (specification § 3.5). Registry packages are fetched with the crates of [`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools), configured by its usual file (`~/.config/wasm-pkg/config.toml`), cached by it, and pinned in `wkg.lock`.
 
 The project rules are defined by the [specification](../docs/spec_v0.3/03-projects.md) (chapter 3), and the commands by its [chapter 14](../docs/spec_v0.3/14-tooling.md).
 
@@ -103,6 +110,7 @@ weasel/
 │   ├── main.rs        # command-line interface and commands
 │   ├── project.rs     # loads a project (manifest + sources), analyzes and builds it
 │   ├── manifest.rs    # reads and writes wasl.toml
+│   ├── deps.rs        # resolves the dependencies: path projects, WIT directories, registries
 │   ├── init.rs        # weasel init
 │   ├── call.rs        # weasel call: function lookup, arguments, wasmtime
 │   └── error.rs       # errors reported to the user
@@ -120,8 +128,10 @@ Example projects live in [`examples/`](../examples) at the root of the repositor
 | [`wasmtime`](https://crates.io/crates/wasmtime) | runs the components |
 | [`clap`](https://crates.io/crates/clap) | command-line interface |
 | [`toml`](https://crates.io/crates/toml) + [`serde`](https://crates.io/crates/serde) | reads `wasl.toml` |
+| [`wasm-pkg-client`](https://crates.io/crates/wasm-pkg-client) + [`wasm-pkg-core`](https://crates.io/crates/wasm-pkg-core) | fetch registry dependencies and write `wkg.lock`, as `wkg` does |
+| [`tokio`](https://crates.io/crates/tokio) | runs the asynchronous registry client |
 
-Development dependency: [`tempfile`](https://crates.io/crates/tempfile), for the temporary projects of the tests.
+Development dependencies: [`tempfile`](https://crates.io/crates/tempfile), for the temporary projects of the tests, and [`wit-parser`](https://crates.io/crates/wit-parser) + [`wit-component`](https://crates.io/crates/wit-component), to publish test packages in a local registry.
 
 ## Planned commands
 

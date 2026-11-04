@@ -19,7 +19,7 @@ fn sources(files: &[(&str, &str)]) -> SourceMap {
 /// Analyzes the given files; errors are rendered as the user sees them.
 fn analyze_files(files: &[(&str, &str)]) -> Result<Analysis, String> {
     let sources = sources(files);
-    analyze(&package(), &sources).map_err(|e| e.display(&sources).to_string())
+    analyze(&package(), &sources, &Default::default()).map_err(|e| e.display(&sources).to_string())
 }
 
 fn validate(bytes: &[u8]) {
@@ -172,7 +172,7 @@ fn invalid_programs() {
              interface t {{ func f(n: u32, x: f64) {{ {body} }} }}"
         );
         let sources = sources(&[("src/t.wasl", &program)]);
-        match analyze(&package(), &sources) {
+        match analyze(&package(), &sources, &Default::default()) {
             Ok(_) => panic!("accepted: {body}"),
             Err(e) => assert_eq!(e.code, *code, "{body}: {}", e.display(&sources)),
         }
@@ -256,7 +256,7 @@ fn error_propagation_errors() {
              }}"
         );
         let sources = sources(&[("src/t.wasl", &program)]);
-        match analyze(&package(), &sources) {
+        match analyze(&package(), &sources, &Default::default()) {
             Ok(_) => panic!("accepted: {body}"),
             Err(e) => assert_eq!(e.code, *code, "{body}: {}", e.display(&sources)),
         }
@@ -379,7 +379,7 @@ fn mutable_types_stay_inside() {
     ];
     for (exported, message) in cases {
         let sources = sources(&[("src/m.wasl", &program(exported))]);
-        match analyze(&package(), &sources) {
+        match analyze(&package(), &sources, &Default::default()) {
             Ok(_) => panic!("accepted: {exported}"),
             Err(e) => {
                 assert_eq!(e.code, Code::MutableExport, "{exported}: {}", e.message);
@@ -396,7 +396,7 @@ const INVOICE: &str = include_str!("../../examples/invoice/src/invoice.wasl");
 fn invoice_example() {
     let sources = sources(&[("src/invoice.wasl", INVOICE)]);
     let package = Package::new("example", "invoice", "0.1.0").unwrap();
-    let analysis = match analyze(&package, &sources) {
+    let analysis = match analyze(&package, &sources, &Default::default()) {
         Ok(a) => a,
         Err(e) => panic!("{}", e.display(&sources)),
     };
@@ -540,7 +540,7 @@ fn invalid_v2_programs() {
             ),
         );
         let sources = sources(&[("src/invoice.wasl", &program)]);
-        match analyze(&package(), &sources) {
+        match analyze(&package(), &sources, &Default::default()) {
             Ok(_) => panic!("accepted: {body}"),
             Err(e) => assert_eq!(e.code, *code, "{body}: {}", e.display(&sources)),
         }
@@ -564,7 +564,7 @@ fn invalid_v2_programs() {
     for (extra, code) in others {
         let program = format!("{INVOICE}\n{extra}\n");
         let sources = sources(&[("src/invoice.wasl", &program)]);
-        match analyze(&package(), &sources) {
+        match analyze(&package(), &sources, &Default::default()) {
             Ok(_) => panic!("accepted: {extra}"),
             Err(e) => assert_eq!(e.code, *code, "{extra}: {}", e.display(&sources)),
         }
@@ -603,7 +603,7 @@ fn valid_v2_bodies() {
             ),
         );
         let sources = sources(&[("src/invoice.wasl", &program)]);
-        if let Err(e) = analyze(&package(), &sources) {
+        if let Err(e) = analyze(&package(), &sources, &Default::default()) {
             panic!("{body}: {}", e.display(&sources));
         }
     }
@@ -615,7 +615,7 @@ fn valid_v2_bodies() {
         global gf: mut s8 = -1;";
     let program = format!("{INVOICE}\n{globals}\n");
     let sources = sources(&[("src/invoice.wasl", &program)]);
-    if let Err(e) = analyze(&package(), &sources) {
+    if let Err(e) = analyze(&package(), &sources, &Default::default()) {
         panic!("{}", e.display(&sources));
     }
 }

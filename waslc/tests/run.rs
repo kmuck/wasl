@@ -225,7 +225,7 @@ fn engine_and_component() -> &'static (Engine, Component) {
         let package = Package::new("test", "run", "0.1.0").unwrap();
         let mut sources = SourceMap::default();
         sources.add("src/t.wasl".into(), PROGRAM.to_string());
-        let bytes = waslc::analyze(&package, &sources)
+        let bytes = waslc::analyze(&package, &sources, &Default::default())
             .and_then(|analysis| analysis.build("w"))
             .unwrap_or_else(|e| panic!("{}", e.display(&sources)));
         let engine = Engine::default();

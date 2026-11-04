@@ -13,8 +13,14 @@ struct Run {
 }
 
 fn weasel(dir: &Path, args: &[&str]) -> Run {
+    weasel_env(dir, args, &[])
+}
+
+/// Runs `weasel` with extra environment variables.
+fn weasel_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Run {
     let output = Command::new(env!("CARGO_BIN_EXE_weasel"))
         .args(args)
+        .envs(env.iter().map(|(k, v)| (*k, *v)))
         .current_dir(dir)
         .output()
         .expect("weasel runs");
@@ -335,4 +341,185 @@ interface calc {
     assert_eq!(ok(dir, &["call", "shout", "1"]), "some(\"x!\")\n");
     assert_eq!(ok(dir, &["call", "twice", "true"]), "ok(2)\n");
     assert_eq!(ok(dir, &["call", "twice", "false"]), "err\n");
+}
+
+/// Writes a file, creating its directory.
+fn write(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+fn manifest(name: &str, deps: &str) -> String {
+    format!(
+        "[package]\nnamespace = \"demo\"\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n{deps}"
+    )
+}
+
+const LIB: &str =
+    "world w {\n  export i;\n}\n\ninterface i {\n  func f() -> u32 {\n    return 1;\n  }\n}\n";
+
+/// Path dependencies (§ 3.5): a WaSL project and a directory of WIT files.
+#[test]
+fn path_dependencies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(
+        &root.join("app/wasl.toml"),
+        &manifest(
+            "app",
+            "\"demo:lib\" = { path = \"../lib\" }\n\"demo:base\" = { path = \"wit/base\" }\n",
+        ),
+    );
+    write(&root.join("app/src/app.wasl"), LIB);
+    write(
+        &root.join("app/wit/base/base.wit"),
+        "package demo:base@1.0.0;\ninterface types {\n  record point { x: u32 }\n}\n",
+    );
+    write(
+        &root.join("lib/wasl.toml"),
+        &manifest("lib", "\"demo:base\" = { path = \"../app/wit/base\" }\n"),
+    );
+    write(&root.join("lib/src/lib.wasl"), LIB);
+    let app = root.join("app");
+    assert_eq!(weasel(&app, &["check"]).stderr, "No errors in `app`\n");
+
+    // Errors of a dependency are reported in its own files.
+    write(
+        &root.join("lib/src/lib.wasl"),
+        "interface i { func f() -> u32 { return x; } }\n",
+    );
+    let err = fails(&app, &["check"]);
+    assert!(
+        err.starts_with("../lib/src/lib.wasl:1:40: error[E0300]"),
+        "{err}"
+    );
+    write(&root.join("lib/src/lib.wasl"), LIB);
+
+    // The name of the dependency must be the name of its package.
+    write(
+        &root.join("app/wasl.toml"),
+        &manifest("app", "\"demo:other\" = { path = \"../lib\" }\n"),
+    );
+    assert_eq!(
+        fails(&app, &["check"]),
+        "wasl.toml: error[E0200]: dependency `demo:other` points to `../lib`, whose package is `demo:lib`\n"
+    );
+    write(
+        &root.join("app/wasl.toml"),
+        &manifest("app", "\"demo:other\" = { path = \"wit/base\" }\n"),
+    );
+    let err = fails(&app, &["check"]);
+    assert_eq!(
+        err,
+        "wasl.toml: error[E0200]: dependency `demo:other` contains the package `demo:base@1.0.0`, not `demo:other`\n"
+    );
+    write(
+        &root.join("app/wasl.toml"),
+        &manifest("app", "\"demo:base\" = { path = \"nope\" }\n"),
+    );
+    assert_eq!(
+        fails(&app, &["check"]),
+        "wasl.toml: error[E0200]: dependency `demo:base` points to `nope`, which does not exist\n"
+    );
+
+    // A cycle of path dependencies.
+    write(
+        &root.join("app/wasl.toml"),
+        &manifest("app", "\"demo:lib\" = { path = \"../lib\" }\n"),
+    );
+    write(
+        &root.join("lib/wasl.toml"),
+        &manifest("lib", "\"demo:app\" = { path = \"../app\" }\n"),
+    );
+    assert_eq!(
+        fails(&app, &["check"]),
+        "../lib/wasl.toml: error[E0200]: dependency cycle: `demo:app` → `demo:lib` → `demo:app`\n"
+    );
+
+    // An invalid manifest in a dependency.
+    write(&root.join("lib/wasl.toml"), "[package]\nname = \"lib\"\n");
+    let err = fails(&app, &["check"]);
+    assert!(
+        err.starts_with("../lib/wasl.toml:1:1: error[E0200]"),
+        "{err}"
+    );
+}
+
+/// Registry dependencies (§ 3.5), with a local `wkg` registry: fetched, then pinned in
+/// `wkg.lock`.
+#[test]
+fn registry_dependencies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let registry = root.join("registry");
+    let mut resolve = wit_parser::Resolve::default();
+    let base = resolve
+        .push_str(
+            "base.wit",
+            "package demo:base@1.0.0; interface types { record point { x: u32 } }",
+        )
+        .unwrap();
+    let greet = resolve
+        .push_str(
+            "greet.wit",
+            "package demo:greet@0.2.6; interface hello { use demo:base/types@1.0.0.{point}; hi: func(p: point) -> string; }",
+        )
+        .unwrap();
+    write(&registry.join("demo/base/1.0.0.wasm"), "");
+    fs::write(
+        registry.join("demo/base/1.0.0.wasm"),
+        wit_component::encode(&resolve, base, false).unwrap(),
+    )
+    .unwrap();
+    write(&registry.join("demo/greet/0.2.6.wasm"), "");
+    fs::write(
+        registry.join("demo/greet/0.2.6.wasm"),
+        wit_component::encode(&resolve, greet, false).unwrap(),
+    )
+    .unwrap();
+    let config = root.join("config");
+    write(
+        &config.join("wasm-pkg/config.toml"),
+        &format!(
+            "[namespace_registries]\ndemo = \"local.test\"\n\n[registry.\"local.test\"]\ntype = \"local\"\n\n[registry.\"local.test\".local]\nroot = {:?}\n",
+            registry.to_str().unwrap()
+        ),
+    );
+    let cache = root.join("cache");
+    let env = [
+        ("XDG_CONFIG_HOME", config.as_path()),
+        ("XDG_CACHE_HOME", cache.as_path()),
+    ];
+
+    let app = root.join("app");
+    write(
+        &app.join("wasl.toml"),
+        &manifest("app", "\"demo:greet\" = \"0.2.6\"\n"),
+    );
+    write(&app.join("src/app.wasl"), LIB);
+    let run = weasel_env(&app, &["check"], &env);
+    assert!(run.success, "{}", run.stderr);
+    let lock = fs::read_to_string(app.join("wkg.lock")).unwrap();
+    assert!(lock.contains("name = \"demo:greet\""), "{lock}");
+    assert!(lock.contains("version = \"0.2.6\""), "{lock}");
+    assert!(lock.contains("digest = \"sha256:"), "{lock}");
+
+    // A second build uses the lock file and leaves it unchanged.
+    let run = weasel_env(&app, &["check"], &env);
+    assert!(run.success, "{}", run.stderr);
+    assert_eq!(fs::read_to_string(app.join("wkg.lock")).unwrap(), lock);
+
+    // A version that the registry does not have.
+    write(
+        &app.join("wasl.toml"),
+        &manifest("app", "\"demo:greet\" = \"9.9.9\"\n"),
+    );
+    let run = weasel_env(&app, &["check"], &env);
+    assert!(!run.success);
+    assert!(
+        run.stderr
+            .starts_with("error: cannot fetch the dependencies:"),
+        "{}",
+        run.stderr
+    );
 }

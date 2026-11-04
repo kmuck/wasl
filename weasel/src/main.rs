@@ -1,6 +1,7 @@
 //! `weasel`, the build tool of the WaSL language.
 
 mod call;
+mod deps;
 mod error;
 mod init;
 mod manifest;

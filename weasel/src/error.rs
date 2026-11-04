@@ -23,6 +23,21 @@ impl Error {
     pub fn rendered(text: String) -> Error {
         Error(text)
     }
+
+    /// The error of a manifest, located in the project whose root is `root`: the
+    /// `wasl.toml` at the start of the message becomes `<root>/wasl.toml`.
+    pub fn in_file(self, root: &std::path::Path) -> Error {
+        if root.as_os_str().is_empty() {
+            return self;
+        }
+        match self.0.strip_prefix("wasl.toml") {
+            Some(rest) => Error(format!(
+                "{}{rest}",
+                crate::project::display(&root.join("wasl.toml"))
+            )),
+            None => self,
+        }
+    }
 }
 
 impl fmt::Display for Error {

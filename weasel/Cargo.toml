@@ -10,8 +10,13 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+tokio = { version = "1", features = ["rt", "io-util"] }
+wasm-pkg-client = "0.16"
+wasm-pkg-core = "0.16"
 waslc = { version = "0.2.0", path = "../waslc" }
 wasmtime = { version = "49", features = ["wave"] }
 
 [dev-dependencies]
 tempfile = "3"
+wit-component = "0.261"
+wit-parser = "0.261"

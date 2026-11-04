@@ -16,8 +16,12 @@ let package = Package::new("example", "calc", "0.1.0")?;
 let mut sources = SourceMap::default();
 sources.add("src/calc.wasl".into(), text);
 
+// The WIT of the packages it depends on (§ 3.5), fetched by the caller.
+let mut deps = waslc::Dependencies::default();
+deps.add_wit_binary("wasi:cli", "0.2.6", &bytes)?;
+
 // 1. Analysis of the whole package.
-let analysis = waslc::analyze(&package, &sources)?;
+let analysis = waslc::analyze(&package, &sources, &deps)?;
 for world in analysis.worlds() {
     // world.name, world.exports: exported interfaces and their functions
 }
@@ -65,6 +69,7 @@ waslc/
 ├── src/
 │   ├── lib.rs         # public API: analyze, Analysis::build
 │   ├── package.rs     # package identity (namespace:name@version) and its validation
+│   ├── deps.rs        # dependencies: the WIT of other packages, merged into one Resolve
 │   ├── source.rs      # source files, positions (line, column)
 │   ├── diag.rs        # diagnostics: error codes and display
 │   ├── lexer.rs       # lexical analysis
