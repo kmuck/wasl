@@ -167,6 +167,20 @@ impl<'a> FnCx<'a> {
                 format!("`{}` is already declared in this function", name.name),
             );
         }
+        if let Some(h) = super::handle_in(self.types, &self.program.handles, ty, self.iface)
+            && self.types.resource(ty).is_none()
+        {
+            return err(
+                Code::HandlePosition,
+                name.span,
+                format!(
+                    "`{}` is of type `{}`, which holds `{}`, a handle to a resource of another component: a local can only hold a handle itself; use the value at once with `match`, `?`, `return` or `_ =`",
+                    name.name,
+                    self.show(ty),
+                    self.show(h)
+                ),
+            );
+        }
         let id = self.locals.len() as LocalId;
         self.locals.push(ty);
         self.scopes
@@ -568,7 +582,15 @@ impl<'a> FnCx<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(id) = self.lookup_local(name) {
-                    typed(hir::ExprKind::Local(id), self.locals[id as usize])
+                    let ty = self.locals[id as usize];
+                    // A resource leaves its local, unless the context only borrows it.
+                    if matches!(self.types.kind(ty), TypeKind::Decl(_))
+                        && self.types.resource(ty).is_some()
+                    {
+                        typed(hir::ExprKind::Move(id), ty)
+                    } else {
+                        typed(hir::ExprKind::Local(id), ty)
+                    }
                 } else if let Some(&id) = self.globals.get(name.as_str()) {
                     typed(hir::ExprKind::Global(id), self.program.globals[id].ty)
                 } else {
@@ -648,7 +670,7 @@ impl<'a> FnCx<'a> {
                 if let TypeKind::Borrow(inner) = self.types.kind(exp)
                     && *inner == ty
                 {
-                    return Ok(result);
+                    return Ok(borrowed(result));
                 }
                 if let TypeKind::Borrow(inner) = self.types.kind(ty)
                     && *inner == exp
@@ -677,7 +699,7 @@ impl<'a> FnCx<'a> {
         args: &[ast::Expr],
         span: Span,
     ) -> Result<hir::Expr> {
-        let base = self.expr(receiver, None)?;
+        let base = borrowed(self.expr(receiver, None)?);
         let ty = base.value_ty();
         let Some((decl, def)) = self.types.resource(ty) else {
             return err(
@@ -1916,7 +1938,7 @@ impl<'a> FnCx<'a> {
     // ---- Field accesses and indexes (§ 8.12, § 8.13) ----
 
     fn field(&mut self, expr: &ast::Expr, name: &Ident) -> Result<hir::Expr> {
-        let base = self.expr(expr, None)?;
+        let base = borrowed(self.expr(expr, None)?);
         self.field_of(base, name)
     }
 
@@ -2328,6 +2350,17 @@ impl<'a> FnCx<'a> {
                 self.show(expected)
             ),
         )
+    }
+}
+
+/// A local that a call or a field access only borrows stays in place (§ 9.9).
+fn borrowed(e: hir::Expr) -> hir::Expr {
+    match e.kind {
+        hir::ExprKind::Move(id) => hir::Expr {
+            kind: hir::ExprKind::Local(id),
+            ty: e.ty,
+        },
+        _ => e,
     }
 }
 

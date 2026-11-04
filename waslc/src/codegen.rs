@@ -65,9 +65,48 @@ pub fn generate(
         .filter(|&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
         .collect();
 
+    // Handles (§ 12.10): the resources of the interfaces of other packages and of the
+    // interfaces the world imports. Each one that the module uses needs its
+    // `resource.drop`.
+    let handle_ifaces: Vec<bool> = program
+        .interfaces
+        .iter()
+        .enumerate()
+        .map(|(i, iface)| iface.foreign.is_some() || world.imports.contains(&i))
+        .collect();
+    let mut handles: Vec<DeclId> = Vec::new();
+    {
+        let mut note = |ty: Type| {
+            for d in types.reachable_decls(ty) {
+                if matches!(types.decls[d].kind, DeclKind::Resource(_))
+                    && handle_ifaces[types.decls[d].interface]
+                    && !handles.contains(&d)
+                {
+                    handles.push(d);
+                }
+            }
+        };
+        for (f, func) in program.funcs.iter().enumerate() {
+            if used_funcs[f] || imported.contains(&f) {
+                func.locals
+                    .iter()
+                    .chain(func.params.iter().map(|(_, t)| t))
+                    .chain(&func.ret)
+                    .for_each(|&t| note(t));
+                visit_stmts(&func.body, &mut |e| {
+                    if let Some(t) = e.ty {
+                        note(t)
+                    }
+                });
+            }
+        }
+    }
+    handles.sort();
+
     // Imported functions come first in the function index space (§ 13.10), then the
-    // intrinsics of the resources: `new`, `rep` and `drop`.
-    let import_count = (imported.len() + 3 * resources.len()) as u32;
+    // intrinsics of the resources: `new`, `rep` and `drop`, then the `drop` of the
+    // handles.
+    let import_count = (imported.len() + 3 * resources.len() + handles.len()) as u32;
     let mut func_index = index_map(&used_funcs);
     for index in func_index.iter_mut().flatten() {
         *index += import_count;
@@ -79,6 +118,11 @@ pub fn generate(
     let mut cx = ModuleCx::new(program, func_index);
     cx.helper_base = import_count + defined;
     cx.imports = imported.clone();
+    cx.handle_ifaces = handle_ifaces;
+    let first_drop = (imported.len() + 3 * resources.len()) as u32;
+    for (k, &d) in handles.iter().enumerate() {
+        cx.drops.insert(d, first_drop + k as u32);
+    }
     let exported: Vec<FuncId> = world
         .exports
         .iter()
@@ -248,6 +292,7 @@ pub fn generate(
         let (params, results) = boundary::import_signature(types, func);
         import_sigs.push(cx.signature(params, results));
     }
+    let drop_sig = cx.signature(vec![ValType::I32], vec![]);
     let intrinsic_sigs: Vec<[u32; 3]> = resources
         .iter()
         .map(|_| {
@@ -330,6 +375,16 @@ pub fn generate(
                 EntityType::Function(gc_types + sig),
             );
         }
+    }
+    for &decl in &handles {
+        let path = interface_names[types.decls[decl].interface]
+            .as_deref()
+            .expect("imported interface present in the WIT");
+        import_section.import(
+            &format!("cm32p2|{path}"),
+            &format!("{}_drop", kebab(&types.decls[decl].name)),
+            EntityType::Function(gc_types + drop_sig),
+        );
     }
     let mut functions = FunctionSection::new();
     for sig in signatures {
@@ -487,6 +542,11 @@ struct ModuleCx<'a> {
     helper_base: u32,
     /// The runtime of each exported resource (§ 12.10).
     resources: HashMap<DeclId, ResourceRt>,
+    /// The interfaces whose resources are handles in this module: those of other
+    /// packages and those the world imports (§ 12.10).
+    handle_ifaces: Vec<bool>,
+    /// The `resource.drop` import of each handle type used by the module.
+    drops: HashMap<DeclId, u32>,
 }
 
 /// The functions and globals behind the handles of an exported resource (§ 12.10): the
@@ -528,6 +588,8 @@ impl<'a> ModuleCx<'a> {
             data_index: HashMap::new(),
             helper_base: 0,
             resources: HashMap::new(),
+            handle_ifaces: Vec::new(),
+            drops: HashMap::new(),
         }
     }
 
@@ -550,7 +612,7 @@ impl<'a> ModuleCx<'a> {
         let types = self.types;
         match types.kind(ty) {
             TypeKind::Prim(p) => p.val_type(),
-            _ if types.is_scalar(ty) => ValType::I32,
+            _ if types.is_scalar(ty) || self.is_handle(ty).is_some() => ValType::I32,
             TypeKind::Option(inner) => {
                 let index = self.option_heap(*inner);
                 ref_type(index, true)
@@ -561,7 +623,45 @@ impl<'a> ModuleCx<'a> {
 
     /// Whether `option<inner>` boxes its payload (§ 12.7).
     fn boxed(&self, inner: Type) -> bool {
-        self.types.is_scalar(inner) || matches!(self.types.kind(inner), TypeKind::Option(_))
+        self.types.is_scalar(inner)
+            || self.is_handle(inner).is_some()
+            || matches!(self.types.kind(inner), TypeKind::Option(_))
+    }
+
+    /// The resource of `ty`, `own` or `borrow`, when it is a handle in this module: an
+    /// `i32` index in the handle table of the instance (§ 12.10).
+    fn is_handle(&self, ty: Type) -> Option<DeclId> {
+        let (d, _) = self.types.resource(ty)?;
+        self.handle_ifaces
+            .get(self.types.decls[d].interface)
+            .copied()
+            .unwrap_or(false)
+            .then_some(d)
+    }
+
+    /// The resource of `ty` when it is an owned handle, which its owner releases.
+    fn owned_handle(&self, ty: Type) -> Option<DeclId> {
+        match self.types.kind(ty) {
+            TypeKind::Borrow(_) => None,
+            _ => self.is_handle(ty),
+        }
+    }
+
+    /// Whether a value of type `ty` holds owned handles.
+    fn has_handles(&self, ty: Type) -> bool {
+        let mut seen = Vec::new();
+        let mut stack = vec![ty];
+        while let Some(t) = stack.pop() {
+            if seen.contains(&t) {
+                continue;
+            }
+            seen.push(t);
+            if self.owned_handle(t).is_some() {
+                return true;
+            }
+            stack.extend(self.types.children(t));
+        }
+        false
     }
 
     /// The type `X` of the `(ref null X)` of `option<inner>`.
@@ -810,6 +910,10 @@ struct FuncGen<'g, 'a> {
     /// Generating the initializer of a global: string literals always come from their
     /// global.
     constant: bool,
+    /// The locals that own a handle, by block, innermost last (§ 9.9).
+    owners: Vec<Vec<u32>>,
+    /// The number of blocks open at the start of each enclosing loop body.
+    loops: Vec<usize>,
 }
 
 impl<'g, 'a> FuncGen<'g, 'a> {
@@ -822,8 +926,20 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             first_scratch: func.locals.len() as u32,
             scratch: Vec::new(),
             constant: false,
+            owners: Vec::new(),
+            loops: Vec::new(),
         };
-        cg.stmts(&func.body);
+        // The parameters that own a handle are released on every exit (§ 9.9).
+        let params: Vec<u32> = func
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, t))| cg.cx.owned_handle(*t).is_some())
+            .map(|(i, _)| i as u32)
+            .collect();
+        cg.owners.push(params);
+        cg.block(&func.body);
+        cg.release_from(0);
         if func.ret.is_some() {
             // Every path ends with `return` (checked by semantic analysis);
             // the end of the body is unreachable.
@@ -853,6 +969,8 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             first_scratch: 0,
             scratch: Vec::new(),
             constant: true,
+            owners: Vec::new(),
+            loops: Vec::new(),
         };
         cg.expr(init);
         cg.instrs
@@ -876,6 +994,14 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         self.first_scratch + self.scratch.len() as u32 - 1
     }
 
+    /// Pushes a scratch local holding a value of Wasm type `val`, non-null if `val` is.
+    fn get_scratch(&mut self, s: u32, val: ValType) {
+        self.emit(Instruction::LocalGet(s));
+        if matches!(val, ValType::Ref(r) if !r.nullable) {
+            self.emit(Instruction::RefAsNonNull);
+        }
+    }
+
     fn types(&self) -> &'a Types {
         self.cx.types
     }
@@ -885,6 +1011,64 @@ impl<'g, 'a> FuncGen<'g, 'a> {
     fn stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             self.stmt(stmt);
+        }
+    }
+
+    /// A block of statements: the handles of its locals are released at its end.
+    fn block(&mut self, stmts: &[Stmt]) {
+        self.owners.push(Vec::new());
+        self.stmts(stmts);
+        self.release_from(self.owners.len() - 1);
+        self.owners.pop();
+    }
+
+    // ---- Handles (§ 9.9, § 12.10) ----
+
+    /// Releases the handle in local `l`, if any, and empties it.
+    fn release_local(&mut self, l: u32) {
+        let d = self
+            .cx
+            .owned_handle(self.local_types[l as usize])
+            .expect("a handle");
+        let drop = self.cx.drops[&d];
+        self.instrs.extend([
+            Instruction::LocalGet(l),
+            Instruction::If(BlockType::Empty),
+            Instruction::LocalGet(l),
+            Instruction::Call(drop),
+            Instruction::End,
+            Instruction::I32Const(0),
+            Instruction::LocalSet(l),
+        ]);
+    }
+
+    /// Releases the handles of the blocks from `depth` to the innermost, innermost first,
+    /// each in the reverse order of its declarations.
+    fn release_from(&mut self, depth: usize) {
+        let locals: Vec<u32> = self.owners[depth..]
+            .iter()
+            .rev()
+            .flat_map(|b| b.iter().rev().copied())
+            .collect();
+        for l in locals {
+            self.release_local(l);
+        }
+    }
+
+    /// Records that local `l`, just declared, owns its value if it is a handle.
+    fn own(&mut self, l: u32) {
+        if self.cx.owned_handle(self.local_types[l as usize]).is_some() {
+            self.owners.last_mut().expect("open block").push(l);
+        }
+    }
+
+    /// Releases the handles of the value of type `ty` on the stack, and consumes it.
+    fn release_value(&mut self, ty: Type) {
+        if self.cx.has_handles(ty) {
+            let helper = self.cx.helper(Helper::Boundary(Boundary::Release(ty)));
+            self.emit(Instruction::Call(helper));
+        } else {
+            self.emit(Instruction::Drop);
         }
     }
 
@@ -901,8 +1085,23 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                     }
                 }
                 self.emit(Instruction::LocalSet(*local));
+                self.own(*local);
             }
             Stmt::Assign { place, value } => match place {
+                Place::Local(l)
+                    if self
+                        .cx
+                        .owned_handle(self.local_types[*l as usize])
+                        .is_some() =>
+                {
+                    // The old handle is released once the new value is computed.
+                    let tmp = self.scratch(ValType::I32);
+                    self.expr(value);
+                    self.emit(Instruction::LocalSet(tmp));
+                    self.release_local(*l);
+                    self.emit(Instruction::LocalGet(tmp));
+                    self.emit(Instruction::LocalSet(*l));
+                }
                 Place::Local(l) => {
                     self.expr(value);
                     self.emit(Instruction::LocalSet(*l));
@@ -932,10 +1131,10 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 self.expr(cond);
                 self.emit(Instruction::If(BlockType::Empty));
                 self.frames.push(Frame::Other);
-                self.stmts(then);
+                self.block(then);
                 if !else_.is_empty() {
                     self.emit(Instruction::Else);
-                    self.stmts(else_);
+                    self.block(else_);
                 }
                 self.frames.pop();
                 self.emit(Instruction::End);
@@ -948,7 +1147,9 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 self.expr(cond);
                 self.emit(Instruction::I32Eqz);
                 self.emit(Instruction::BrIf(1));
-                self.stmts(body);
+                self.loops.push(self.owners.len());
+                self.block(body);
+                self.loops.pop();
                 self.emit(Instruction::Br(0));
                 self.frames.pop();
                 self.emit(Instruction::End);
@@ -960,18 +1161,26 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 arms,
                 else_,
             } => self.match_(scrutinee, arms, else_.as_deref()),
-            Stmt::Break => self.branch(Frame::LoopExit),
-            Stmt::Continue => self.branch(Frame::LoopStart),
+            Stmt::Break | Stmt::Continue => {
+                let depth = *self.loops.last().expect("inside a loop");
+                self.release_from(depth);
+                self.branch(if matches!(stmt, Stmt::Break) {
+                    Frame::LoopExit
+                } else {
+                    Frame::LoopStart
+                });
+            }
             Stmt::Return(value) => {
                 if let Some(e) = value {
                     self.expr(e);
                 }
+                self.release_from(0);
                 self.emit(Instruction::Return);
             }
             Stmt::Call(e) => {
                 self.expr(e);
-                if e.ty.is_some() {
-                    self.emit(Instruction::Drop);
+                if let Some(ty) = e.ty {
+                    self.release_value(ty);
                 }
             }
         }
@@ -1060,14 +1269,28 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                     Scrutinee::Option(None) => self.emit(Instruction::RefAsNonNull),
                 }
                 self.emit(Instruction::LocalSet(binding));
+            } else if self.cx.has_handles(ty) {
+                // A case without a name gives up its payload (§ 9.9).
+                self.get_scratch(s, val);
+                self.release_value(ty);
+            }
+            self.owners.push(Vec::new());
+            if let Some(binding) = arm.binding {
+                self.own(binding);
             }
             self.stmts(&arm.body);
+            self.release_from(self.owners.len() - 1);
+            self.owners.pop();
             self.branch(Frame::MatchEnd);
         }
         if let Some(else_) = else_ {
             self.emit(Instruction::End);
             self.frames.pop();
-            self.stmts(else_);
+            if self.cx.has_handles(ty) {
+                self.get_scratch(s, val);
+                self.release_value(ty);
+            }
+            self.block(else_);
         }
         self.emit(Instruction::End);
         self.frames.pop();
@@ -1111,6 +1334,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                         self.emit(Instruction::GlobalGet(g));
                     }
                 }
+                self.release_from(0);
                 self.emit(Instruction::Return);
                 self.emit(Instruction::End);
                 if ok.is_some() {
@@ -1131,6 +1355,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 };
                 let none = self.cx.option_heap(*ret_inner);
                 self.emit(Instruction::RefNull(HeapType::Concrete(none)));
+                self.release_from(0);
                 self.emit(Instruction::Return);
                 self.emit(Instruction::End);
                 self.emit(Instruction::LocalGet(s));
@@ -1184,13 +1409,42 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 Const::F64(v) => Instruction::F64Const(Ieee64::from(v)),
             }),
             ExprKind::Local(l) => self.emit(Instruction::LocalGet(*l)),
+            ExprKind::Move(l) => {
+                self.emit(Instruction::LocalGet(*l));
+                if self
+                    .cx
+                    .owned_handle(self.local_types[*l as usize])
+                    .is_some()
+                {
+                    // The handle leaves the local (§ 9.9).
+                    self.emit(Instruction::I32Const(0));
+                    self.emit(Instruction::LocalSet(*l));
+                }
+            }
             ExprKind::Global(g) => self.emit(Instruction::GlobalGet(self.global(*g))),
             ExprKind::Call { func, args } => {
-                for arg in args {
+                // A handle created only to be lent is released after the call (§ 9.9).
+                let params = &self.cx.program.funcs[*func].params;
+                let mut lent = Vec::new();
+                for (arg, (_, param)) in args.iter().zip(params) {
                     self.expr(arg);
+                    let temporary = !matches!(arg.kind, ExprKind::Local(_));
+                    if temporary
+                        && matches!(self.types().kind(*param), TypeKind::Borrow(_))
+                        && self.cx.is_handle(arg.value_ty()).is_some()
+                    {
+                        let tmp = self.scratch(ValType::I32);
+                        self.emit(Instruction::LocalTee(tmp));
+                        lent.push((tmp, self.cx.is_handle(arg.value_ty()).unwrap()));
+                    }
                 }
                 let index = self.cx.call_index(*func);
                 self.emit(Instruction::Call(index));
+                for (tmp, d) in lent {
+                    let drop = self.cx.drops[&d];
+                    self.emit(Instruction::LocalGet(tmp));
+                    self.emit(Instruction::Call(drop));
+                }
             }
             ExprKind::Unary { op, expr } => self.unary(*op, expr),
             ExprKind::Binary { op, lhs, rhs } => self.binary(*op, lhs, rhs),

@@ -114,7 +114,7 @@ An interface is an interface of the package, or an interface of another package 
 
 An unknown first name is E0300 (§ 9.1); a path that names a type that is not an enum or a variant, or an unknown case, is E0307; a case written with the wrong payload is E0407 (§ 8.14). Types are named with paths of the same form (§ 7.8).
 
-## 9.9 Handles (specified, not available yet)
+## 9.9 Handles
 
 A handle (§ 7.12) designates a resource that belongs to another component. The Component Model requires each handle to be given back to its owner, with `resource.drop`, exactly once; a handle that is never given back keeps the resource alive in the other component until the instance ends. WaSL gives handles back automatically, with rules that are checked locally, statement by statement.
 

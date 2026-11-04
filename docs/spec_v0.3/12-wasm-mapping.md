@@ -11,7 +11,7 @@ For a world `w`, the module contains:
 - **types**: the type definitions of § 12.5 used by the included functions and globals, then one function type per distinct signature;
 - **functions**: every function of the interfaces exported by `w`, plus every function they call, directly or transitively, whatever its interface. Other functions of the package are not included. To these are added the helpers they use (§ 12.8) and the boundary adapters of the exported functions (§ 13.8);
 - **globals**: every global read or assigned by those functions, one immutable global per distinct string literal and per shared case without payload (§ 12.6), then the globals of § 13.7 when the module has a memory;
-- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10 (resources: specified, not available yet); they come first in the function index space;
+- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10; they come first in the function index space;
 - **exports**: one export per function of each interface exported by `w`, with the name of § 13.3, and the functions of the resources of these interfaces (§ 13.11);
 - **memory**, **realloc** and **post-return** functions only when an exported function needs them (§ 13.6).
 
@@ -234,15 +234,19 @@ The built-in functions of § 8.17 use the same code without the trap: `T::wrappi
 
 The table of handles that other components hold on these objects is part of the boundary (§ 13.11).
 
-**Handles** (*specified, not available yet*). In a world that imports the interface of a resource, or for a resource of another package, a value of the resource is an `i32` handle:
+**Handles.** In a world that imports the interface of a resource, or for a resource of another package, a value of the resource is an `i32` handle:
 
 | WaSL | Wasm |
 |---|---|
 | constructor, method, static function | a call to the imported function of § 13.10; `self` is the handle, lent as a `borrow` |
 | move of `x` (§ 9.9) | `local.get $x` `i32.const 0` `local.set $x` |
-| release of `x` | `local.get $x` `if` (`x != 0`) `local.get $x` `call $[resource-drop]r` `end` |
+| release of `x` | `local.get $x` `if` (`x != 0`) `local.get $x` `call $r_drop` `end`, then `i32.const 0` `local.set $x`, so that a local declared in a loop is never released twice |
+| temporary lent to a call | `local.tee` of the argument into a fresh local, then its release after the call |
+| `match` case without a name, `else` | the value of the scrutinee given to the helper below |
 | assignment `x = e;` | `e` into a fresh local, the release of `x`, then `local.set $x` |
 | release of a temporary given to `_ =` | a generated helper per type that walks the value and calls `$[resource-drop]r` on every handle |
+
+The adapter of an exported function (§ 13.8) keeps the handles lent to it, `borrow<r>`, in fresh locals and releases them after the call, as the Component Model requires before the function returns.
 
 `option<r>`, where `r` is a handle type, boxes the `i32` (§ 12.7); variants and results hold it as an `i32` payload. Releases are emitted at each exit of a block, before its `br` or `return`, in the reverse order of the declarations (§ 10.11).
 

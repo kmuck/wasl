@@ -50,6 +50,8 @@ pub(crate) enum Boundary {
     /// `(rep)`: the destructor of an exported resource, called when the last handle is
     /// dropped: frees the slot.
     Dtor(DeclId),
+    /// `(T')`: releases every handle that a value holds (§ 9.9).
+    Release(Type),
 }
 
 // ---- Layout of the Canonical ABI ----
@@ -452,7 +454,7 @@ impl<'c, 'a> Gen<'c, 'a> {
             read(self, pos, ValType::I32);
             read(self, pos + 1, ValType::I32);
             self.call(Boundary::LiftList(ty));
-        } else if let Some(lift) = lift_handle(types, ty) {
+        } else if let Some(lift) = lift_handle(self.cx, ty) {
             read(self, pos, ValType::I32);
             self.call(lift);
         } else {
@@ -498,9 +500,15 @@ impl<'c, 'a> Gen<'c, 'a> {
     }
 
     /// Lifts a value of type `ty` stored at `addr + offset`, `addr` being a local.
+    /// Whether a value of type `ty` is a single `i32` or number that crosses the
+    /// boundary as is: a scalar, or a handle of another component.
+    fn scalar(&self, ty: Type) -> bool {
+        self.types.is_scalar(ty) || self.cx.is_handle(ty).is_some()
+    }
+
     fn lift_at(&mut self, ty: Type, addr: u32, offset: u32) {
         self.emit(I::LocalGet(addr));
-        if self.types.is_scalar(ty) {
+        if self.scalar(ty) {
             let (load, _) = scalar_access(self.types, ty);
             let mut load = load.into_iter();
             let first = load.next().unwrap();
@@ -519,7 +527,7 @@ impl<'c, 'a> Gen<'c, 'a> {
 
     /// Lowers the value pushed by `value`, of type `ty`, to `addr + offset`.
     fn lower_at(&mut self, ty: Type, value: &[Instruction<'static>], addr: u32, offset: u32) {
-        if self.types.is_scalar(ty) {
+        if self.scalar(ty) {
             let (_, store) = scalar_access(self.types, ty);
             self.emit(I::LocalGet(addr));
             self.code.extend(value.iter().cloned());
@@ -548,7 +556,7 @@ impl<'c, 'a> Gen<'c, 'a> {
     /// order (Canonical ABI flattening).
     fn lower_to_flat(&mut self, ty: Type, value: &[Instruction<'static>]) {
         let types = self.types;
-        if types.is_scalar(ty) {
+        if self.scalar(ty) {
             self.code.extend(value.iter().cloned());
             return;
         }
@@ -664,7 +672,7 @@ impl<'c, 'a> Gen<'c, 'a> {
     /// Lowers the value on the stack to its single flat value.
     fn lower_flat(&mut self, ty: Type) {
         let types = self.types;
-        if types.is_scalar(ty) {
+        if self.scalar(ty) {
             return;
         }
         if let Some((d, _)) = types.resource(ty) {
@@ -727,7 +735,7 @@ impl Boundary {
                     g.dispatch(disc, payloads.len(), result, |g, k| {
                         g.case(ty, k, payloads[k as usize], |g, p| g.lift_at(p, 0, offset))
                     });
-                } else if let Some(lift) = lift_handle(types, ty) {
+                } else if let Some(lift) = lift_handle(g.cx, ty) {
                     g.emit(I::LocalGet(0));
                     g.emit(I::I32Load(mem(0, 2)));
                     g.call(lift);
@@ -795,6 +803,7 @@ impl Boundary {
             }
             Boundary::LowerOwn(d) => lower_own(cx, d),
             Boundary::Dtor(d) => dtor(cx, d),
+            Boundary::Release(ty) => release(cx, ty),
         }
     }
 }
@@ -1074,10 +1083,20 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
     let mut g = Gen::new(cx, params);
 
     let param_types: Vec<Type> = func.params.iter().map(|(_, t)| *t).collect();
+    // The handles lent to the function are given back before it returns (§ 9.9).
+    let mut lent = Vec::new();
+    let mut keep_lent = |g: &mut Gen, t: Type| {
+        if let (TypeKind::Borrow(_), Some(d)) = (types.kind(t), g.cx.is_handle(t)) {
+            let tmp = g.local(ValType::I32);
+            g.emit(I::LocalTee(tmp));
+            lent.push((tmp, g.cx.drops[&d]));
+        }
+    };
     if in_memory {
         let (offsets, _, _) = fields_layout(types, &param_types);
         for (&t, &offset) in param_types.iter().zip(&offsets) {
             g.lift_at(t, 0, offset);
+            keep_lent(&mut g, t);
         }
     } else {
         let src: Vec<(u32, ValType)> = flat_params
@@ -1088,6 +1107,7 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
         let mut pos = 0;
         for &t in &param_types {
             g.lift_flat(t, &src, pos);
+            keep_lent(&mut g, t);
             pos += flat(types, t).len();
         }
     }
@@ -1097,6 +1117,10 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
         g.emit(I::GlobalSet(top));
     }
     g.emit(I::Call(target));
+    for (tmp, drop) in lent {
+        g.emit(I::LocalGet(tmp));
+        g.emit(I::Call(drop));
+    }
 
     let results = match func.ret {
         None => Vec::new(),
@@ -1214,8 +1238,12 @@ fn import_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, 
 // ---- Resources (§ 12.10) ----
 
 /// The helper that lifts a handle of an exported resource, `own` or `borrow`.
-fn lift_handle(types: &Types, ty: Type) -> Option<Boundary> {
-    let (d, _) = types.resource(ty)?;
+fn lift_handle(cx: &ModuleCx, ty: Type) -> Option<Boundary> {
+    let (d, _) = cx.types.resource(ty)?;
+    if !cx.resources.contains_key(&d) {
+        return None;
+    }
+    let types = cx.types;
     Some(match types.kind(ty) {
         TypeKind::Borrow(_) => Boundary::LiftBorrow(d),
         _ => Boundary::LiftOwn(d),
@@ -1358,5 +1386,70 @@ fn dtor(cx: &mut ModuleCx, d: DeclId) -> (Vec<ValType>, Vec<ValType>, Function) 
         I::I32Add,
         I::GlobalSet(rt.nfree),
     ]);
+    g.finish(Vec::new())
+}
+
+/// `(T')`: releases the handles of a value (§ 9.9): a handle itself, or the payload of
+/// the case of an `option`, a `result` or a variant. Records, tuples and lists hold
+/// no handles (E0220). Locals: value = 0.
+fn release(cx: &mut ModuleCx, ty: Type) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let types = cx.types;
+    let val = cx.val(ty);
+    let mut g = Gen::new(cx, vec![val]);
+    if let Some(d) = g.cx.owned_handle(ty) {
+        let drop = g.cx.drops[&d];
+        g.code.extend([
+            I::LocalGet(0),
+            I::If(BlockType::Empty),
+            I::LocalGet(0),
+            I::Call(drop),
+            I::End,
+        ]);
+    } else if let TypeKind::Option(inner) = types.kind(ty) {
+        let inner = *inner;
+        g.emit(I::LocalGet(0));
+        g.emit(I::RefIsNull);
+        g.emit(I::I32Eqz);
+        g.emit(I::If(BlockType::Empty));
+        g.emit(I::LocalGet(0));
+        if g.cx.boxed(inner) {
+            let boxed = g.cx.option_heap(inner);
+            g.emit(I::StructGet {
+                struct_type_index: boxed,
+                field_index: 0,
+            });
+        } else {
+            g.emit(I::RefAsNonNull);
+        }
+        g.call(Boundary::Release(inner));
+        g.emit(I::End);
+    } else if let Some(payloads) = cases(types, ty) {
+        let base = g.cx.heap(ty);
+        for (k, payload) in payloads.iter().enumerate() {
+            let Some(p) = *payload else { continue };
+            if !g.cx.has_handles(p) {
+                continue;
+            }
+            let case = g.cx.case_type(ty, k as u32);
+            g.code.extend([
+                I::LocalGet(0),
+                I::StructGet {
+                    struct_type_index: base,
+                    field_index: 0,
+                },
+                I::I32Const(k as i32),
+                I::I32Eq,
+                I::If(BlockType::Empty),
+                I::LocalGet(0),
+                I::RefCastNonNull(HeapType::Concrete(case)),
+                I::StructGet {
+                    struct_type_index: case,
+                    field_index: 1,
+                },
+            ]);
+            g.call(Boundary::Release(p));
+            g.emit(I::End);
+        }
+    }
     g.finish(Vec::new())
 }

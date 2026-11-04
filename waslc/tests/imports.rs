@@ -32,6 +32,7 @@ interface log {
 interface files {
   resource file;
   open: func(path: string) -> file;
+  wait: async func();
   count: func() -> u32;
   %from: func() -> u32;
   get-UPPER: func() -> u32;
@@ -495,15 +496,9 @@ fn errors() {
     // Items WaSL cannot use.
     fails(
         "world w { import demo:host/files; export t; }
-         interface t { func f() { _ = files::open(\"x\"); } }",
+         interface t { func f() { files::wait(); } }",
         Code::ForeignInterface,
-        "`files::open` cannot be used from WaSL: `file` is a resource",
-    );
-    fails(
-        "world w { import demo:host/files; export t; }
-         interface t { func f(x: files::file) { } }",
-        Code::ForeignInterface,
-        "`files::file` cannot be used from WaSL",
+        "`files::wait` cannot be used from WaSL: `wait` is an `async` function",
     );
     assert!(
         analyze(

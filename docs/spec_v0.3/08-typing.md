@@ -367,4 +367,4 @@ local d: carts::cart = carts::cart::single(150);   // static function
 - In `e.m(args)`, `e` is any expression whose type is a resource `r` or `borrow<r>`, and `m` a method of `r` (E0308). `e` is evaluated before the arguments. The method borrows `e` (§ 9.9).
 - In `r::s(args)`, `s` is a static function of `r` (E0308). In a path of three names, `i::x::y(…)`, `x` is a variant (a constructor of § 8.14) or a resource (a static function), never both: types have one namespace (§ 7.7).
 - Arguments and return values follow the rules of calls (§ 8.6): the number of arguments, their types, and a method without a return value used only as a statement.
-- The resources of an imported interface (*specified, not available yet*) are called the same way, with the names of their WIT converted to WaSL (§ 13.2): `out.blocking_write_and_flush(bytes)` calls the method `blocking-write-and-flush` of `wasi:io/streams`.
+- The resources of an imported interface are called the same way, with the names of their WIT converted to WaSL (§ 13.2): `out.blocking_write_and_flush(bytes)` calls the method `blocking-write-and-flush` of `wasi:io/streams`.

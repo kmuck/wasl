@@ -19,6 +19,9 @@ pub struct Program {
     pub funcs: Vec<FuncDef>,
     pub interfaces: Vec<InterfaceDef>,
     pub worlds: Vec<WorldDef>,
+    /// The handle types (§ 7.12), by declaration: the resources of the interfaces of
+    /// other packages and of the interfaces of the package that a world imports.
+    pub handles: Vec<bool>,
 }
 
 impl Program {
@@ -138,6 +141,7 @@ pub fn visit_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
         ExprKind::Case { payload, .. } => payload.iter().for_each(|p| visit_expr(p, f)),
         ExprKind::Const(_)
         | ExprKind::Local(_)
+        | ExprKind::Move(_)
         | ExprKind::Global(_)
         | ExprKind::Str(_)
         | ExprKind::None => {}
@@ -303,6 +307,10 @@ impl Expr {
 pub enum ExprKind {
     Const(Const),
     Local(LocalId),
+    /// A local of a resource type used as a value that leaves it (§ 9.9): returned,
+    /// passed for a parameter that is not a `borrow`, assigned, put in a case. Where the
+    /// resource is a handle, the local is emptied.
+    Move(LocalId),
     Global(GlobalId),
     Call {
         func: FuncId,
