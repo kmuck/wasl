@@ -192,6 +192,86 @@ fn invalid_programs() {
     assert!(global_init.contains("E0409"), "{global_init}");
 }
 
+/// Errors of `?` (§ 8.19): E0414, E0415, and the value rules of § 9.6.
+#[test]
+fn error_propagation_errors() {
+    let cases: &[(&str, &str, Code)] = &[
+        (
+            "-> option<u32>",
+            "local y: u32 = n?; return option::none;",
+            Code::TryOperand,
+        ),
+        ("", "_ = r()?;", Code::TryReturn),
+        ("-> u32", "return r()?;", Code::TryReturn),
+        (
+            "-> option<u32>",
+            "return option::some(r()?);",
+            Code::TryReturn,
+        ),
+        (
+            "-> result<u32, s8>",
+            "return result::ok(r()?);",
+            Code::TryReturn,
+        ),
+        (
+            "-> result<u32>",
+            "return result::ok(r()?);",
+            Code::TryReturn,
+        ),
+        (
+            "-> result<u32, e>",
+            "return result::ok(o()?);",
+            Code::TryReturn,
+        ),
+        (
+            "-> result<u32, e>",
+            "r()?; return result::ok(1);",
+            Code::IgnoredValue,
+        ),
+        (
+            "-> result<u32, e>",
+            "_ = u()?; return result::ok(1);",
+            Code::TypeMismatch,
+        ),
+        (
+            "-> result<u32, e>",
+            "local y: u32 = u()?; return result::ok(y);",
+            Code::TypeMismatch,
+        ),
+        ("-> result<u32, e>", "return r()?;", Code::TypeMismatch),
+        (
+            "-> result<u32, e>",
+            "local y: u32 = n ? 1 : 2;",
+            Code::Syntax,
+        ),
+    ];
+    for (ret, body, code) in cases {
+        let program = format!(
+            "interface t {{
+               enum e {{ a, b }}
+               func r() -> result<u32, e> {{ return result::ok(1); }}
+               func u() -> result<_, e> {{ return result::ok; }}
+               func o() -> option<u32> {{ return option::none; }}
+               func f(n: u32) {ret} {{ {body} }}
+             }}"
+        );
+        let sources = sources(&[("src/t.wasl", &program)]);
+        match analyze(&package(), &sources) {
+            Ok(_) => panic!("accepted: {body}"),
+            Err(e) => assert_eq!(e.code, *code, "{body}: {}", e.display(&sources)),
+        }
+    }
+
+    let global = analyze_files(&[(
+        "src/t.wasl",
+        "global g: u32 = t::r()?;
+         interface t { func r() -> result<u32> { return result::ok(1); } }",
+    )])
+    .err()
+    .unwrap();
+    assert!(global.contains("E0409"), "{global}");
+}
+
 /// Types in the WIT: declarations, `use` of types-only interfaces, erased `mut`
 /// (§ 13.1).
 #[test]

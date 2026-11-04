@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The `?` operator on `result` and `option` (§ 8.19): `local p: u64 = prices::of(sku)?;` returns the `err` or the `none` from the function. `f(…)?;` is a statement when the `ok` has no payload. New errors E0414 (operand that is not a `result` or an `option`) and E0415 (return type that cannot receive the error). `?` is now a token, so a misplaced `?` is a syntax error (E0100) instead of E0001.
 - The v0.3 specification describes the features of 0.3, marked *specified, not available yet* until the compiler implements them: dependencies in `wasl.toml` and `wkg.lock` (§ 3.5), imports of interfaces of other packages and of the same package (§ 2.5), implementations of foreign interfaces such as `wasi:cli/run` (§ 2.4.2, § 13.12), resources with constructors, methods and static functions (§ 7.12, § 8.20), automatic release of handles (§ 9.9), the `?` operator (§ 8.19), and the errors E0215 to E0221, E0308, E0309, E0414 and E0415 (§ 11.3).
 - The target programs of 0.3, written before the compiler supports them: [`examples/catalog`](examples/catalog) and [`examples/checkout`](examples/checkout), two components linked by a resource, and [`examples/hello`](examples/hello), a WASI 0.2 command.
 

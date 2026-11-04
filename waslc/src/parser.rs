@@ -474,8 +474,9 @@ impl Parser {
                     }
                 };
                 let call = self.call_args(path)?;
+                let value = self.tries(call, value_start);
                 self.expect(&TokenKind::Semi, "`;`")?;
-                StmtKind::Discard(call)
+                StmtKind::Discard(value)
             }
             TokenKind::RBrace | TokenKind::Eof => return Err(self.unexpected("a statement")),
             _ => {
@@ -506,8 +507,24 @@ impl Parser {
             );
         }
         let call = self.call_args(path)?;
+        let value = self.tries(call, start);
         self.expect(&TokenKind::Semi, "`;`")?;
-        Ok(StmtKind::Call(call))
+        Ok(StmtKind::Call(value))
+    }
+
+    /// A call of a call statement, followed by any number of `?` (§ 5.3).
+    fn tries(&mut self, call: Call, start: Span) -> Expr {
+        let mut expr = Expr {
+            kind: ExprKind::Call(call),
+            span: start.to(self.prev_span()),
+        };
+        while self.eat(&TokenKind::Question) {
+            expr = Expr {
+                kind: ExprKind::Try(Box::new(expr)),
+                span: start.to(self.prev_span()),
+            };
+        }
+        expr
     }
 
     /// Target of an assignment: `x`, `inv.status`, `rows[i].cells[j]`.
@@ -852,6 +869,10 @@ impl Parser {
                         index: Box::new(index),
                     }
                 }
+                TokenKind::Question => {
+                    self.bump();
+                    ExprKind::Try(Box::new(expr))
+                }
                 _ => return Ok(expr),
             };
             expr = Expr {
@@ -1010,7 +1031,8 @@ fn expr_span(kind: &ExprKind) -> Span {
     match kind {
         ExprKind::Field { expr, .. }
         | ExprKind::Elem { expr, .. }
-        | ExprKind::Index { expr, .. } => expr.span,
+        | ExprKind::Index { expr, .. }
+        | ExprKind::Try(expr) => expr.span,
         _ => unreachable!(),
     }
 }

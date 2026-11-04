@@ -194,6 +194,13 @@ pub enum ExprKind {
         expr: Box<Expr>,
         index: Box<Expr>,
     },
+    /// `expr?` (§ 8.19): the payload of `ok` or `some`, or a return from the function,
+    /// whose return type is `ret`, with its `err` or `none`. The expression has no type
+    /// when `ok` has no payload.
+    Try {
+        expr: Box<Expr>,
+        ret: Type,
+    },
     /// Call to a built-in function (§ 8.17).
     Builtin {
         func: Builtin,
