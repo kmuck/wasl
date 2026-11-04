@@ -70,7 +70,7 @@ Codes never change meaning from one version to the next.
 | E0215 | unknown foreign interface, package that is not a dependency, or item of a foreign interface that WaSL cannot use (§ 2.4.2, § 2.5, § 3.5) | `import wasi:cli/stdout;` without `"wasi:cli"` in `[dependencies]`, `import wasi:cli/nope;` |
 | E0216 | interface imported twice by a world, or imported and exported by it | `world w { import a; export a; }` |
 | E0217 | two interfaces that code can name have the same last name, or an interface of another package has the name of a world or a global (§ 2.5) | `import example:catalog/carts;` with an `interface carts` in the package |
-| E0218 | foreign export block that does not match the WIT of its interface: a missing, extra or different function | `export wasi:cli/run { func run() -> u32 { … } }` |
+| E0218 | foreign export block that does not match the WIT of its interface: a missing, extra or different function, or an interface whose resources or `async` functions WaSL cannot implement yet | `export wasi:cli/run { func run() -> u32 { … } }` |
 | E0219 | `borrow<T>` with a `T` that is not a resource, outside the type of a parameter, or a `borrow` parameter moved (§ 7.12, § 9.9) | `func f() -> borrow<cart>`, `borrow<u32>`, `return c;` with `c: borrow<cart>` |
 | E0220 | handle type in a record, tuple, list, field or global, or a local, parameter or binding whose type contains one without being one (§ 7.12) | `record r { c: carts::cart }`, `local o: option<carts::cart> = …;` |
 | E0221 | function reachable from the exports of a world that calls a foreign interface the world does not import (§ 2.5) | `stdout::get_stdout()` reached from a world without `import wasi:cli/stdout;` |

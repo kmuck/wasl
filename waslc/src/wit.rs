@@ -49,7 +49,11 @@ impl Wit {
             .interfaces
             .iter()
             .map(|iface| {
-                let id = match &iface.foreign {
+                let foreign = match iface.implements {
+                    Some(i) => &program.interfaces[i].foreign,
+                    None => &iface.foreign,
+                };
+                let id = match foreign {
                     Some(f) => f.id,
                     None => *package.interfaces.get(&kebab(&iface.name))?,
                 };
@@ -263,7 +267,11 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
         writeln!(text, "\nworld %{} {{", kebab(&world.name)).unwrap();
         let mut written = Vec::new();
         for &(import, iface) in &world.items {
-            let (name, printed) = match &program.interfaces[iface].foreign {
+            let foreign = match program.interfaces[iface].implements {
+                Some(i) => &program.interfaces[i].foreign,
+                None => &program.interfaces[iface].foreign,
+            };
+            let (name, printed) = match foreign {
                 Some(f) => (f.wit_name(), f.wit_name()),
                 None => {
                     let name = kebab(&program.interfaces[iface].name);

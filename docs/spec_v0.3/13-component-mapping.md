@@ -238,8 +238,8 @@ The module imports the intrinsics of the Component Model for `r`, under the modu
 
 The constructor, the methods and the static functions are exported like functions of the interface (§ 13.3), with the names of the Component Model: `cm32p2|example:catalog/carts@0.1|[constructor]cart`, `…|[method]cart.add`, `…|[static]cart.of`. Their adapters lift `self` as a `borrow<r>`.
 
-## 13.12 Foreign exports (specified, not available yet)
+## 13.12 Foreign exports
 
 The functions of the block `export wasi:cli/run { … }` (§ 2.4.2) are exported like the functions of an interface of the package: with the canonical name of the foreign interface, `cm32p2|wasi:cli/run@0.2|run`, their adapters (§ 13.8) and their canonical options (§ 13.6).
 
-The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, and no other function. The types are compared after the conversion of names of § 13.2. A foreign interface that declares resources cannot be exported in 0.3: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).
+The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, and no other function. The types are compared after the conversion of names of § 13.2. A foreign interface with `async` functions cannot be exported until WaSL has them (§ 16), and a foreign interface that declares resources cannot be exported in 0.3: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).

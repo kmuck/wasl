@@ -52,3 +52,13 @@ jobs:
           weasel() { cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- "$@"; }
           (cd catalog && weasel build catalog)
           (cd checkout && weasel build checkout)
+      # The WASI target program of 0.3: built with the WIT of WASI 0.2 fetched from the
+      # registry, and run as a command by the wasmtime CLI.
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+        if: matrix.crate == 'weasel'
+      - name: Run examples/hello
+        if: matrix.crate == 'weasel'
+        working-directory: examples/hello
+        run: |
+          cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- build hello
+          test "$(wasmtime run -W gc=y -W function-references=y build/hello.wasm)" = "Hello, world!"

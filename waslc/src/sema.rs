@@ -76,6 +76,17 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
         };
         names.insert(name.name.clone(), entry);
     }
+    // The implementations of interfaces of other packages in worlds (§ 2.4.2) are
+    // interfaces of the package without a top-level name.
+    let mut impls: HashMap<(usize, usize), InterfaceId> = HashMap::new();
+    for (w, world) in worlds.iter().enumerate() {
+        for (k, item) in world.items.iter().enumerate() {
+            if let Some(body) = &item.body {
+                impls.insert((w, k), interfaces.len());
+                interfaces.push(body);
+            }
+        }
+    }
 
     // 2. Interfaces of other packages named by the worlds (§ 2.5, § 3.5), then the names
     //    code gives them (E0217).
@@ -262,6 +273,7 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             funcs: func_ids,
             types: decl_ids,
             foreign: None,
+            implements: None,
         });
     }
 
@@ -299,6 +311,7 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             funcs,
             types: decls,
             foreign: Some(f.clone()),
+            implements: None,
         });
     }
 
@@ -394,15 +407,16 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
         }
     }
 
+    let mut implementations: Vec<(InterfaceId, InterfaceId, Span)> = Vec::new();
     // 5. Worlds (§ 6.2).
-    for world in &worlds {
+    for (w, world) in worlds.iter().enumerate() {
         let mut def = hir::WorldDef {
             name: world.name.name.clone(),
             exports: Vec::new(),
             imports: Vec::new(),
             items: Vec::new(),
         };
-        for item in &world.items {
+        for (k, item) in world.items.iter().enumerate() {
             let span = item.iface.span();
             let (id, written) = match &item.iface {
                 InterfaceRef::Local(name) => match names.get(name.name.as_str()) {
@@ -444,7 +458,39 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                         })
                         .map(|(_, i)| *i)
                         .expect("foreign interface resolved");
-                    (id, f.display())
+                    match impls.get(&(w, k)) {
+                        Some(&imp) => {
+                            let world_name = &world.name.name;
+                            let exported = def
+                                .exports
+                                .iter()
+                                .any(|&e| program.interfaces[e].implements == Some(id));
+                            if exported {
+                                return err(
+                                    Code::DuplicateExport,
+                                    span,
+                                    format!(
+                                        "interface `{}` is already exported by world `{world_name}`",
+                                        f.display()
+                                    ),
+                                );
+                            }
+                            if def.imports.contains(&id) {
+                                return err(
+                                    Code::DuplicateImport,
+                                    span,
+                                    format!(
+                                        "world `{world_name}` imports interface `{}`, so it cannot export it",
+                                        f.display()
+                                    ),
+                                );
+                            }
+                            program.interfaces[imp].implements = Some(id);
+                            implementations.push((imp, id, span));
+                            (imp, f.display())
+                        }
+                        None => (id, f.display()),
+                    }
                 }
             };
             let world_name = &world.name.name;
@@ -492,6 +538,12 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             def.items.push((item.import, id));
         }
         program.worlds.push(def);
+    }
+
+    // The implementations of interfaces of other packages (§ 2.4.2, § 13.12): exactly
+    // the functions of the interface, with the same signatures (E0218).
+    for &(imp, foreign, span) in &implementations {
+        check_implementation(&types, &program, &scopes, &funcs, imp, foreign, span)?;
     }
 
     // Handle types (§ 7.12): the resources of other packages and of the interfaces of the
@@ -1101,8 +1153,13 @@ fn check_boundary_types(
                 );
             }
             let iface = &program.interfaces[decl.interface];
+            let implemented = world
+                .exports
+                .iter()
+                .any(|&e| program.interfaces[e].implements == Some(decl.interface));
             if let Some(f) = &iface.foreign
                 && !world.imports.contains(&decl.interface)
+                && !implemented
                 && !iface.funcs.is_empty()
             {
                 return err(
@@ -1392,6 +1449,106 @@ fn no_handle_aggregate(types: &Types, handles: &[bool], ty: Type, span: Span) ->
         }
     }
     Ok(())
+}
+
+/// E0218: the implementation `imp` of the interface `foreign` of another package has
+/// exactly its functions, with the same parameter names and types and the same result.
+fn check_implementation(
+    types: &Types,
+    program: &hir::Program,
+    scopes: &[InterfaceScope],
+    funcs: &[&ast::Func],
+    imp: InterfaceId,
+    foreign: InterfaceId,
+    span: Span,
+) -> Result<()> {
+    let wit = program.interfaces[foreign]
+        .foreign
+        .as_ref()
+        .expect("foreign")
+        .display();
+    let mut unavailable: Vec<(&String, &String)> = scopes[foreign].unavailable.iter().collect();
+    unavailable.sort();
+    if let Some((name, reason)) = unavailable.first() {
+        return err(
+            Code::ForeignExport,
+            span,
+            format!("`{wit}` cannot be implemented in WaSL yet: `{name}`: {reason}"),
+        );
+    }
+    if let Some(&d) = program.interfaces[foreign]
+        .types
+        .iter()
+        .find(|&&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
+    {
+        return err(
+            Code::ForeignExport,
+            span,
+            format!(
+                "`{wit}` declares the resource `{}`, and implementing resources of other packages is not available yet",
+                types.decls[d].name
+            ),
+        );
+    }
+    let mine = &program.interfaces[imp].funcs;
+    for &f in &program.interfaces[foreign].funcs {
+        let want = &program.funcs[f];
+        let Some(&g) = mine.iter().find(|&&g| program.funcs[g].name == want.name) else {
+            return err(
+                Code::ForeignExport,
+                span,
+                format!(
+                    "the function `{}` of `{wit}` is missing: {}",
+                    want.name,
+                    signature_text(types, want)
+                ),
+            );
+        };
+        let have = &program.funcs[g];
+        if have.params != want.params || have.ret != want.ret {
+            return err(
+                Code::ForeignExport,
+                funcs[g].name.span,
+                format!(
+                    "`{}` does not have the signature of `{wit}`: expected {}, found {}",
+                    want.name,
+                    signature_text(types, want),
+                    signature_text(types, have)
+                ),
+            );
+        }
+    }
+    for &g in mine {
+        let name = &program.funcs[g].name;
+        if !program.interfaces[foreign]
+            .funcs
+            .iter()
+            .any(|&f| program.funcs[f].name == *name)
+        {
+            return err(
+                Code::ForeignExport,
+                funcs[g].name.span,
+                format!(
+                    "`{name}` is not a function of `{wit}`: an implementation has exactly the functions of its interface"
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `func run() -> result`, as written in WaSL.
+fn signature_text(types: &Types, f: &hir::FuncDef) -> String {
+    let params: Vec<String> = f
+        .params
+        .iter()
+        .map(|(n, t)| format!("{n}: {}", types.display(*t)))
+        .collect();
+    let ret = f
+        .ret
+        .map(|t| format!(" -> {}", types.display(t)))
+        .unwrap_or_default();
+    format!("`func {}({}){ret}`", f.name, params.join(", "))
 }
 
 #[cfg(test)]

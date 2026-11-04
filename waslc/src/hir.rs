@@ -34,6 +34,7 @@ impl Program {
     /// exports or imports it (§ 2.5, § 13.1).
     pub fn has_wit_funcs(&self, iface: InterfaceId) -> bool {
         self.interfaces[iface].foreign.is_none()
+            && self.interfaces[iface].implements.is_none()
             && self
                 .worlds
                 .iter()
@@ -167,6 +168,9 @@ pub struct InterfaceDef {
     pub types: Vec<DeclId>,
     /// For an interface of another package, where it comes from.
     pub foreign: Option<Foreign>,
+    /// For the implementation of an interface of another package in a world (§ 2.4.2),
+    /// that interface.
+    pub implements: Option<InterfaceId>,
 }
 
 /// An interface of another package, from the WIT of the dependencies (§ 3.5).
