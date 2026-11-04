@@ -1,100 +1,114 @@
 # WaSL
 
-**WaSL** (*WebAssembly Super Langage*) is a programming language for the WebAssembly era of the cloud. It sits **one-to-one on top of WebAssembly, the Component Model and WasmGC**, and compiles programs into small, standard WebAssembly components that start in microseconds and plug into any runtime or any other component.
+**WaSL** (*WebAssembly Super Langage*) is a high-level programming language, with its tooling, that compiles to WebAssembly and nothing else.
 
-> **Status**: early stage. Version 0.1 (numbers, functions, globals, control flow, interfaces and worlds) is specified and implemented. See the [specification](docs/spec_v0.1/README.md). Version 0.2 (data on the WasmGC heap) is [specified](docs/spec_v0.2/README.md), provisionally until v0.3, and implemented.
+A compiled WaSL project is a standard **`.wasm` component**: the code as Wasm instructions, with its WIT interfaces embedded. Any Component Model tool can read it, run it, or compose it with components written in other languages.
+
+> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds) and v0.2 (data on the WasmGC heap) are specified and implemented. The [v0.2 specification](docs/spec_v0.2/README.md) is provisional until v0.3.
 
 ```wasl
-world calculator {
-  export math;
+world billing {
+  export invoices;
 }
 
-interface math {
-  func fib(n: u32) -> u64 {
-    local a: u64 = 0;
-    local b: u64 = 1;
+interface invoices {
+
+  record line {
+    label: string,
+    quantity: u32,
+    unit_price: u64,
+  }
+
+  enum invoice_error {
+    no_lines,
+    zero_quantity,
+  }
+
+  func total(lines: list<line>) -> result<u64, invoice_error> {
+    if (list::len(lines) == 0) {
+      return result::err(invoice_error::no_lines);
+    }
+    local sum: u64;
     local i: u32;
-    while (i < n) {
-      local next: u64 = a + b;
-      a = b;
-      b = next;
+    while (i < list::len(lines)) {
+      if (lines[i].quantity == 0) {
+        return result::err(invoice_error::zero_quantity);
+      }
+      sum = sum + u64(lines[i].quantity) * lines[i].unit_price;
       i = i + 1;
     }
-    return a;
+    return result::ok(sum);
   }
+
 }
 ```
 
 ```sh
-weasel build calculator     # → build/calculator.wasm, a standard WebAssembly component
-weasel call math::fib 10    # → 55
+weasel build billing    # → build/billing.wasm, a standard WebAssembly component
+weasel call invoices::total '[{label: "pen", quantity: 3, unit-price: 150}]'    # → ok(450)
 ```
 
----
+## What WaSL is
+
+The language reinvents nothing the standards already define:
+
+- **its types are the types of WIT**: `string`, `list`, `record`, `variant`, `option`, `result`…;
+- **its structure is the structure of WIT**: a project is a package, code is organized in interfaces, and each world becomes a component;
+- **its memory is WasmGC's**: data lives on the heap managed by the runtime, and a program never frees anything itself.
+
+The WIT of a component is derived from the code, never written by hand, and no bindings are generated between the two.
 
 ## Why WaSL
 
-WebAssembly is becoming a universal format for server-side code: sandboxed, portable, fast to start, and now able to describe typed interfaces between programs thanks to the **Component Model** and **WASI**. But the languages that compile to it were designed for something else. They bring their own runtime, garbage collector and allocator inside every binary, and translate their own concepts into WebAssembly's through layers of glue code.
+A WaSL component embeds **no runtime, no garbage collector and no allocator**: it only contains the code of the program. That is what sets it apart from the other languages that compile to Wasm.
 
-WaSL takes the opposite approach: **it starts from the standards**. Its types are the types of the Component Model, its modules are WIT interfaces and worlds, its mutability is the mutability of Wasm, and its memory is managed by the garbage collector of the runtime (WasmGC). Nothing runs that the code does not show, and nothing is embedded that the runtime already provides.
+Most of those languages were designed for something else. To run in Wasm, they embed in every binary their own memory management (an allocator, often a GC, sometimes a whole engine) and a layer of glue that translates their concepts into Wasm's. The Wasm runtime already does all of that.
 
-The result is a language that aims to be:
+WaSL leaves that work to the runtime, which gives:
 
-- **minimal at runtime**: no embedded runtime, allocator or collector; a component only contains the code it uses;
-- **fast to start and dense**: small components that instantiate in microseconds, so that thousands of instances can share a server and idle services cost nothing;
-- **natively interoperable**: a WaSL component exports and imports WIT interfaces, and composes with components written in Rust, Go, JavaScript, Python…;
-- **readable**: a familiar syntax, one way to do each thing, explicit types, explicit conversions, precise errors, easy to read for humans and easy to write for AI agents.
+- **very small binaries**: a few kilobytes for a complete service;
+- **very fast instantiation**: wasmtime can create an instance per request and throw it away right after;
+- **good scalability**: the number of instances follows the request rate, down to zero when the service is idle;
+- **few resources per request**: each instance only carries its own data, not one more runtime.
 
-## Guiding principles
+One exception: until the Component Model can pass WasmGC references from one component to another, values that cross the boundary are copied through a small area of linear memory, reset after each call. That copy will go away with the GC option of the Canonical ABI, without changing the language.
 
-These principles drive every design decision. They are detailed in [chapter 1 of the specification](docs/spec_v0.1/01-overview.md).
+## What for
 
-1. **One-to-one with the standards.** Every construct of WaSL maps directly onto WebAssembly, the Component Model or WIT. When the standard defines a behavior (division by zero, initial values, exports), WaSL adopts it instead of inventing its own. Integer overflow is the one place where WaSL picks among what Wasm offers: arithmetic traps instead of wrapping, and wrapping is written explicitly ([§ v2.5.6](docs/spec_v0.2/05-semantics.md#v256-integer-arithmetic-and-conversions)).
-2. **The structure of a program is the structure of WIT.** A project is a package; code is organized in `interface`s; a `world` declares what a component exports. The WIT of a component is derived from the code, never written by hand.
-3. **One world, one component, one entry point.** Each world of a project is compiled into its own component. A project can have several entry points (a CLI, a test runner, one HTTP service per domain) that share the same types and business logic.
-4. **Mutability where WebAssembly declares it.** Globals are mutable or not, locals always are, and struct fields and array elements are declared mutable individually, exactly like in WasmGC. WIT has no mutability, so it stays inside a component: what crosses the boundary cannot change ([§ v2.2.7](docs/spec_v0.2/02-types.md#v227-types-in-signatures)).
-5. **Explicit over magic.** No implicit conversion, no hidden work, no undefined behavior.
-6. **The latest standards only.** WaSL targets WASI 0.3 and the newest Component Model, with their native async model.
-7. **A small core, rich libraries.** The language stays small; productivity comes from libraries written in WaSL and from the tooling.
+WaSL targets servers and workstations, and more precisely two kinds of programs built on WASI:
 
-## Where WaSL is going
+- **command-line tools**, which implement `wasi:cli/run`;
+- **HTTP services**, which implement `wasi:http/handler`.
 
-WaSL is meant for **backend and cloud software**: serverless functions, HTTP services, edge functions and command-line tools, especially I/O-bound workloads where startup time, memory and isolation matter more than raw compute speed.
+The goal is a language that is both fast and frugal with server resources, especially for I/O-bound workloads, where startup time and memory matter more than raw compute.
 
-A typical target project: an enterprise backend made of several services (`account`, `order`, `product`…) written as **one WaSL project**, with one world per service, all sharing their types and business logic, each compiled into its own component and served by wasmtime, scaled to zero when idle and instantiated per request under load.
+The typical project: a backend of several services (`account`, `order`, `product`…) in **one WaSL project**, with one world per service. The services share their types and business logic, but each one becomes its own component, served by wasmtime and instantiated on demand.
 
-The road there:
+The road there, version by version, is in [ROADMAP.md](ROADMAP.md): imports and resources in 0.3, async and WASI 0.3 in 0.4, a standard library in 0.5.
 
-| Version | Content |
+## Built on
+
+WaSL is a thin layer over five standard building blocks, developed in the open by major industry players.
+
+| Building block | Its role for WaSL |
 |---|---|
-| **0.1** (done) | Numbers, functions, globals, control flow, interfaces and worlds; components callable with `weasel call` |
-| **0.2** (done) | Data on the WasmGC heap: strings, chars, records, tuples, enums, variants, flags, lists, options, results ([spec](docs/spec_v0.2/README.md)) |
-| **0.3** | Composing with other components: imports, WIT dependencies with `wkg`, resources |
-| **0.4** | Async and WASI 0.3: `async func`, streams, futures; CLI programs (`wasi:cli/run`) and HTTP services (`wasi:http/handler`); `weasel run`, `serve` |
-| **0.5** | Standard library (text, console, HTTP, JSON); `weasel test`, `fmt`, `publish` |
+| [WebAssembly](https://webassembly.org/) | the instruction set and the binary format |
+| [WasmGC](https://github.com/WebAssembly/gc) | the heap managed by the runtime, where data lives |
+| [Component Model](https://github.com/WebAssembly/component-model) and WIT | types, interfaces, and composition with other components |
+| [WASI](https://wasi.dev/) 0.3 | access to the outside world: console, files, HTTP, natively async |
+| [wasmtime](https://wasmtime.dev/) | the reference runtime that runs the components |
 
-The detailed roadmap, with the target program of each version and what the project needs further out, is in [ROADMAP.md](ROADMAP.md).
+WebAssembly and WasmGC are W3C standards, shipped in every major browser. The Component Model, WASI and wasmtime are developed by the Bytecode Alliance, whose members include Microsoft, Fastly, Intel and Mozilla.
 
 ## Repository
 
-```
-WaSL/
-├── README.md     # this document
-├── ROADMAP.md    # where WaSL is going, version by version
-├── docs/         # the language specification
-├── waslc/        # the compiler, a Rust library
-├── weasel/       # the build tool, a Rust executable
-└── examples/     # example WaSL projects
-```
-
 | Part | Role |
 |---|---|
-| [`docs/spec_v0.1`](docs/spec_v0.1/README.md) | The complete specification of v0.1, in chapters: language, mapping to Wasm and to the Component Model, diagnostics, tooling. It is the reference for humans and AI agents working on the project. |
-| [`waslc`](waslc) | The compiler. It turns WaSL sources into components with the `wasm-tools` crates (`wasm-encoder`, `wit-parser`, `wit-component`). It never touches the filesystem. |
-| [`weasel`](weasel) | The build tool, in the spirit of `cargo`: `init`, `build`, `check`, `wit`, `call`, `clean`. It runs components with [wasmtime](https://wasmtime.dev/). |
-| [`examples`](examples) | Runnable projects, also used by the tests. |
-
-Each Rust project is independent, with its own `Cargo.toml`, `.gitignore` and tests; `weasel` depends on `waslc` through a path dependency.
+| [`docs/`](docs) | The language specification, one frozen folder per version: [v0.1](docs/spec_v0.1/README.md), [v0.2](docs/spec_v0.2/README.md) |
+| [`waslc/`](waslc) | The compiler, a Rust library built on the `wasm-tools` crates. It never touches the filesystem. |
+| [`weasel/`](weasel) | The build tool, in the spirit of `cargo`: `init`, `build`, `check`, `wit`, `call`, `clean`. It runs components with wasmtime. |
+| [`examples/`](examples) | The target program of each version, built and run in CI |
+| [`ROADMAP.md`](ROADMAP.md), [`CHANGELOG.md`](CHANGELOG.md) | Where WaSL is going, and what each release changed |
 
 ## Getting started
 
@@ -113,13 +127,6 @@ cd hello-world
 weasel build hello_world
 weasel call math::add 1 2      # → 3
 ```
-
-## Built on
-
-- [WebAssembly](https://webassembly.org/), [WasmGC](https://github.com/WebAssembly/gc) and the [Component Model](https://github.com/WebAssembly/component-model)
-- [WASI](https://wasi.dev/) 0.3
-- [wasmtime](https://wasmtime.dev/), the reference runtime
-- [wasm-tools](https://github.com/bytecodealliance/wasm-tools) and [wasm-pkg-tools](https://github.com/bytecodealliance/wasm-pkg-tools)
 
 ## License
 
