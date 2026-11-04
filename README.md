@@ -45,7 +45,7 @@ interface invoices {
 
 ```sh
 weasel build billing    # → build/billing.wasm, a standard WebAssembly component
-weasel call invoices::total '[{label: "pen", quantity: 3, unit-price: 150}]'    # → ok(450)
+weasel call billing invoices::total '[{label: "pen", quantity: 3, unit-price: 150}]'    # → ok(450)
 ```
 
 ## What WaSL is
@@ -122,10 +122,10 @@ cargo build --release
 Then, with `weasel` on your `PATH`:
 
 ```sh
-weasel init hello-world
+weasel init my-org:hello-world
 cd hello-world
 weasel build hello_world
-weasel call math::add 1 2      # → 3
+weasel call hello_world math::add 1 2      # → 3
 ```
 
 ## License

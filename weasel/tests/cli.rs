@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 struct Run {
     success: bool,
+    code: Option<i32>,
     stdout: String,
     stderr: String,
 }
@@ -26,6 +27,7 @@ fn weasel_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Run {
         .expect("weasel runs");
     Run {
         success: output.status.success(),
+        code: output.status.code(),
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
     }
@@ -78,7 +80,7 @@ interface math {
 #[test]
 fn init_build_call() {
     let dir = tempfile::tempdir().unwrap();
-    ok(dir.path(), &["init", "hello-world"]);
+    ok(dir.path(), &["init", "demo:hello-world"]);
     let root = dir.path().join("hello-world");
     assert!(root.join("wasl.toml").is_file());
     assert!(root.join("src/hello_world.wasl").is_file());
@@ -86,13 +88,32 @@ fn init_build_call() {
 
     ok(&root, &["build", "hello_world"]);
     assert!(root.join("build/hello_world.wasm").is_file());
-    assert_eq!(ok(&root, &["call", "math::add", "1", "2"]), "3\n");
+    assert_eq!(
+        ok(&root, &["call", "hello_world", "math::add", "1", "2"]),
+        "3\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("wasl.toml")).unwrap(),
+        "[package]\nnamespace = \"demo\"\nname = \"hello-world\"\nversion = \"0.1.0\"\n"
+    );
 
-    let err = fails(dir.path(), &["init", "hello-world"]);
+    // The package is written as in WIT, with an optional version (§ 14.2).
+    ok(dir.path(), &["init", "acme:shop@1.2.0"]);
+    let manifest = fs::read_to_string(dir.path().join("shop/wasl.toml")).unwrap();
+    assert!(manifest.contains("namespace = \"acme\""), "{manifest}");
+    assert!(manifest.contains("version = \"1.2.0\""), "{manifest}");
+
+    let err = fails(dir.path(), &["init", "demo:hello-world"]);
     assert!(err.contains("already exists"), "{err}");
-    let err = fails(dir.path(), &["init", "Hello"]);
+    assert_eq!(
+        fails(dir.path(), &["init", "hello"]),
+        "error: invalid package `hello`: expected `namespace:name`, such as `acme:shop`\n"
+    );
+    let err = fails(dir.path(), &["init", "demo:Hello"]);
     assert!(err.contains("invalid package name"), "{err}");
-    let err = fails(dir.path(), &["init", "while"]);
+    let err = fails(dir.path(), &["init", "demo:x@1.0"]);
+    assert!(err.contains("invalid package version"), "{err}");
+    let err = fails(dir.path(), &["init", "demo:while"]);
     assert!(err.contains("reserved word"), "{err}");
 }
 
@@ -100,31 +121,40 @@ fn init_build_call() {
 fn call() {
     let dir = project(&[("src/math.wasl", MATH)]);
     let dir = dir.path();
-    assert_eq!(ok(dir, &["call", "math::add", "-5", "2"]), "-3\n");
-    assert_eq!(ok(dir, &["call", "add", "40", "2"]), "42\n");
-    assert_eq!(ok(dir, &["call", "half", "3"]), "1.5\n");
-    assert_eq!(ok(dir, &["call", "half", "4"]), "2.0\n");
-    assert_eq!(ok(dir, &["call", "is_zero", "0"]), "true\n");
-    assert_eq!(ok(dir, &["call", "math::nothing"]), "");
+    assert_eq!(ok(dir, &["call", "app", "math::add", "-5", "2"]), "-3\n");
+    assert_eq!(ok(dir, &["call", "app", "math::add", "40", "2"]), "42\n");
+    assert_eq!(ok(dir, &["call", "app", "math::half", "3"]), "1.5\n");
+    assert_eq!(ok(dir, &["call", "app", "math::half", "4"]), "2.0\n");
+    assert_eq!(ok(dir, &["call", "app", "math::is_zero", "0"]), "true\n");
+    assert_eq!(ok(dir, &["call", "app", "math::nothing"]), "");
 
     assert_eq!(
-        fails(dir, &["call", "math::div", "1", "0"]),
+        fails(dir, &["call", "app", "math::div", "1", "0"]),
         "error: `math::div` trapped: integer divide by zero\n"
     );
     assert_eq!(
-        fails(dir, &["call", "math::div", "-128", "-1"]),
+        fails(dir, &["call", "app", "math::div", "-128", "-1"]),
         "error: `math::div` trapped: integer overflow\n"
     );
     assert_eq!(
-        fails(dir, &["call", "math::add", "1"]),
+        fails(dir, &["call", "app", "math::add", "1"]),
         "error: `math::add` expects 2 argument(s) (a: s32, b: s32), 1 given\n"
     );
     assert_eq!(
-        fails(dir, &["call", "math::div", "200", "1"]),
+        fails(dir, &["call", "app", "math::div", "200", "1"]),
         "error: invalid value `200` for parameter `a` of type `s8`: invalid value\n"
     );
-    let err = fails(dir, &["call", "math::sub", "1", "2"]);
-    assert!(err.contains("no exported function `math::sub`"), "{err}");
+    let err = fails(dir, &["call", "app", "math::sub", "1", "2"]);
+    assert!(
+        err.starts_with(
+            "error: world `app` does not export `math::sub`; its functions are: `math::add`"
+        ),
+        "{err}"
+    );
+    assert_eq!(
+        fails(dir, &["call", "app", "add", "1", "2"]),
+        "error: write the function with its interface: `math::add`\n"
+    );
 }
 
 #[test]
@@ -141,13 +171,21 @@ fn worlds() {
         ),
     ]);
     let dir = dir.path();
-    // `call` finds the function in any component: there is no world to choose.
-    assert_eq!(ok(dir, &["call", "math::add", "1", "2"]), "3\n");
-    assert_eq!(ok(dir, &["call", "extra::ten"]), "10\n");
-    assert_eq!(ok(dir, &["call", "ten"]), "10\n");
+    // `call` runs the component of the world it is given.
+    assert_eq!(ok(dir, &["call", "app", "math::add", "1", "2"]), "3\n");
+    assert_eq!(ok(dir, &["call", "other", "math::add", "1", "2"]), "3\n");
+    assert_eq!(ok(dir, &["call", "other", "extra::ten"]), "10\n");
     assert_eq!(
-        fails(dir, &["call", "add", "1", "2"]),
-        "error: `add` is ambiguous, write one of: `math::add`, `extra::add`\n"
+        fails(dir, &["call", "app", "extra::ten"]),
+        "error: world `app` does not export `extra::ten`; its functions are: `math::add`, `math::div`, `math::half`, `math::is_zero`, `math::nothing`\n"
+    );
+    assert_eq!(
+        fails(dir, &["call", "nope", "math::add", "1", "2"]),
+        "error[E9001]: unknown world `nope`: the package defines `app`, `other`\n"
+    );
+    assert_eq!(
+        fails(dir, &["call", "other", "add", "1", "2"]),
+        "error: write the function with its interface: `math::add`, `extra::add`\n"
     );
     // One world, one build, one component.
     assert_eq!(
@@ -212,9 +250,14 @@ fn project_errors() {
 #[test]
 fn calc_example() {
     let calc = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/calc");
-    assert_eq!(ok(&calc, &["call", "math::fib", "10"]), "55\n");
-    assert_eq!(ok(&calc, &["call", "fib_rec", "20"]), "6765\n");
-    assert_eq!(ok(&calc, &["call", "math::clamp", "-50", "0", "10"]), "0\n");
+    let call = |args: &[&str]| {
+        let mut all = vec!["call", "calculator"];
+        all.extend(args);
+        ok(&calc, &all)
+    };
+    assert_eq!(call(&["math::fib", "10"]), "55\n");
+    assert_eq!(call(&["math::fib_rec", "20"]), "6765\n");
+    assert_eq!(call(&["math::clamp", "-50", "0", "10"]), "0\n");
 }
 
 /// The invoice returned by `invoices::sample`, in WAVE.
@@ -224,35 +267,38 @@ const SAMPLE: &str = r#"{number: 42, customer: "ACME", lines: [{label: "pen", qu
 fn invoice_example() {
     let invoice = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/invoice");
     let call = |args: &[&str]| {
-        let mut all = vec!["call"];
+        let mut all = vec!["call", "billing"];
         all.extend(args);
         ok(&invoice, &all)
     };
     assert_eq!(call(&["invoices::sample"]), format!("{SAMPLE}\n"));
-    assert_eq!(call(&["total", SAMPLE]), "ok(1170)\n");
+    assert_eq!(call(&["invoices::total", SAMPLE]), "ok(1170)\n");
     assert_eq!(
-        call(&["summary", SAMPLE]),
+        call(&["invoices::summary", SAMPLE]),
         "\"Weasel & Co: invoice 42 for ACME (draft)\"\n"
     );
-    assert_eq!(call(&["initial", SAMPLE]), "some('A')\n");
+    assert_eq!(call(&["invoices::initial", SAMPLE]), "some('A')\n");
     assert_eq!(
-        call(&["stats", &format!("[{SAMPLE}, {SAMPLE}]")]),
+        call(&["invoices::stats", &format!("[{SAMPLE}, {SAMPLE}]")]),
         "(2, 2340)\n"
     );
     assert_eq!(
-        call(&["mark_paid", SAMPLE]),
+        call(&["invoices::mark_paid", SAMPLE]),
         format!("ok({})\n", SAMPLE.replace("draft", "paid"))
     );
     // An `err` is a result like any other: printed, with success.
     let empty = r#"{number: 1, customer: "B", lines: [], delivery: {}, status: sent}"#;
-    assert_eq!(call(&["total", empty]), "err(no-lines)\n");
+    assert_eq!(call(&["invoices::total", empty]), "err(no-lines)\n");
 
     assert_eq!(
-        fails(&invoice, &["call", "total", "{number: 1}"]),
+        fails(
+            &invoice,
+            &["call", "billing", "invoices::total", "{number: 1}"]
+        ),
         "error: invalid value `{number: 1}` for parameter `inv` of type `invoice`: missing field \"customer\"\n"
     );
     assert_eq!(
-        fails(&invoice, &["call", "total"]),
+        fails(&invoice, &["call", "billing", "invoices::total"]),
         "error: `invoices::total` expects 1 argument(s) (inv: invoice), 0 given\n"
     );
 }
@@ -331,16 +377,31 @@ interface calc {
 ",
     )]);
     let dir = dir.path();
-    assert_eq!(ok(dir, &["call", "sum", "2", "3"]), "ok(5)\n");
-    assert_eq!(ok(dir, &["call", "sum", "-1", "3"]), "err(negative)\n");
-    assert_eq!(ok(dir, &["call", "sum", "2", "200"]), "err(too-big)\n");
-    assert_eq!(ok(dir, &["call", "validate", "7"]), "ok\n");
-    assert_eq!(ok(dir, &["call", "first_plus_one", "[]"]), "none\n");
-    assert_eq!(ok(dir, &["call", "first_plus_one", "[4, 9]"]), "some(5)\n");
-    assert_eq!(ok(dir, &["call", "shout", "0"]), "none\n");
-    assert_eq!(ok(dir, &["call", "shout", "1"]), "some(\"x!\")\n");
-    assert_eq!(ok(dir, &["call", "twice", "true"]), "ok(2)\n");
-    assert_eq!(ok(dir, &["call", "twice", "false"]), "err\n");
+    assert_eq!(ok(dir, &["call", "app", "calc::sum", "2", "3"]), "ok(5)\n");
+    assert_eq!(
+        ok(dir, &["call", "app", "calc::sum", "-1", "3"]),
+        "err(negative)\n"
+    );
+    assert_eq!(
+        ok(dir, &["call", "app", "calc::sum", "2", "200"]),
+        "err(too-big)\n"
+    );
+    assert_eq!(ok(dir, &["call", "app", "calc::validate", "7"]), "ok\n");
+    assert_eq!(
+        ok(dir, &["call", "app", "calc::first_plus_one", "[]"]),
+        "none\n"
+    );
+    assert_eq!(
+        ok(dir, &["call", "app", "calc::first_plus_one", "[4, 9]"]),
+        "some(5)\n"
+    );
+    assert_eq!(ok(dir, &["call", "app", "calc::shout", "0"]), "none\n");
+    assert_eq!(
+        ok(dir, &["call", "app", "calc::shout", "1"]),
+        "some(\"x!\")\n"
+    );
+    assert_eq!(ok(dir, &["call", "app", "calc::twice", "true"]), "ok(2)\n");
+    assert_eq!(ok(dir, &["call", "app", "calc::twice", "false"]), "err\n");
 }
 
 /// Writes a file, creating its directory.
@@ -549,9 +610,9 @@ fn imports() {
     );
     ok(&app, &["build", "main"]);
     assert!(app.join("build/main.wasm").is_file());
-    assert_eq!(ok(&app, &["call", "one"]), "1\n");
+    assert_eq!(ok(&app, &["call", "plain", "util::one"]), "1\n");
     // `call` plugs the component of the world of `lib` that exports `i` (§ 14.2).
-    assert_eq!(ok(&app, &["call", "twice"]), "2\n");
+    assert_eq!(ok(&app, &["call", "main", "calls::twice"]), "2\n");
 
     // An interface of the package, provided by another world of the package, whose own
     // imports are provided in turn; WASI comes from the host.
@@ -563,7 +624,7 @@ fn imports() {
          global n: mut u32 = 0;\n\n\
          interface counter {\n  func next() -> u32 {\n    n = n + i::f();\n    return n;\n  }\n}\n",
     );
-    assert_eq!(ok(&app, &["call", "twice"]), "3\n");
+    assert_eq!(ok(&app, &["call", "main", "calls::twice"]), "3\n");
 
     // An import that no world and no path dependency provides.
     write(
@@ -571,7 +632,7 @@ fn imports() {
         "world w {\n  import i;\n}\n\ninterface i {\n  func f() -> u32 {\n    return 1;\n  }\n}\n",
     );
     assert_eq!(
-        fails(&app, &["call", "twice"]),
+        fails(&app, &["call", "main", "calls::twice"]),
         "error: no component provides `demo:lib/i@0.1.0`: add it as a path dependency on a WaSL project\n"
     );
     write(&root.join("lib/src/lib.wasl"), LIB);
@@ -585,4 +646,21 @@ fn imports() {
         fails(&app, &["check"]),
         "src/app.wasl:2:10: error[E0215]: `demo:other` is not a dependency of the package: add `\"demo:other\"` to `[dependencies]` in `wasl.toml`\n"
     );
+}
+
+/// One spelling per option (§ 14.1): `--help` and `--version`, no `-h`, `-V` or `help`.
+#[test]
+fn command_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    assert_eq!(
+        ok(dir, &["--version"]),
+        format!("weasel {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(ok(dir, &["--help"]).contains("--version"));
+    assert!(ok(dir, &["call", "--help"]).contains("<WORLD> <FUNCTION>"));
+    for args in [&["-V"][..], &["-h"], &["help"], &["build", "-h"]] {
+        let run = weasel(dir, args);
+        assert_eq!(run.code, Some(2), "weasel {args:?}: {}", run.stderr);
+    }
 }

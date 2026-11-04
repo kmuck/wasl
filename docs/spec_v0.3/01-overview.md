@@ -80,7 +80,7 @@ wasl.toml + src/**/*.wasl
  build/<world>.wasm     a WebAssembly component, with its WIT embedded
         │
         ▼
-     wasmtime           weasel call math::fib 10
+     wasmtime           weasel call calculator math::fib 10
 ```
 
 - [`waslc`](../../waslc) is a Rust library: it receives the package identity and the source texts, and returns diagnostics, the WIT of the package and components. It never touches the filesystem.

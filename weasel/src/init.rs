@@ -8,9 +8,19 @@ use waslc::Package;
 use crate::error::{Error, Result};
 use crate::manifest;
 
-/// Creates the project `name` in a new directory of the same name.
-pub fn init(name: &str, namespace: &str) -> Result<()> {
-    let package = Package::new(namespace, name, "0.1.0").map_err(|d| Error::new(d.message))?;
+/// Creates the project of `package`, `namespace:name` or `namespace:name@version` as in
+/// WIT, in a new directory named after the package name.
+pub fn init(package: &str) -> Result<()> {
+    let (id, version) = match package.split_once('@') {
+        Some((id, version)) => (id, version),
+        None => (package, "0.1.0"),
+    };
+    let Some((namespace, name)) = id.split_once(':') else {
+        return Err(Error::new(format!(
+            "invalid package `{package}`: expected `namespace:name`, such as `acme:shop`"
+        )));
+    };
+    let package = Package::new(namespace, name, version).map_err(|d| Error::new(d.message))?;
 
     // The world is named after the project: `hello-world` → `hello_world`.
     let world = name.replace('-', "_");
@@ -40,7 +50,7 @@ pub fn init(name: &str, namespace: &str) -> Result<()> {
     eprintln!();
     eprintln!("    cd {name}");
     eprintln!("    weasel build {world}");
-    eprintln!("    weasel call math::add 1 2");
+    eprintln!("    weasel call {world} math::add 1 2");
     Ok(())
 }
 

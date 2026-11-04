@@ -15,17 +15,17 @@ WaSL comes with two programs: the build tool `weasel`, used by developers, and t
 - **Standard error** receives progress messages (`Built …`) and errors.
 - Compilation errors use the format of § 11.1, manifest errors the format of § 11.4, other errors `error: <message>` (§ 11.5).
 - **Exit code**: `0` on success, `1` on any error (including a trap during `call`), `2` for an invalid command line (unknown command, missing argument).
-- `weasel help` and `weasel help <command>` describe the commands.
+- Each option has a single spelling, its long name: `weasel --help` and `weasel <command> --help` describe the commands, `weasel --version` prints the version. There are no one-letter options (`-h`, `-V`) and no `help` command.
 
 ## 14.2 `weasel` commands
 
-### `weasel init <name> [--namespace <namespace>]`
+### `weasel init <namespace>:<name>[@<version>]`
 
 Creates a new project in a new directory `<name>` of the current directory.
 
-- `<name>` is the package name and follows the rule of § 3.2 (`hello`, `todo-api`). The namespace defaults to `local`; the version is `0.1.0`.
+- The package is written as in WIT (§ 3.2): `weasel init acme:todo-api`, or `weasel init acme:todo-api@0.2.0`. The namespace and the name follow the rule of § 3.2; the version is a SemVer version and defaults to `0.1.0`. A package without namespace is an error: ``error: invalid package `todo-api`: expected `namespace:name`, such as `acme:shop` ``.
 - The project contains one world, named after the project with `-` replaced by `_` (`todo-api` → `todo_api`). If that name is a keyword or reserved word of WaSL (§ 4.4), the command fails.
-- The command fails if `<name>` already exists.
+- The command fails if the directory `<name>` already exists.
 - Generated files (no `.gitignore` and no other file):
 
 ```
@@ -34,6 +34,8 @@ hello-world/
 └── src/
     └── hello_world.wasl
 ```
+
+For `weasel init local:hello-world`:
 
 ```toml
 [package]
@@ -83,22 +85,25 @@ Resolves the dependencies like `build`, analyzes the whole package without gener
 
 Prints the WIT of the package (§ 13.1) on standard output.
 
-### `weasel call <function> [<arguments>…]`
+### `weasel call <world> <function> [<arguments>…]`
 
-Compiles the project in memory and calls an exported function with wasmtime. Nothing is written to `build/`.
+Compiles the world `<world>` in memory and calls one of its exported functions with wasmtime. Nothing is written to `build/`.
 
-**Function.** `<function>` is written as in WaSL source code:
+**World.** The world is always given, as for `build`: the function runs in the component of that world, with its imports. An unknown world is an error (E9001), as is a function that the world does not export:
 
-- `interface::function` (`math::fib`), with WaSL names;
-- or `function` alone (`fib`), when exactly one exported interface has a function with this name. Otherwise the command fails and lists the candidates:
+```
+error: world `app` does not export `extra::ten`; its functions are: `math::add`, `math::fib`
+```
 
-  ```
-  error: `add` is ambiguous, write one of: `math::add`, `extra::add`
-  ```
+**Function.** `<function>` is written as in WaSL source code, with its interface: `interface::function` (`math::fib`), with WaSL names. A function written without its interface is an error that names the candidates of the world:
 
-No world is given: the function is looked up in every world of the project. An interface has a single implementation per package (§ 2.2), so every world that exports it runs the same code; `call` builds the component of the first world (in declaration order) that exports it. Only functions of exported interfaces can be called.
+```
+error: write the function with its interface: `math::add`, `extra::add`
+```
 
-**Arguments.** There is one argument per parameter (`error: \`math::add\` expects 2 argument(s) (a: s32, b: s32), 1 given`). Each argument is a value in WAVE, parsed according to the type of its parameter (§ 14.5): `42`, `-1.5`, `"ACME"`, `{label: "pen", quantity: 3, unit-price: 150}`. Negative numbers need no escaping: `weasel call math::clamp -50 0 10`.
+Only functions of the interfaces of the package that the world exports can be called.
+
+**Arguments.** There is one argument per parameter (`error: \`math::add\` expects 2 argument(s) (a: s32, b: s32), 1 given`). Each argument is a value in WAVE, parsed according to the type of its parameter (§ 14.5): `42`, `-1.5`, `"ACME"`, `{label: "pen", quantity: 3, unit-price: 150}`. Negative numbers need no escaping: `weasel call calculator math::clamp -50 0 10`.
 
 **Result.** The returned value is printed alone on standard output in WAVE, on one line, followed by a newline; nothing is printed for a function without a return value (§ 14.5).
 
@@ -110,7 +115,7 @@ error: `math::div` trapped: integer divide by zero
 
 Each `call` runs on a fresh instance: globals start from their initial values.
 
-**Imports.** When the function is exported by several worlds, `call` prefers a world without imports. When the world imports interfaces, `call` composes its component in memory before running it, with `wac-graph`:
+**Imports.** When the world imports interfaces, `call` composes its component in memory before running it, with `wac-graph`:
 
 - an interface of the package is provided by the component of the first world, in declaration order, that exports it; an interface of a path dependency that is a WaSL project, by the first world of that project that exports it. Their components are built in memory and composed in turn if they have imports of their own;
 - an interface of WASI 0.2 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`) is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1);
@@ -149,6 +154,7 @@ let analysis = waslc::analyze(&package, &sources, &deps)?;
 
 // Worlds of the package, with their exported interfaces and functions (WaSL names).
 for world in analysis.worlds() { /* world.name, world.exports */ }
+let world = analysis.world("calculator")?;                        // one world; unknown world: E9001
 
 // WIT of the package (§ 13.1).
 let wit: String = analysis.wit()?;
@@ -194,7 +200,7 @@ Like `build`, `run` and `serve` always take the world explicitly.
 | `option<T>` | `some(…)` or `none` | `some(percent(10))`, `none` |
 | `result<…>` | `ok(…)`, `err(…)`, or `ok` / `err` without payload | `ok(1170)`, `err(no-lines)` |
 
-- Each argument is one shell argument; a value that contains spaces or quotes is quoted for the shell: `weasel call invoices::summary '{number: 7, …}'`.
+- Each argument is one shell argument; a value that contains spaces or quotes is quoted for the shell: `weasel call billing invoices::summary '{number: 7, …}'`.
 - The result is printed in WAVE on one line. Integers are printed in decimal (`55`, `-3`, `18446744073709551615`); floats in the shortest decimal form that reads back the same value, always with a `.` or an exponent (`3.0`, not `3`; `1.5`, `12.56636`, `1e20`, `inf`), and NaN as `nan`, as WAVE requires. Every field of a record is printed, including those whose value is `none`. Both choices are valid WAVE; they make the output complete and stable.
 - A `result` is a value like any other: `err(…)` is printed on standard output with the exit code `0`. Only a trap fails the command (§ 14.2).
 - WAVE has no value for a resource: a function whose parameters or result contain a resource, and the constructors, methods and static functions of resources, cannot be called with `weasel call` (``error: `carts::cart::of` cannot be called from the command line: its result contains the resource `cart` ``). They are called by other components (§ 15.5).

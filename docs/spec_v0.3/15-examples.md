@@ -113,16 +113,16 @@ Session:
 ```console
 $ weasel build calculator
 Built `build/calculator.wasm`
-$ weasel call math::fib 10
+$ weasel call calculator math::fib 10
 55
-$ weasel call fib_rec 20
+$ weasel call calculator math::fib_rec 20
 6765
-$ weasel call math::circle_area 2
+$ weasel call calculator math::circle_area 2
 12.56636
-$ weasel call math::clamp -50 0 10
+$ weasel call calculator math::clamp -50 0 10
 0
-$ weasel call math::reset
-$ weasel call math::fib
+$ weasel call calculator math::reset
+$ weasel call calculator math::fib
 error: `math::fib` expects 1 argument(s) (n: u32), 0 given
 ```
 
@@ -163,7 +163,7 @@ interface stats {
 
 - `weasel build full`, `weasel build math_only` and `weasel build nothing` produce three components.
 - `math::square` is the same code in `full` and `math_only` (§ 2.4.1); `math_only` does not contain `stats`.
-- `weasel call math::square 7` prints `49` without asking for a world.
+- `weasel call full math::square 7` and `weasel call math_only math::square 7` both print `49`: the same code runs in both components.
 
 ## 15.3 Data on the WasmGC heap
 
@@ -502,28 +502,28 @@ Session (the invoice `$INV` is the result of `sample`):
 ```console
 $ weasel build billing
 Built `build/billing.wasm`
-$ weasel call invoices::sample
+$ weasel call billing invoices::sample
 {number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: draft}
 $ INV='{number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: draft}'
-$ weasel call invoices::total "$INV"
+$ weasel call billing invoices::total "$INV"
 ok(1170)
-$ weasel call invoices::summary "$INV"
+$ weasel call billing invoices::summary "$INV"
 "Weasel & Co: invoice 42 for ACME (draft)"
-$ weasel call invoices::mark_paid "$INV"
+$ weasel call billing invoices::mark_paid "$INV"
 ok({number: 42, customer: "ACME", lines: [{label: "pen", quantity: 3, unit-price: 150}, {label: "notebook", quantity: 2, unit-price: 425}], discount: some(percent(10)), delivery: {email, urgent}, status: paid})
-$ weasel call invoices::total '{number: 7, customer: "", lines: [], discount: none, delivery: {}, status: draft}'
+$ weasel call billing invoices::total '{number: 7, customer: "", lines: [], discount: none, delivery: {}, status: draft}'
 err(empty-customer)
-$ weasel call invoices::total '{number: 7, customer: "Zed", lines: [{label: "x", quantity: 1, unit-price: 100}], discount: some(fixed(500)), delivery: {paper}, status: sent}'
+$ weasel call billing invoices::total '{number: 7, customer: "Zed", lines: [{label: "x", quantity: 1, unit-price: 100}], discount: some(fixed(500)), delivery: {paper}, status: sent}'
 err(discount-too-large)
-$ weasel call invoices::count_unpaid "[$INV]"
+$ weasel call billing invoices::count_unpaid "[$INV]"
 1
-$ weasel call invoices::initial "$INV"
+$ weasel call billing invoices::initial "$INV"
 some('A')
-$ weasel call invoices::needs_printing "$INV"
+$ weasel call billing invoices::needs_printing "$INV"
 false
-$ weasel call invoices::stats "[$INV, $INV]"
+$ weasel call billing invoices::stats "[$INV, $INV]"
 (2, 2340)
-$ weasel call invoices::find "[$INV]" '"Zed"'
+$ weasel call billing invoices::find "[$INV]" '"Zed"'
 none
 ```
 
@@ -868,13 +868,13 @@ world checkout {
 ```sh
 cd examples/checkout
 weasel build checkout       # → build/checkout.wasm, which imports example:catalog/carts@0.1.0
-weasel call orders::checkout '[{sku: "pen", quantity: 2}, {sku: "notebook", quantity: 1}]'
+weasel call checkout orders::checkout '[{sku: "pen", quantity: 2}, {sku: "notebook", quantity: 1}]'
 # → ok({items: 3, total: 725})
-weasel call orders::checkout '[{sku: "pen", quantity: 2}, {sku: "ink", quantity: 1}]'
+weasel call checkout orders::checkout '[{sku: "pen", quantity: 2}, {sku: "ink", quantity: 1}]'
 # → err(unknown-sku)
-weasel call orders::quote '"pen"' 0                       # → err(zero-quantity)
-weasel call orders::last_sku '[{sku: "pen", quantity: 1}]'  # → some("pen")
-weasel call orders::last_sku '[]'                          # → none
+weasel call checkout orders::quote '"pen"' 0                       # → err(zero-quantity)
+weasel call checkout orders::last_sku '[{sku: "pen", quantity: 1}]'  # → some("pen")
+weasel call checkout orders::last_sku '[]'                          # → none
 ```
 
 What the program shows:

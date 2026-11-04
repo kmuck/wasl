@@ -151,15 +151,15 @@ impl Analysis {
         self.wit.to_text()
     }
 
-    /// Builds the component of the world `world`.
-    pub fn build(&self, world: &str) -> Result<Vec<u8>> {
-        let Some(id) = self.program.worlds.iter().position(|w| w.name == world) else {
+    /// The world `world`, or E9001 when the package does not define it.
+    pub fn world(&self, world: &str) -> Result<&World> {
+        self.worlds.iter().find(|w| w.name == world).ok_or_else(|| {
             let names: Vec<String> = self
                 .worlds
                 .iter()
                 .map(|w| format!("`{}`", w.name))
                 .collect();
-            return Err(Diagnostic::without_span(
+            Diagnostic::without_span(
                 Code::UnknownWorld,
                 if names.is_empty() {
                     format!("unknown world `{world}`: the package does not define any world")
@@ -169,8 +169,19 @@ impl Analysis {
                         names.join(", ")
                     )
                 },
-            ));
-        };
+            )
+        })
+    }
+
+    /// Builds the component of the world `world`.
+    pub fn build(&self, world: &str) -> Result<Vec<u8>> {
+        self.world(world)?;
+        let id = self
+            .program
+            .worlds
+            .iter()
+            .position(|w| w.name == world)
+            .expect("the worlds of the analysis are those of the program");
         let module = codegen::generate(&self.program, id, &self.interface_names)?;
         component::build(module, &self.wit, world)
     }
