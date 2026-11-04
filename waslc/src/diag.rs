@@ -37,6 +37,7 @@ pub enum Code {
     InterfaceNameClash,
     UnimportedCall,
     BorrowMisuse,
+    HandlePosition,
     // Names
     UnknownName,
     UnknownFunc,
@@ -110,6 +111,7 @@ impl Code {
             Code::InterfaceNameClash => "E0217",
             Code::UnimportedCall => "E0221",
             Code::BorrowMisuse => "E0219",
+            Code::HandlePosition => "E0220",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",

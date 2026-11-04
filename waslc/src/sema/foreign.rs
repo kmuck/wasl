@@ -1,8 +1,11 @@
 //! Interfaces of other packages (§ 2.5): their functions and types, read from the WIT of
 //! the dependencies (§ 3.5) and converted into WaSL types, with WaSL names (§ 13.2).
 //!
-//! An item that WaSL cannot use (a resource, a name that is not a WaSL identifier, a
-//! type WaSL does not have yet) is not an error by itself: it is recorded with the
+//! Resources become resource declarations whose constructor, methods and static
+//! functions are imported functions (§ 7.12).
+//!
+//! An item that WaSL cannot use (a name that is not a WaSL identifier, a type WaSL does
+//! not have yet, an `async` function) is not an error by itself: it is recorded with the
 //! reason, reported when the code names it (E0215).
 
 use std::collections::HashMap;
@@ -12,7 +15,9 @@ use wit_parser::{FunctionKind, InterfaceId, Resolve, TypeDefKind, TypeId, TypeOw
 use super::InterfaceScope;
 use crate::hir::{self, Foreign};
 use crate::lexer::is_reserved;
-use crate::types::{CaseDef, DeclKind, FieldDef, Prim, Type, TypeDecl, TypeKind, Types};
+use crate::types::{
+    CaseDef, DeclKind, FieldDef, Prim, ResourceDef, Type, TypeDecl, TypeKind, Types,
+};
 
 /// The WaSL name of a WIT name: `output-stream` → `output_stream`, `%from` → `from`.
 /// `None` when it gives no valid WaSL identifier (§ 13.2).
@@ -106,22 +111,71 @@ impl<'r> Converter<'r> {
             }
         }
         for (wit, func) in &iface.functions {
-            let Some(name) = wasl_name(wit) else { continue };
+            let name = match func.kind {
+                FunctionKind::Constructor(_) => Some("constructor".to_string()),
+                _ => wasl_name(func.item_name()),
+            };
+            let Some(name) = name else { continue };
+            let resource = match func.kind {
+                FunctionKind::Constructor(r)
+                | FunctionKind::Method(r)
+                | FunctionKind::Static(r) => match self.def(types, r) {
+                    Ok(t) => types.resource(t).map(|(d, _)| d),
+                    Err(_) => continue,
+                },
+                _ => None,
+            };
             let converted = match func.kind {
-                FunctionKind::Freestanding => self.signature(types, &func.params, func.result),
-                FunctionKind::AsyncFreestanding => Err(format!(
+                FunctionKind::Freestanding
+                | FunctionKind::Constructor(_)
+                | FunctionKind::Static(_) => self.signature(types, &func.params, func.result),
+                // `self` is the first parameter, whose WIT name is not a WaSL name.
+                FunctionKind::Method(_) => self
+                    .signature(types, &func.params[1..], func.result)
+                    .and_then(|(params, ret)| {
+                        let this = self.ty(types, func.params[0].ty)?;
+                        let mut all = vec![("self".to_string(), this)];
+                        all.extend(params);
+                        Ok((all, ret))
+                    }),
+                FunctionKind::AsyncFreestanding
+                | FunctionKind::AsyncMethod(_)
+                | FunctionKind::AsyncStatic(_) => Err(format!(
                     "`{wit}` is an `async` function, and async functions are not available yet"
                 )),
                 _ => Err(format!(
-                    "`{wit}` belongs to a resource, and resources of other packages are not available yet"
+                    "`{wit}` is a kind of function that WaSL does not support yet"
                 )),
+            };
+            let id = first_func + funcs.len();
+            let kind = match (func.kind.clone(), resource) {
+                (FunctionKind::Constructor(_), Some(d)) => hir::FuncKind::Constructor(d),
+                (FunctionKind::Method(_), Some(d)) => hir::FuncKind::Method(d),
+                (FunctionKind::Static(_), Some(d)) => hir::FuncKind::Static(d),
+                _ => hir::FuncKind::Free,
             };
             match converted {
                 Ok((params, ret)) => {
-                    scope.funcs.insert(name.clone(), first_func + funcs.len());
+                    match kind {
+                        hir::FuncKind::Free => {
+                            scope.funcs.insert(name.clone(), id);
+                        }
+                        hir::FuncKind::Constructor(d)
+                        | hir::FuncKind::Method(d)
+                        | hir::FuncKind::Static(d) => {
+                            let DeclKind::Resource(def) = &mut types.decls[d].kind else {
+                                unreachable!("a resource")
+                            };
+                            match kind {
+                                hir::FuncKind::Constructor(_) => def.constructor = Some(id),
+                                hir::FuncKind::Method(_) => def.methods.push((name.clone(), id)),
+                                _ => def.statics.push((name.clone(), id)),
+                            }
+                        }
+                    }
                     funcs.push(hir::FuncDef {
                         name,
-                        kind: hir::FuncKind::Free,
+                        kind,
                         interface: hir_id,
                         params,
                         ret,
@@ -129,9 +183,12 @@ impl<'r> Converter<'r> {
                         body: Vec::new(),
                     });
                 }
-                Err(reason) => {
+                Err(reason) if kind == hir::FuncKind::Free => {
                     scope.unavailable.insert(name, reason);
                 }
+                // A member of a resource that WaSL cannot use is left out: naming it is
+                // E0308.
+                Err(_) => {}
             }
         }
         (scope, funcs)
@@ -190,7 +247,6 @@ impl<'r> Converter<'r> {
 
     fn convert(&mut self, types: &mut Types, id: TypeId) -> Result<Type, Reason> {
         let def = &self.resolve.types[id];
-        let wit = def.name.clone().unwrap_or_default();
         let kind = match &def.kind {
             TypeDefKind::Type(inner) => return self.ty(types, *inner),
             TypeDefKind::List(elem) => TypeKind::List {
@@ -208,16 +264,9 @@ impl<'r> Converter<'r> {
                     .map(|&t| self.ty(types, t))
                     .collect::<Result<_, _>>()?,
             ),
-            TypeDefKind::Resource | TypeDefKind::Handle(_) => {
-                let name = match &def.kind {
-                    TypeDefKind::Handle(
-                        wit_parser::Handle::Own(r) | wit_parser::Handle::Borrow(r),
-                    ) => self.resolve.types[*r].name.clone().unwrap_or_default(),
-                    _ => wit.clone(),
-                };
-                return Err(format!(
-                    "`{name}` is a resource, and resources of other packages are not available yet"
-                ));
+            TypeDefKind::Handle(wit_parser::Handle::Own(r)) => return self.def(types, *r),
+            TypeDefKind::Handle(wit_parser::Handle::Borrow(r)) => {
+                TypeKind::Borrow(self.def(types, *r)?)
             }
             TypeDefKind::Map(..)
             | TypeDefKind::FixedLengthList(..)
@@ -229,7 +278,8 @@ impl<'r> Converter<'r> {
                     def.kind.as_str()
                 ));
             }
-            TypeDefKind::Record(_)
+            TypeDefKind::Resource
+            | TypeDefKind::Record(_)
             | TypeDefKind::Variant(_)
             | TypeDefKind::Enum(_)
             | TypeDefKind::Flags(_) => {
@@ -239,7 +289,7 @@ impl<'r> Converter<'r> {
         Ok(types.intern(kind))
     }
 
-    /// A record, variant, enum or flags type, as a declared type of its interface.
+    /// A record, variant, enum, flags or resource type, as a declared type of its interface.
     fn decl(&mut self, types: &mut Types, id: TypeId) -> Result<Type, Reason> {
         let def = &self.resolve.types[id];
         let wit = def.name.clone().expect("named type");
@@ -281,6 +331,12 @@ impl<'r> Converter<'r> {
                     .map(|c| member(&c.name, "flag"))
                     .collect::<Result<_, _>>()?,
             ),
+            TypeDefKind::Resource => DeclKind::Resource(ResourceDef {
+                fields: Vec::new(),
+                constructor: None,
+                methods: Vec::new(),
+                statics: Vec::new(),
+            }),
             _ => unreachable!("a declared type"),
         };
         let TypeOwner::Interface(owner) = def.owner else {

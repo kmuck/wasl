@@ -139,7 +139,7 @@ Rules:
 - Two interfaces that code can name, the interfaces of the package and the interfaces of other packages that a world of the package imports or exports, cannot have the same last name (E0217): `example:catalog/carts` cannot coexist with an `interface carts` of the package.
 - A function reachable from the exports of a world that calls a function of another package must belong to a world that imports that interface (E0221). An interface of the package that a world does not import is compiled into its component, as in § 2.3.
 - An imported interface has no implementation in the component: its functions are imported functions of the core module (§ 13.10). Its resources are **handles** (§ 7.12).
-- An item of an interface of another package that WaSL cannot use, because its name gives no WaSL identifier (§ 13.2), or because it is or uses a resource or an `async` function (*not available yet*), or a WIT type WaSL does not have (`stream`, `future`, `map`), can be named, but naming it is an error (E0215) that says why. The other items of the interface stay usable.
+- An item of an interface of another package that WaSL cannot use, because its name gives no WaSL identifier (§ 13.2), or because it is or uses an `async` function (*not available yet*), or a WIT type WaSL does not have (`stream`, `future`, `map`), can be named, but naming it is an error (E0215) that says why. The other items of the interface stay usable.
 - A type alias of another package (`type instant = u64;`) is named like a declared type (`clocks::instant`) and designates the type it aliases.
 
 Why this model:
@@ -195,4 +195,4 @@ Each component embeds the WIT of its world: tools such as `wasm-tools component 
 A **resource** is the Component Model's object: a type with an identity, a private state and methods, which other components reach only through a **handle**. WaSL declares resources in interfaces, like WIT (§ 7.12):
 
 - a resource **of the package** is a WasmGC object inside its component, like a record whose fields nobody else can see; a handle to it is created only when it leaves the component;
-- a resource of an **imported** interface (*specified, not available yet*) lives in another component; the component only holds handles to it, which the compiler gives back to their owner when the code no longer needs them (§ 9.9).
+- a resource of an **imported** interface lives in another component; the component only holds handles to it, which the compiler gives back to their owner when the code no longer needs them (§ 9.9).

@@ -467,20 +467,6 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                         ),
                     );
                 }
-                if id < interfaces.len()
-                    && program.interfaces[id]
-                        .types
-                        .iter()
-                        .any(|&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
-                {
-                    return err(
-                        Code::ForeignInterface,
-                        span,
-                        format!(
-                            "interface `{written}` declares resources, and importing resources is not available yet"
-                        ),
-                    );
-                }
                 def.imports.push(id);
             } else {
                 if def.exports.contains(&id) {
@@ -506,6 +492,83 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             def.items.push((item.import, id));
         }
         program.worlds.push(def);
+    }
+
+    // Handle types (§ 7.12): the resources of other packages and of the interfaces of the
+    // package that a world imports. They cannot be held by records, tuples, lists,
+    // fields and globals (E0220).
+    program.handles = types
+        .decls
+        .iter()
+        .map(|d| {
+            matches!(d.kind, DeclKind::Resource(_))
+                && (program.interfaces[d.interface].foreign.is_some()
+                    || program
+                        .worlds
+                        .iter()
+                        .any(|w| w.imports.contains(&d.interface)))
+        })
+        .collect();
+    for (iface_id, iface) in interfaces.iter().enumerate() {
+        for item in &iface.items {
+            let (fields, what): (Vec<(Type, Span)>, &str) = match item {
+                ast::InterfaceItem::Type(decl) => {
+                    let id = scopes[iface_id].types[decl.name.name.as_str()];
+                    match (&decl.kind, &types.decls[id].kind) {
+                        (ast::TypeDeclKind::Record(fields), DeclKind::Record(defs)) => (
+                            defs.iter()
+                                .zip(fields)
+                                .map(|(d, f)| (d.ty, f.ty.span))
+                                .collect(),
+                            "a record",
+                        ),
+                        (ast::TypeDeclKind::Variant(cases), DeclKind::Variant(defs)) => {
+                            for (d, c) in defs.iter().zip(cases) {
+                                if let (Some(t), Some(ty)) = (d.payload, &c.payload) {
+                                    no_handle_aggregate(&types, &program.handles, t, ty.span)?;
+                                }
+                            }
+                            continue;
+                        }
+                        _ => continue,
+                    }
+                }
+                ast::InterfaceItem::Resource(res) => {
+                    let id = scopes[iface_id].types[res.name.name.as_str()];
+                    let DeclKind::Resource(def) = &types.decls[id].kind else {
+                        unreachable!("a resource")
+                    };
+                    (
+                        def.fields
+                            .iter()
+                            .zip(&res.fields)
+                            .map(|(d, f)| (d.ty, f.ty.span))
+                            .collect(),
+                        "a resource",
+                    )
+                }
+                ast::InterfaceItem::Func(_) => continue,
+            };
+            for (ty, span) in fields {
+                if let Some(h) = handle_in(&types, &program.handles, ty, None) {
+                    return err(
+                        Code::HandlePosition,
+                        span,
+                        format!(
+                            "`{}` is a handle to a resource of another component, and the field of {what} cannot hold one: keep it in a local",
+                            types.display(h)
+                        ),
+                    );
+                }
+                no_handle_aggregate(&types, &program.handles, ty, span)?;
+            }
+        }
+    }
+    for (id, func) in funcs.iter().enumerate() {
+        if let (Some(ret), Some(span)) = (program.funcs[id].ret, func.ret.as_ref().map(|r| r.span))
+        {
+            no_handle_aggregate(&types, &program.handles, ret, span)?;
+        }
     }
 
     // 6. Exported functions, and functions of the imported interfaces of the package:
@@ -580,6 +643,16 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
     let mut global_ids = HashMap::new();
     for global in &globals {
         let ty = resolver.resolve(&mut types, &global.ty, None)?;
+        if let Some(h) = handle_in(&types, &program.handles, ty, None) {
+            return err(
+                Code::HandlePosition,
+                global.ty.span,
+                format!(
+                    "`{}` is a handle to a resource of another component, and a global cannot hold one",
+                    types.display(h)
+                ),
+            );
+        }
         if !is_constant(&global.init) {
             return err(
                 Code::NonConstGlobal,
@@ -1259,6 +1332,66 @@ impl Resolver<'_> {
         }
         unknown(message)
     }
+}
+
+/// The handle type that `ty` is or contains (§ 7.12), if any, through elements, fields and
+/// payloads; the resources of interface `except` do not count.
+pub(super) fn handle_in(
+    types: &Types,
+    handles: &[bool],
+    ty: Type,
+    except: Option<InterfaceId>,
+) -> Option<Type> {
+    let mut seen = Vec::new();
+    let mut stack = vec![ty];
+    while let Some(t) = stack.pop() {
+        if seen.contains(&t) {
+            continue;
+        }
+        seen.push(t);
+        if let Some((d, _)) = types.resource(t)
+            && handles[d]
+            && Some(types.decls[d].interface) != except
+        {
+            return Some(types.decl_type_of(d));
+        }
+        stack.extend(types.children(t));
+    }
+    None
+}
+
+/// E0220 for a list or a tuple in `ty` that holds a handle: only `option`, `result` and
+/// variants can carry one, from a call to `return`, `?`, `match` or `_ =` (§ 7.12).
+fn no_handle_aggregate(types: &Types, handles: &[bool], ty: Type, span: Span) -> Result<()> {
+    let mut stack = vec![ty];
+    let mut seen = Vec::new();
+    while let Some(t) = stack.pop() {
+        if seen.contains(&t) {
+            continue;
+        }
+        seen.push(t);
+        let aggregate = matches!(types.kind(t), TypeKind::List { .. } | TypeKind::Tuple(_));
+        if aggregate && let Some(h) = handle_in(types, handles, t, None) {
+            return err(
+                Code::HandlePosition,
+                span,
+                format!(
+                    "`{}` holds `{}`, a handle to a resource of another component, and a {} cannot hold one: only `option`, `result` and variants can carry a handle",
+                    types.display(t),
+                    types.display(h),
+                    if matches!(types.kind(t), TypeKind::List { .. }) {
+                        "list"
+                    } else {
+                        "tuple"
+                    }
+                ),
+            );
+        }
+        if !matches!(types.kind(t), TypeKind::Decl(_)) {
+            stack.extend(types.children(t));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
