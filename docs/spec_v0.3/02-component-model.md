@@ -26,7 +26,7 @@ interface math {
 
 ## 2.3 Worlds and components
 
-A world describes a component: the interfaces it exports (and, once imports are available, the interfaces it imports, § 2.5).
+A world describes a component: the interfaces it imports (§ 2.5) and the interfaces it exports.
 
 ```wasl
 world calculator {
@@ -55,21 +55,21 @@ world calculator {
 
 ### 2.4.2 Interfaces of other packages (specified, not available yet)
 
-An interface can also be defined by **another package**: a WASI interface such as `wasi:cli/run` or `wasi:http/handler`, or any WIT interface fetched as a dependency with `wkg`. The package that defines it only provides the contract. Its implementation is written **inside the world that exports it**:
+An interface can also be defined by **another package**: a WASI interface such as `wasi:cli/run` or `wasi:http/incoming-handler`, or any WIT interface of a dependency (§ 3.5). The package that defines it only provides the contract. Its implementation is written **inside the world that exports it**:
 
 ```wasl
 world main {
   export math;
-  export wasi:cli/run@0.3.0 {
-    async func run() -> result {
+  export wasi:cli/run {
+    func run() -> result {
       // the command-line program, which can call math::fib(…)
     }
   }
 }
 
 world test {
-  export wasi:cli/run@0.3.0 {
-    async func run() -> result {
+  export wasi:cli/run {
+    func run() -> result {
       // a test program that calls the same math::… functions
     }
   }
@@ -78,31 +78,73 @@ world test {
 
 Rules:
 
-- The block after `export <package>:<namespace>/<interface>@<version>` implements that interface **for this world only**. Each world that exports it has its own implementation.
-- The block must implement every function of the foreign interface, with exactly the signatures that its WIT declares, and nothing else.
-- The functions of the block can call the functions of the package interfaces (`math::fib(…)`) and the other functions of the same block (by their name).
+- The name after `export` is the name of the interface in WIT, `<namespace>:<package>/<interface>`, written with WaSL identifiers: `wasi:http/incoming_handler` for `wasi:http/incoming-handler` (§ 13.2). It has no version: the version is the one of the dependency, declared in the manifest (§ 3.2). The package must be a dependency of the project (E0215).
+- The block after the name implements that interface **for this world only**. Each world that exports it has its own implementation.
+- The block must implement every function of the foreign interface, with exactly the signatures that its WIT declares, and nothing else (E0218). The types of the interface are named with the interface's own name as path (`types::request`), as for an imported interface (§ 2.5).
+- The functions of the block can call the functions of the package interfaces (`math::fib(…)`), the functions of the interfaces the world imports, and the other functions of the same block (by their name).
 - A foreign interface can only be implemented in a world. An `interface` block always declares an interface of the package.
 
 Why this model:
 
 - **It is the Component Model.** A component carries its own implementation of each of its exports. Two components never share an implementation, even when they come from the same sources; packages only exist at the source level.
-- **Entry points are foreign interfaces.** In WASI 0.3, a command-line program is a component that exports `wasi:cli/run` (`run: async func() -> result`), and an HTTP service is a component that exports `wasi:http/handler` (`handle: async func(request: request) -> result<response, error-code>`). Every language that targets WASI implements these interfaces; Rust and Go hide it behind `main`, WaSL writes it directly.
+- **Entry points are foreign interfaces.** A command-line program is a component that exports `wasi:cli/run` (`run: func() -> result` in WASI 0.2, an `async func` in WASI 0.3), and an HTTP service is a component that exports the handler of `wasi:http`. Every language that targets WASI implements these interfaces; Rust and Go hide it behind `main`, WaSL writes it directly.
 - **One project, several entry points.** A project can have a `main` world for its command-line tool and a `test` world that runs its tests, or one world per HTTP service (`account`, `order`, `product`…) sharing the same types and business logic. Each world needs its own `run` or `handle`: the implementation belongs to the world.
 
-The WIT of the world `main` above is exactly:
+The WIT of the world `main` above, with the dependency `"wasi:cli" = "0.2.6"`, is exactly:
 
 ```wit
 world main {
   export math;
-  export wasi:cli/run@0.3.0;
+  export wasi:cli/run@0.2.6;
 }
 ```
 
-Status: the compiler has no dependencies, no WASI and no `async` yet, so it rejects this form. The `@` of the version is not a valid character (E0001, § 4.1); without a version, the qualified name after `export` is a syntax error (E0100).
-
 ## 2.5 Imports (specified, not available yet)
 
-A world will also **import** interfaces: interfaces whose implementation is provided by the host (WASI interfaces such as `wasi:filesystem` or `wasi:http/client`) or by another component. Their WIT is fetched as a dependency with `wkg`, like any other package, and WaSL code calls their functions directly, without generated bindings. The syntax of imports, the declaration of dependencies in the manifest and the calls to imported functions are not specified yet. `import` is a reserved word (§ 4.4).
+A world can also **import** interfaces: interfaces whose implementation is provided by the host (WASI interfaces such as `wasi:cli/stdout` or `wasi:filesystem/types`) or by another component.
+
+```wasl
+world checkout {
+  import example:catalog/carts;
+  export orders;
+}
+
+interface orders {
+  func quote(sku: string, quantity: u32) -> result<u64, carts::cart_error> {
+    local c: carts::cart = carts::cart::of(sku, quantity)?;
+    return result::ok(c.total());
+  }
+}
+```
+
+There are two kinds of imports:
+
+- **An interface of another package**, `import <namespace>:<package>/<interface>;`, written like a foreign export (§ 2.4.2), from a dependency of the project (§ 3.5). Its functions and types are named with the last part of its name as path: `carts::cart`, `stdout::get_stdout()`. WaSL code calls them directly, without generated bindings.
+- **An interface of the same package**, `import <interface>;`. In the component of this world, the interface is not compiled in: every call to its functions goes to another component, which provides it, usually the component of another world of the package that exports it. This is how the services of one project call each other while each one is deployed, scaled and instantiated on its own:
+
+```wasl
+world accounts_service {
+  export accounts;
+}
+
+world orders_service {
+  import accounts;      // calls to accounts::… leave the component
+  export orders;
+}
+```
+
+Rules:
+
+- A world imports an interface at most once, and cannot both import and export it (E0216).
+- Two interfaces that code can name, the interfaces of the package and the interfaces of other packages that a world of the package imports or exports, cannot have the same last name (E0217): `example:catalog/carts` cannot coexist with an `interface carts` of the package.
+- A function reachable from the exports of a world that calls a function of another package must belong to a world that imports that interface (E0221). An interface of the package that a world does not import is compiled into its component, as in § 2.3.
+- An imported interface has no implementation in the component: its functions are imported functions of the core module (§ 13.10). Its resources are **handles** (§ 7.12).
+
+Why this model:
+
+- **It is the Component Model.** A world lists its imports and its exports; WIT names them the same way. The component carries the code of its exports and nothing of its imports.
+- **The two kinds are the two ways to reuse code.** Without `import`, an interface of the package is a library: its code is copied into each component that uses it (§ 2.3). With `import`, it is a service: one component provides it, the others call it at run time, with their own instance and their own state.
+- **No version in the source.** A dependency has one version, written once in the manifest (§ 3.2); the generated WIT writes it (§ 13.1), so the source and the manifest cannot disagree.
 
 ## 2.6 The WIT of a package
 
@@ -145,3 +187,10 @@ world calculator {
 ```
 
 Each component embeds the WIT of its world: tools such as `wasm-tools component wit` read it back from the `.wasm` file. The source code is the only source of truth; no `.wit` file is written by hand. The exact generation rules are in § 13.1, including the interfaces that only appear because another one uses their types.
+
+## 2.7 Resources (specified, not available yet)
+
+A **resource** is the Component Model's object: a type with an identity, a private state and methods, which other components reach only through a **handle**. WaSL declares resources in interfaces, like WIT (§ 7.12):
+
+- a resource **of the package** is a WasmGC object inside its component, like a record whose fields nobody else can see; a handle to it is created only when it leaves the component;
+- a resource of an **imported** interface lives in another component; the component only holds handles to it, which the compiler gives back to their owner when the code no longer needs them (§ 9.9).

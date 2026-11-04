@@ -76,7 +76,7 @@ Applying an operator to a type outside its column is an error (E0403):
 - `&`, `|`, `^`, `<<`, `>>` on floats or `bool`;
 - `+`, `-`, `*`, `/`, `<`, `<=`, `>`, `>=` on `bool`;
 - `&&`, `||`, `!` on anything other than `bool` (`if (n && b)` with `n: u32`);
-- any other operator on a heap type, an enum, a flags type or a `char`. In particular, records, tuples, variants, lists, options and results cannot be compared with `==` (§ 16): compare their fields, or use `match`. `<`, `<=`, `>` and `>=` do not apply to strings; ordering strings is the job of a library.
+- any other operator on a heap type, an enum, a flags type or a `char`. In particular, records, tuples, variants, lists, options, results and resources cannot be compared with `==` (§ 16): compare their fields, or use `match`. `<`, `<=`, `>` and `>=` do not apply to strings; ordering strings is the job of a library.
 
 On the other types:
 
@@ -92,7 +92,7 @@ From highest to lowest:
 
 | Level | Operators | Associativity |
 |---|---|---|
-| 1 | call, conversion, `( … )`, field access `.`, indexing `[ … ]` | left |
+| 1 | call, conversion, `( … )`, field access `.`, method call `.m( … )`, indexing `[ … ]`, `?` | left |
 | 2 | unary `-`, `!` | right (prefix) |
 | 3 | `*` `/` `%` | left |
 | 4 | `+` `-` | left |
@@ -104,7 +104,7 @@ From highest to lowest:
 | 10 | `&&` | left |
 | 11 | `\|\|` | left |
 
-Bitwise operators bind tighter than comparisons, unlike in C: `a & b == c` reads `(a & b) == c`. `+` on strings has the precedence of `+`. Field accesses and indexes chain from left to right: `all[i].customer`.
+Bitwise operators bind tighter than comparisons, unlike in C: `a & b == c` reads `(a & b) == c`. `+` on strings has the precedence of `+`. Field accesses, method calls, indexes and `?` chain from left to right: `all[i].customer`, `c.last_line()?.sku`.
 
 ## 8.5 Conversions
 
@@ -123,6 +123,8 @@ A conversion is written as a call to the name of the target type: `u64(n)`, `f32
 - Each argument has the type of its parameter (§ 8.1); literals take that type.
 - A call to a function without a return value is not a value: using it in an expression is an error (E0400), e.g. `local x: u32 = reset();`. It can only be used as a statement (§ 9.6).
 - A built-in function (§ 8.17) is called the same way, with the name of its type as path: `string::len(s)`.
+- A function of an imported interface is called like a function of the package, with the last part of the interface name as path: `stdout::get_stdout()` (§ 2.5).
+- Constructors, methods and static functions of resources are in § 8.20.
 
 ## 8.7 Return
 
@@ -180,12 +182,15 @@ invoices::line { label: "pen", quantity: 3, unit_price: 150 }
 - Every field of the record appears **exactly once, in declaration order** (E0406). Requiring the order keeps one way to write each literal and makes the evaluation order the declaration order (§ 10.1).
 - Each value has the type of its field; `mut` fields are initialized like the others.
 - The literal has the record type and creates a new record.
+- A **resource literal** has the same form and the same rules, with the name of a resource: `cart { items: 0, amount: 0 }`. It creates a new object of the resource, and is only valid in the interface that declares the resource (E0309, § 7.12).
 
 ## 8.12 Field access
 
 - `e.f`, where `e` has a record type and `f` is one of its fields, has the type of the field.
 - `e.f`, where `e` has a flags type and `f` is one of its flags, has type `bool`: `true` if the set contains `f`.
 - `e.k`, where `e` has a tuple type and `k` is an integer literal smaller than the number of its elements, has the type of element `k`, counting from 0: `t.0`, `t.1`.
+
+- `e.f`, where `e` has a resource type or `borrow<R>` and `f` is one of its fields, has the type of the field. It is only valid in the interface that declares the resource (E0309).
 
 Any other field access is an error (E0306): an unknown field or flag, `t.2` on a tuple of two elements, `n.x` with `n: u32`.
 
@@ -312,3 +317,54 @@ global no_discount: option<invoices::discount> = option::none;
 ```
 
 A global that is not `mut` always designates the same value, but that value can have `mut` fields or be a `list<mut T>`, whose contents can change. Its type is written with a path when it is a declared type (§ 7.8).
+
+## 8.19 Error propagation `?` (specified, not available yet)
+
+`e?` unwraps a `result` or an `option`, and returns from the function in the other case:
+
+```wasl
+func quote(sku: string, quantity: u32) -> result<u64, cart_error> {
+  local price: u64 = prices::of(sku)?;     // returns result::err(…) if `of` fails
+  return result::ok(u64(quantity) * price);
+}
+```
+
+- The operand is typed without an expected type (§ 8.2). Its type must be a `result` or an `option` (E0414).
+- **On `result<T, E>`.** The function must return a `result<U, E>`, with any `U` and **the same** `E`, or no error payload on both sides (E0415). `e?` has type `T`. If `e` is `err(x)`, the function returns `result::err(x)` at once.
+- **On `option<T>`.** The function must return an `option<U>`, with any `U` (E0415). `e?` has type `T`. If `e` is `none`, the function returns `option::none` at once.
+- `?` never converts: a `result` cannot propagate into an `option` or the reverse, and an error type is never converted into another one (E0415). To change the error, write a `match`.
+- On `result<_, E>`, `e?` has no value, like a call to a function without a return value (§ 8.6): it can only be used as a statement, `c.add(x)?;` (§ 9.6).
+- A `return` through `?` releases the handles of the function like any `return` (§ 9.9).
+- `?` is not a constant expression: it cannot appear in the initial value of a global (E0409).
+
+`?` is the usual `match`, written in one character, and compiles to the same instructions (§ 12.11):
+
+```wasl
+local price: u64 = prices::of(sku)?;
+// is
+local price: u64;
+match (prices::of(sku)) {
+  case ok(p) { price = p; }
+  case err(x) { return result::err(x); }
+}
+```
+
+## 8.20 Resource calls (specified, not available yet)
+
+| Call | Meaning | Type |
+|---|---|---|
+| `r(args)`, `i::r(args)` | the constructor of the resource `r` | `r` |
+| `e.m(args)` | the method `m` of the resource of `e`, called on `e` | the return type of `m` |
+| `r::s(args)`, `i::r::s(args)` | the static function `s` of the resource `r` | the return type of `s` |
+
+```wasl
+local c: carts::cart = carts::cart();          // constructor
+c.add(150, 2);                                  // method
+local d: carts::cart = carts::cart::single(150);   // static function
+```
+
+- `r` is named like a type (§ 7.8): its name in its interface, the interface and its name elsewhere. A resource without constructor cannot be called (E0308).
+- In `e.m(args)`, `e` is any expression whose type is a resource `r` or `borrow<r>`, and `m` a method of `r` (E0308). `e` is evaluated before the arguments. The method borrows `e` (§ 9.9).
+- In `r::s(args)`, `s` is a static function of `r` (E0308). In a path of three names, `i::x::y(…)`, `x` is a variant (a constructor of § 8.14) or a resource (a static function), never both: types have one namespace (§ 7.7).
+- Arguments and return values follow the rules of calls (§ 8.6): the number of arguments, their types, and a method without a return value used only as a statement.
+- The resources of an imported interface are called the same way, with the names of their WIT converted to WaSL (§ 13.2): `out.blocking_write_and_flush(bytes)` calls the method `blocking-write-and-flush` of `wasi:io/streams`.

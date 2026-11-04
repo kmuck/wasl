@@ -1,0 +1,79 @@
+// Target program of WaSL v0.3 (docs/spec_v0.3), with examples/checkout: a resource
+// defined by this package and used by another component.
+// It is written before the compiler supports it, and the v0.2 compiler rejects it.
+
+world catalog {
+  export carts;
+}
+
+interface carts {
+
+  enum cart_error {
+    unknown_sku,
+    zero_quantity,
+  }
+
+  record line {
+    sku: string,
+    quantity: u32,
+  }
+
+  // A cart lives in the instance of `catalog`; other components hold a handle to it.
+  resource cart {
+    // Private state: it never appears in the WIT, so `mut` is allowed (§ 7.12).
+    items: mut u32,
+    amount: mut u64,
+    last: mut option<line>,
+
+    constructor() {
+      return cart { items: 0, amount: 0, last: option::none };
+    }
+
+    func add(sku: string, quantity: u32) -> result<_, cart_error> {
+      if (quantity == 0) {
+        return result::err(cart_error::zero_quantity);
+      }
+      local price: u64 = prices::of(sku)?;
+      self.items = self.items + quantity;
+      self.amount = self.amount + u64(quantity) * price;
+      self.last = option::some(line { sku: sku, quantity: quantity });
+      return result::ok;
+    }
+
+    func total() -> u64 {
+      return self.amount;
+    }
+
+    func count() -> u32 {
+      return self.items;
+    }
+
+    func last_line() -> option<line> {
+      return self.last;
+    }
+
+    // A cart with a single line, built in one call.
+    static func of(sku: string, quantity: u32) -> result<cart, cart_error> {
+      local c: cart = cart();
+      c.add(sku, quantity)?;
+      return result::ok(c);
+    }
+  }
+
+}
+
+// Internal: exported by no world, so it appears in no WIT.
+interface prices {
+
+  // Unit price in cents.
+  func of(sku: string) -> result<u64, carts::cart_error> {
+    if (sku == "pen") {
+      return result::ok(150);
+    }
+    if (sku == "notebook") {
+      return result::ok(425);
+    }
+    return result::err(carts::cart_error::unknown_sku);
+  }
+
+}

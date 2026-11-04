@@ -24,12 +24,17 @@ Compilation **stops at the first error**. Which error is first is fully determin
 
 1. **Lexing and parsing**, file by file in the order of § 3.3. Each file is entirely tokenized (lexical errors, E0001 to E0007), then parsed (syntax errors, E0100), before the next file.
 2. **Top-level names**, in file order then text order: duplicates (E0201).
-3. **Items of the interfaces**, interface by interface, in declaration order: functions declared twice (E0202), other names declared twice (E0206), types with the name of a top-level declaration (E0210), fields, cases and flags declared twice (E0207), flags types with more than 32 flags (E0212).
-4. **Types**, interface by interface, type by type, in declaration order: unknown types in fields, payloads and signatures (E0305), types without a value (E0211).
-5. **Worlds**, in declaration order: exports (E0203, E0204).
-6. **Exported interfaces**, world by world, interface by interface: the signatures of their functions, then their declared types, in declaration order: recursive types (E0208), types of interfaces with functions (E0209), mutable types (E0214); then cycles of `use` between the interfaces that appear in the WIT (E0213).
-7. **Initial values of the globals**, in declaration order (E0409 and the typing errors).
-8. **Function bodies**, interface by interface, function by function, statement by statement. Within an expression, operands are analyzed from left to right, except that the right operand of a binary operator is analyzed first when the left one is literal-only (§ 8.2).
+3. **Foreign interfaces**: the packages named by the `import` and `export` items of the worlds, in declaration order, must be dependencies, and the interfaces must exist in them (E0215); then the last names of all the interfaces that code can name (E0217).
+4. **Items of the interfaces**, interface by interface, in declaration order: functions declared twice (E0202), other names declared twice (E0206), types with the name of a top-level declaration (E0210), fields, cases and flags declared twice (E0207), flags types with more than 32 flags (E0212).
+5. **Types**, interface by interface, type by type, in declaration order: unknown types in fields, payloads and signatures (E0305), types without a value (E0211), `borrow` misused (E0219), handle types in a forbidden position (E0220).
+6. **Worlds**, in declaration order, item by item: imports and exports (E0203, E0204, E0216), then the blocks of foreign exports against the WIT of their interface (E0218).
+7. **Exported interfaces**, world by world, interface by interface: the signatures of their functions, then their declared types, in declaration order: recursive types (E0208), types of interfaces with functions (E0209), mutable types (E0214); then cycles of `use` between the interfaces that appear in the WIT (E0213).
+8. **Initial values of the globals**, in declaration order (E0409 and the typing errors).
+9. **Function bodies**, interface by interface, function by function, then the blocks of foreign exports, world by world, statement by statement. Within an expression, operands are analyzed from left to right, except that the right operand of a binary operator is analyzed first when the left one is literal-only (§ 8.2).
+
+10. **Calls to foreign interfaces**, world by world: the functions reachable from its exports that call a function of an interface the world does not import (E0221).
+
+Errors of the dependencies (§ 3.5) are reported before step 1, with the location of the dependency: `wasl.toml` for its declaration, the files of a path dependency for its own errors.
 
 Reporting several errors per compilation is planned for a later version.
 
@@ -62,6 +67,13 @@ Codes never change meaning from one version to the next.
 | E0212 | flags type with more than 32 flags | |
 | E0213 | interfaces of the WIT that use each other's types in a cycle | `record r { s: b::s }` in `a` and `func f(r: a::r)` in `b`, both exported (§ 13.1) |
 | E0214 | `mut` field or `list<mut T>` in the signature of an exported function or in a type declared in an exported interface (§ 7.11) | `func sort(xs: list<mut u32>)`, `record cell { v: mut u32 }` in an exported interface |
+| E0215 | unknown foreign interface, or package that is not a dependency (§ 2.4.2, § 3.5) | `import wasi:cli/stdout;` without `"wasi:cli"` in `[dependencies]`, `import wasi:cli/nope;` |
+| E0216 | interface imported twice by a world, or imported and exported by it | `world w { import a; export a; }` |
+| E0217 | two interfaces that code can name have the same last name (§ 2.5) | `import example:catalog/carts;` with an `interface carts` in the package |
+| E0218 | foreign export block that does not match the WIT of its interface: a missing, extra or different function | `export wasi:cli/run { func run() -> u32 { … } }` |
+| E0219 | `borrow<T>` with a `T` that is not a resource, outside the type of a parameter, or a `borrow` parameter moved (§ 7.12, § 9.9) | `func f() -> borrow<cart>`, `borrow<u32>`, `return c;` with `c: borrow<cart>` |
+| E0220 | handle type in a record, tuple, list, field or global, or a local, parameter or binding whose type contains one without being one (§ 7.12) | `record r { c: carts::cart }`, `local o: option<carts::cart> = …;` |
+| E0221 | function reachable from the exports of a world that calls a foreign interface the world does not import (§ 2.5) | `stdout::get_stdout()` reached from a world without `import wasi:cli/stdout;` |
 | E0300 | unknown name | `return y;` with no `y` in scope |
 | E0301 | unknown function | `nope();` |
 | E0302 | wrong number of arguments | `fib(1, 2)` for `fib(n: u32)` |
@@ -70,6 +82,8 @@ Codes never change meaning from one version to the next.
 | E0305 | unknown type | `local x: nope = …;`, `local x: invoices::fib = …;` with a function `fib` |
 | E0306 | unknown field, flag or tuple element | `inv.nope`, `n.x` with `n: u32`, `t.2` on a `tuple<u32, u32>` |
 | E0307 | unknown case | `status::lost`, `case lost { }`, `invoices::line::x` with a record `line` |
+| E0308 | unknown method or static function, or constructor of a resource that has none (§ 8.20) | `c.nope()`, `carts::cart::nope()` |
+| E0309 | field or literal of a resource outside its interface (§ 7.12) | `c.items` or `carts::cart { … }` in another interface |
 | E0400 | mismatched types | `local y: u64 = n;` with `n: u32` |
 | E0401 | literal out of range | `local x: u8 = 256;` |
 | E0402 | cannot infer the type of a literal | `if (1 < 2) { }`, `u64(5)` |
@@ -84,6 +98,8 @@ Codes never change meaning from one version to the next.
 | E0411 | `match` on a type that is not an enum, a variant, an option or a result | `match (n) { … }` with `n: u32` |
 | E0412 | flags literal with a repeated or misplaced flag | `delivery { urgent, email }`, `delivery { paper, paper }` |
 | E0413 | call used as a statement whose function returns a value (§ 9.6) | `save(inv);` with `func save(…) -> result<_, e>`, `string::len(s);` |
+| E0414 | `?` on a value that is not a `result` or an `option` (§ 8.19) | `n?` with `n: u32` |
+| E0415 | `?` in a function whose return type cannot receive the error: not a `result` with the same error type, or not an `option` | `prices::of(sku)?` in `func f() -> u64`, `o?` with `o: option<u32>` in a function that returns a `result` |
 | E0500 | assignment to a global that is not `mut` | `pi = 3.0;` |
 | E0501 | `break` or `continue` outside a `while` | |
 | E0502 | `return` without a value in a function that returns one | `return;` in `func f() -> u32` |

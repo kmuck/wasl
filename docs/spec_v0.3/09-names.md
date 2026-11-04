@@ -6,6 +6,8 @@
 - A function of **another interface** of the package is called through a path: `math::fib(n)`. The path names an interface of the package; the current interface can also be named this way.
 - Calling an unknown function is an error (E0301). If the name exists in another interface, the error message suggests the path.
 - In a path `i::f`, `i` must be an interface: an unknown name, or the name of a world or a global, is an error (E0300).
+- A function of an interface of another package is called with the last part of the interface name as path, `stdout::get_stdout()`, from a function that belongs to a world that imports the interface (E0221, § 2.5).
+- Inside the block of a foreign export (§ 2.4.2), a function of the same block is called by its name; the functions of the interfaces of the package and of the imported interfaces through a path.
 - Functions are not values: a function name only appears in a call. It cannot be stored, passed or returned.
 - Recursion is allowed, including mutual recursion and recursion across interfaces.
 
@@ -65,24 +67,27 @@ The target of an assignment `p = e;` (§ 5.3) is:
 
 - a parameter or a local visible at that point;
 - a global declared `mut`;
-- `x.f`, where `f` is a `mut` field of the record `x`;
+- `x.f`, where `f` is a `mut` field of the record `x`, or of the resource `x` in the interface that declares it (§ 7.12), including `self.f`;
 - `x[i]`, where `x` has type `list<mut T>`.
 
 Assigning an unknown name is an error (E0300); assigning a global that is not `mut` is an error (E0500). Assigning a field that is not `mut`, an element of a `list<T>`, an element of a tuple or a flag of a flags value is E0505. To change flags, assign the whole value: `d = d | delivery { urgent };`. Assigning a field of a record stored in an immutable global is allowed when the field is `mut`: the global designates the record, not its contents. The value `e` has the type of the target (§ 8.1).
 
 ## 9.6 Calls used as statements
 
-A call followed by `;` is a statement only if its function returns no value. Calling a function that returns a value as a statement is an error (E0413): the value would be lost without a trace, and with it the error of a `result`. To discard it on purpose, write `_ =` before the call.
+A call statement (§ 5.3), a call, a method call or a `?` followed by `;`, is valid only if it has no value: its function returns no value, or its `?` unwraps a `result<_, E>` (§ 8.19). Calling a function that returns a value as a statement is an error (E0413): the value would be lost without a trace, and with it the error of a `result`. To discard it on purpose, write `_ =` before the call.
 
 ```wasl
 reset();          // a function without a return value
 _ = incr();       // a function that returns a u32: the value is discarded
 save(inv);        // E0413: `save` returns a result<_, save_error>, which would be lost
+save(inv)?;       // valid: the error is propagated, and `ok` has no value
+c.add(x);         // a method without a return value
 ```
 
 This is what Wasm itself requires: a value left on the stack must be removed with `drop`, and `_ = f();` is that `drop`, written in the source (§ 12.8).
 
-- Only a call can follow `_ =` (§ 5.3): `_ = x;` is E0100.
+- Only a call statement can follow `_ =` (§ 5.3): `_ = x;` is E0100.
+- `_ =` releases the handles that the discarded value contains (§ 9.9).
 - `_ = f();` on a function without a return value is E0400, as any other use of its call as a value (§ 8.6).
 - The built-in functions all return a value: `string::len(s);` is E0413.
 
@@ -101,7 +106,52 @@ A path `a::b` or `a::b::c`, as an expression or before a call, is resolved by th
 | `string`, `list`, `char`, an integer type | a built-in function (§ 8.17) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)`, `u32::wrapping_add(h, c)` |
 | `option`, `result` | a constructor of the built-in type | `option::none`, `result::ok(sum)` |
 | a type of the current interface | a case of that enum or variant | `status::paid`, `discount::fixed(500)` |
-| an interface of the package, followed by one name | a function of that interface (§ 9.1) | `pricing::apply(sum, d)` |
-| an interface of the package, followed by two names | a case of a type of that interface | `invoices::status::paid` |
+| a resource of the current interface | its static function (§ 8.20) | `cart::single(150)` |
+| an interface, followed by one name | a function of that interface (§ 9.1), or the constructor of its resource | `pricing::apply(sum, d)`, `carts::cart()` |
+| an interface, followed by two names | a case of a type of that interface, or a static function of its resource | `invoices::status::paid`, `carts::cart::of("pen", 2)` |
+
+An interface is an interface of the package, or an interface of another package that a world of the package imports or exports, named by the last part of its name (§ 2.5).
 
 An unknown first name is E0300 (§ 9.1); a path that names a type that is not an enum or a variant, or an unknown case, is E0307; a case written with the wrong payload is E0407 (§ 8.14). Types are named with paths of the same form (§ 7.8).
+
+## 9.9 Handles (specified, not available yet)
+
+A handle (§ 7.12) designates a resource that belongs to another component. The Component Model requires each handle to be given back to its owner, with `resource.drop`, exactly once; a handle that is never given back keeps the resource alive in the other component until the instance ends. WaSL gives handles back automatically, with rules that are checked locally, statement by statement.
+
+**One owner.** At any time, a handle is owned by one place: a local (including a parameter of type `T` and a match binding), or a temporary (§ 7.12). Records, lists, tuples, globals and fields cannot hold handles (E0220), so these places are all there is.
+
+**Moves.** Using a local `x` of a handle type as a value **moves** the handle out of it:
+
+- `return x;`, `return result::ok(x);`, and every constructor that holds `x` (`option::some(x)`, `result::ok(x)`, a variant case);
+- an argument for a parameter of type `T` (not `borrow<T>`);
+- `local y: T = x;` and `y = x;`.
+
+After a move, `x` holds the empty handle, `0`, which is never a valid handle. Using `x` again as a handle traps (§ 10.7): the Component Model rejects the index `0`. Assigning `x` a new handle makes it usable again.
+
+**Borrows.** Calling a method on `x` (`x.add(…)`), or passing `x` for a parameter of type `borrow<T>`, **borrows** it: the handle stays in `x`. A parameter of type `borrow<T>` can only be borrowed again: moving it (returning it, passing it for a `T` parameter, assigning it) is an error (E0219).
+
+**Release.** A handle is given back to its owner (`resource.drop`, § 12.10) when the place that owns it gives it up without moving it:
+
+- a local, at the end of the block that declares it, including when `break`, `continue`, `return` or `?` leave the block, and when a new value is assigned to it (the old handle is released after the new value is computed);
+- a parameter of type `T`, on every exit of the function;
+- a temporary handle that is borrowed (`carts::cart().total()`, `f(carts::cart())` with a `borrow` parameter), right after the call that borrows it;
+- a temporary given to `_ =`, and the payload of a `match` case written without a name, with every handle they contain;
+- the operand of `?` gives its payload to the expression, and its error to the `return`: nothing is released.
+
+The empty handle `0` is never released. A handle that was moved is therefore released once, by its new owner:
+
+```wasl
+func checkout(items: list<item>) -> result<receipt, carts::cart_error> {
+  local c: carts::cart = carts::cart();           // `c` owns a new handle
+  local i: u32;
+  while (i < list::len(items)) {
+    c.add(items[i].sku, items[i].quantity)?;      // borrows `c`; on error, releases `c` and returns
+    i = i + 1;
+  }
+  return result::ok(receipt { items: c.count(), total: c.total() });   // releases `c`
+}
+```
+
+**Received from outside.** An exported function owns the handles it receives as `T` and releases them as above. The handles it receives as `borrow<T>` belong to its caller, and the Component Model requires them to be released before the call returns: the adapter of the function does it (§ 13.8).
+
+**Resources of the package** are not handles in the components where their interface is compiled: they are WasmGC references, shared and reclaimed by the runtime (§ 10.8). The rules of this section still apply to their code outside their interface when a world imports that interface, so that a program is valid or invalid for every world at once (§ 7.12).

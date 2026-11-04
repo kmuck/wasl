@@ -1,0 +1,60 @@
+// Target program of WaSL v0.3 (docs/spec_v0.3), with examples/catalog: a component
+// that imports the `carts` interface of another package and uses its resource.
+// It is written before the compiler supports it, and the v0.2 compiler rejects it.
+
+world checkout {
+  import example:catalog/carts;
+  export orders;
+}
+
+interface orders {
+
+  record item {
+    sku: string,
+    quantity: u32,
+  }
+
+  record receipt {
+    items: u32,
+    total: u64,
+  }
+
+  // Each `cart` below is a handle to a cart that lives in `catalog`. It is given back
+  // to `catalog` when the function returns, including the early returns of `?`.
+  func checkout(items: list<item>) -> result<receipt, carts::cart_error> {
+    local c: carts::cart = carts::cart();
+    local i: u32;
+    while (i < list::len(items)) {
+      c.add(items[i].sku, items[i].quantity)?;
+      i = i + 1;
+    }
+    return result::ok(receipt { items: c.count(), total: c.total() });
+  }
+
+  func quote(sku: string, quantity: u32) -> result<u64, carts::cart_error> {
+    local c: carts::cart = carts::cart::of(sku, quantity)?;
+    return result::ok(c.total());
+  }
+
+  // The cart is lent to `describe` for the duration of the call.
+  func last_sku(items: list<item>) -> option<string> {
+    local c: carts::cart = carts::cart();
+    local i: u32;
+    while (i < list::len(items)) {
+      match (c.add(items[i].sku, items[i].quantity)) {
+        case ok { }
+        case err {
+          return option::none;
+        }
+      }
+      i = i + 1;
+    }
+    return describe(c);
+  }
+
+  func describe(c: borrow<carts::cart>) -> option<string> {
+    local l: carts::line = c.last_line()?;
+    return option::some(l.sku);
+  }
+
+}

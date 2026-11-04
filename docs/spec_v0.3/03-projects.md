@@ -20,7 +20,7 @@ calc/
 
 ## 3.2 Manifest `wasl.toml`
 
-The manifest is a [TOML](https://toml.io) file that declares the identity of the package.
+The manifest is a [TOML](https://toml.io) file that declares the identity of the package and its dependencies.
 
 ```toml
 [package]
@@ -35,9 +35,9 @@ version = "0.1.0"
 | `name` | yes | same rule as `namespace` (e.g. `calc`, `todo-api`) |
 | `version` | yes | SemVer version `MAJOR.MINOR.PATCH`, three decimal numbers without leading zeros (`0.1.0`, `1.12.3`), optionally followed by a pre-release (`-alpha.1`) or build (`+build.5`) suffix |
 
-- The file contains exactly one table, `[package]`, with exactly these three fields. Any other table or field is an error.
+- The file contains the table `[package]`, with exactly these three fields, and optionally the table `[dependencies]` (§ 3.5). Any other table or field is an error.
 - The identity of the WIT package is `namespace:name@version`, e.g. `example:calc@0.1.0`.
-- An invalid manifest is reported with code E0200 (§ 11.4).
+- An invalid manifest is reported with code E0200 (§ 11.4), including an invalid `[dependencies]` table.
 
 ## 3.3 Source files
 
@@ -55,3 +55,34 @@ version = "0.1.0"
 - Each world is built separately (§ 2.3): a project with three worlds produces three files, with three builds.
 - `build/` only contains generated files; `weasel clean` removes it.
 - A component is a standard WebAssembly component: it can be inspected with `wasm-tools`, run with wasmtime and composed with other components.
+
+## 3.5 Dependencies (specified, not available yet)
+
+A project depends on another package when one of its worlds imports or exports an interface of that package (§ 2.4.2, § 2.5). Dependencies are declared in the `[dependencies]` table of the manifest:
+
+```toml
+[package]
+namespace = "example"
+name = "checkout"
+version = "0.1.0"
+
+[dependencies]
+"example:catalog" = { path = "../catalog" }   # another WaSL project, or a directory of WIT files
+"wasi:cli" = "0.2.6"                          # a WIT package from a registry
+"wasi:io" = "0.2.6"
+```
+
+| Key | Value | Meaning |
+|---|---|---|
+| `"namespace:name"` | `"MAJOR.MINOR.PATCH"` | the package at this exact version, fetched from a registry |
+| `"namespace:name"` | `{ path = "<dir>" }` | the package found in `<dir>`, relative to the root of the project |
+
+- The key is the WIT name of the package, quoted because it contains `:`. Its namespace and name follow § 3.2.
+- A **version** is an exact SemVer version (§ 3.2), written in the generated WIT (§ 13.1). There are no version ranges: one dependency has one version, and the source code does not repeat it (§ 2.5).
+- A **path** designates either a WaSL project, a directory that contains `wasl.toml`, whose package must have the name of the key and whose version is the one of its manifest; or a directory of `.wit` files, parsed as a WIT package with its `deps/` subdirectory, as `wit-parser` does, which must declare the package of the key.
+- Every package that the source code names (`import example:catalog/carts;`) must be declared (E0215). Packages that a dependency uses without the source naming them, such as `wasi:io` for the types of `wasi:cli`, are resolved with it and need not be declared; the source can only name the packages declared in the manifest.
+- A package cannot depend on itself, and two dependencies that resolve to two versions of the same package are an error (E0200).
+
+**Registries.** A version is fetched with the crates of `wasm-pkg-tools` (`wkg`), from the registry that their configuration assigns to the namespace: `wasi` packages from `ghcr.io/webassembly` by default, and any OCI registry otherwise (§ 14.2). Fetched packages are cached by `wkg`, and the exact versions and digests are recorded in **`wkg.lock`**, at the root of the project, next to `wasl.toml`, in the format of `wkg`. The lock file is meant to be committed: a later build uses the recorded digests and works offline when the packages are in the cache.
+
+**Path dependencies on WaSL projects.** Only the WIT of the dependency is used to compile the project: its interfaces, types and functions, never its source code. The dependency is analyzed like a project of its own (chapter 11), and an error in it stops the build. Its components are built when they are needed to run the project (§ 14.2).

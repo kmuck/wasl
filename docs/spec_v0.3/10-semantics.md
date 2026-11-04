@@ -97,8 +97,10 @@ A **trap** stops the current call immediately. The host receives an error and th
 | object too large: `list::filled(n, x)`, `+` or `list::copy` above the size limit of the runtime | `allocation size too large` |
 | heap exhausted | the runtime's out-of-memory message |
 | call stack exhaustion (recursion too deep) | `call stack exhausted` |
+| use of a moved handle: a method call or an argument with the empty handle `0` (§ 9.9) | `unknown handle index 0` |
+| a trap in an imported function, in the component or host that provides it | the message of that trap |
 
-Nothing else traps: float operations never trap, there is no null reference, no failing cast, and no invalid UTF-8 (`string::from_bytes` returns `option::none`). Messages are those of the reference runtime; their exact text is not part of the language.
+Nothing else traps: float operations never trap, there is no null reference (the empty handle is not a reference), no failing cast, and no invalid UTF-8 (`string::from_bytes` returns `option::none`). Messages are those of the reference runtime; their exact text is not part of the language.
 
 ## 10.8 References and sharing
 
@@ -136,3 +138,15 @@ When an exported function is called, its arguments come from **outside** the com
 Calls between functions of the same component never copy, including calls to functions of exported interfaces: `total(inv)` inside `mark_paid` receives the same record.
 
 The difference cannot be observed. The values that cross the boundary contain nothing that can change (§ 7.11), and the language has no identity comparison: a function cannot tell a copy from a shared reference. An exported function therefore behaves the same whether it is called from outside or from inside the component, and will still do so when the `gc` option of the Canonical ABI removes the copies (§ 16).
+
+## 10.11 Resources and imports (specified, not available yet)
+
+**Resources of the package.** An object of a resource is a heap object like a record (§ 10.8): assigning it or passing it copies the reference, and a change of a `mut` field through one name is visible through every other. Each evaluation of a constructor creates a new object.
+
+**Resources at the boundary are not copied.** When an object of a resource of the package leaves the component, the other side receives a handle to **the same object**: its later method calls see and change the state the component sees. When the handle comes back, as an argument, the component gets the same object back. This is the only kind of value whose identity crosses the boundary, and it is the Component Model that guarantees it. The object stays alive while the other side holds a handle to it, even if the component no longer references it; when the other side releases its last handle, the component forgets it and the runtime reclaims it like any object (§ 12.10).
+
+**Handles.** A handle of an imported resource is released at the points of § 9.9, in this order at the end of a block: the locals in the reverse order of their declarations. Releasing a handle runs the destructor of the resource in the component that owns it, which is the only way a WaSL program runs code in another component without a call written in the source.
+
+**Calls to imported functions.** A call to a function of an imported interface evaluates its arguments from left to right, then transfers control to the component or the host that provides it (§ 13.10). Its arguments are copied (§ 10.10), except handles, which are moved or lent (§ 9.9). It cannot call the component back: a component that calls an import is not re-entered before the call returns, which the Component Model guarantees for synchronous calls.
+
+**State of an imported interface of the package.** An interface of the package imported by a world (§ 2.5) runs in another instance, with its own globals: the importing component does not share the globals of that instance, even though the source code is the same.

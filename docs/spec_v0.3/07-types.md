@@ -30,7 +30,7 @@ The typing rules refer to these categories:
 - **floats**: `f32`, `f64`;
 - **numeric types**: integers and floats;
 - **scalar types**: the primitive types, `char`, enums and flags. They are values, represented by a Wasm number;
-- **heap types**: every other type (§ 7.5). Their values are references to objects of the WasmGC heap (§ 10.8);
+- **heap types**: every other type (§ 7.5). Their values are references to objects of the WasmGC heap (§ 10.8). A resource is a heap type, even where it is represented by a handle (§ 7.12);
 - **case types**: enums, variants, options and results, the types a `match` inspects (§ 8.16).
 
 `bool` is in none of the numeric categories.
@@ -45,7 +45,7 @@ A function without a return type returns no value. A call to such a function is 
 
 ## 7.5 Heap and declared types
 
-Ten kinds of types complete the primitive types of § 7.1. They are exactly the WIT types of the same name.
+Eleven kinds of types complete the primitive types of § 7.1. They are exactly the WIT types of the same name.
 
 | Type | Values | Declared | WasmGC representation (chapter 12) |
 |---|---|---|---|
@@ -59,6 +59,7 @@ Ten kinds of types complete the primitive types of § 7.1. They are exactly the 
 | `enum e { … }` | one of a list of named cases | in an interface | `i32` |
 | `variant v { … }` | one of a list of named cases, each with an optional payload | in an interface | `(ref $v)`, a struct per case |
 | `flags f { … }` | a set of named flags | in an interface | `i32`, one bit per flag |
+| `resource c { … }` | an object with a private state and methods | in an interface | `(ref $c)`, a struct; an `i32` handle when it belongs to another component (§ 7.12) |
 
 The categories of § 7.2 apply: `char`, enums and flags are scalar types, the others are heap types.
 
@@ -104,7 +105,7 @@ The categories of § 7.2 apply: `char`, enums and flags are scalar types, the ot
 
 ## 7.7 Declared types
 
-`record`, `enum`, `variant` and `flags` types are declared **inside an interface**, next to its functions, exactly as in WIT.
+`record`, `enum`, `variant`, `flags` and `resource` types are declared **inside an interface**, next to its functions, exactly as in WIT.
 
 ```wasl
 interface invoices {
@@ -146,7 +147,7 @@ interface invoices {
 }
 ```
 
-In each kind of declaration, the fields, cases or flags are separated by commas; a trailing comma is allowed. There is at least one, and two of them cannot have the same name (E0207).
+Resources have their own section (§ 7.12). In the other kinds of declaration, the fields, cases or flags are separated by commas; a trailing comma is allowed. There is at least one, and two of them cannot have the same name (E0207).
 
 ### `record`
 
@@ -256,3 +257,83 @@ interface counters {          // exported by a world
   }
 }
 ```
+
+## 7.12 Resources (specified, not available yet)
+
+A resource is the object of the Component Model: a type with a private state and **methods**. Other components never see its state; they hold a **handle** to it and call its methods. A resource is declared in an interface, like the other types:
+
+```wasl
+interface carts {
+
+  resource cart {
+    items: mut u32,
+    amount: mut u64,
+
+    constructor() {
+      return cart { items: 0, amount: 0 };
+    }
+
+    func add(price: u64, quantity: u32) {
+      self.items = self.items + quantity;
+      self.amount = self.amount + u64(quantity) * price;
+    }
+
+    func total() -> u64 {
+      return self.amount;
+    }
+
+    static func single(price: u64) -> cart {
+      local c: cart = cart();
+      c.add(price, 1);
+      return c;
+    }
+  }
+
+}
+```
+
+```wit
+interface carts {
+  resource cart {
+    constructor();
+    add: func(price: u64, quantity: u32);
+    total: func() -> u64;
+    single: static func(price: u64) -> cart;
+  }
+}
+```
+
+### State
+
+- The **fields** of a resource are its private state. They are declared like the fields of a record, each followed by `,`, and may be `mut`. A resource may have no field.
+- The fields never appear in the WIT, which only has the constructor, the methods and the static functions. A `mut` field is therefore allowed in a resource of an exported interface: E0214 does not apply to it (§ 7.11).
+- The fields can only be named inside the interface that declares the resource (E0309): `self.items`, `c.items` for any `c` of type `cart`, and the **resource literal** `cart { items: 0, amount: 0 }`, written like a record literal (§ 8.11), which creates a new object. Outside the interface, a resource is only reached through its constructor, its methods and its static functions.
+
+### Constructor, methods, static functions
+
+- **Constructor.** `constructor(params) { … }` declares at most one constructor (E0202). Its body returns the new object, `return cart { … };`, like a function whose return type is the resource. It is called with the name of the resource, like a conversion: `cart()` in its interface, `carts::cart()` elsewhere (§ 8.20). A resource without constructor can only be created by the functions of its interface.
+- **Methods.** `func name(params) -> R { … }` inside the resource declares a method. Its body names the object it is called on `self`; `self` itself cannot be assigned (§ 5.3), but its `mut` fields can. A method is called on a value: `c.add(150, 2)`.
+- **Static functions.** `static func name(params) -> R { … }` declares a function without `self`, called with the path of the resource: `cart::single(150)` in its interface, `carts::cart::single(150)` elsewhere.
+- The constructor, the methods and the static functions of a resource, and its fields, form one namespace (E0202). Their names follow § 4.3 and convert to WIT as every name (§ 13.2).
+
+### Resources of the package and handles
+
+A resource has two representations, depending on where its object lives (§ 12.10, § 13.11):
+
+- A resource of an interface of the package that the world does **not** import is a WasmGC struct inside the component, exactly like a record whose fields are private: values are references, shared and reclaimed by the runtime like any heap value (§ 10.8). When it crosses the boundary, the component gives the other side a handle to it, and gets it back when the other side gives the handle back.
+- A resource of an interface of another package, or of an interface of the package that the world imports, lives in another component. The component only holds **handles** to it: `i32` indexes into the handle table that the Component Model keeps for the instance. A handle must be given back to its owner when it is no longer needed; WaSL does it automatically (§ 9.9).
+
+A **handle type** is a resource type declared in an interface of another package, or in an interface of the package that at least one world imports. The rules below apply to handle types everywhere in the package except in the interface that declares the resource, so that the same code is valid in every world, whatever the representation the world gives it:
+
+- A handle type can be the type of a local, a parameter, a match binding, the return type of a function, and the payload of an `option`, a `result` or a variant that is returned or passed on at once.
+- A value whose type contains a handle type, other than the handle type itself, is a **temporary**: the result of a call, or a constructor such as `option::some(c)`, used at once by `?`, `match`, `return` or `_ =` (§ 9.9).
+- A handle type cannot appear in a record, a tuple, a list, a global or a field, and a local, a parameter or a match binding cannot have a type that contains one without being one (E0220). This keeps the ownership of every handle in a single local, so that releasing it is a local decision (§ 9.9).
+- A local of a resource type needs an initial value (E0410), as for every heap type.
+- Resources cannot be compared: `==` does not apply to them (§ 8.3).
+
+### `borrow<T>`
+
+- A parameter of type `T`, where `T` is a resource, **owns** its value: for a handle type, the caller gives the handle to the callee (§ 9.9). This is WIT's `own<T>`, which WaSL does not write.
+- A parameter of type `borrow<T>` **borrows** it: the callee can call its methods during the call, but cannot keep it, return it or give it away. For a handle type, the caller keeps the handle.
+- `borrow<T>` is only valid as the type of a parameter, with a resource `T` (E0219): `borrow<u32>`, a `borrow` return type or a `borrow` field are errors.
+- `self` is a `borrow<T>` of its resource, as in WIT, where a method takes `self: borrow<T>`.
