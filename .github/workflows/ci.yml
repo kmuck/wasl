@@ -42,16 +42,20 @@ jobs:
           echo "sample: $sample"
           test "$(weasel call invoices::total "$sample")" = "ok(1170)"
           test "$(weasel call invoices::summary "$sample")" = '"Weasel & Co: invoice 42 for ACME (draft)"'
-      # The target programs of 0.3: the resource of catalog is tested by
-      # waslc/tests/resources.rs; checkout uses it through handles. Running them
-      # together comes with composition.
-      - name: Build examples/catalog and examples/checkout
+      # The target programs of 0.3: checkout uses the carts of catalog through handles;
+      # `weasel call` composes the two components.
+      - name: Run examples/catalog and examples/checkout
         if: matrix.crate == 'weasel'
-        working-directory: examples
+        working-directory: examples/checkout
         run: |
           weasel() { cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- "$@"; }
-          (cd catalog && weasel build catalog)
-          (cd checkout && weasel build checkout)
+          (cd ../catalog && weasel build catalog)
+          weasel build checkout
+          test "$(weasel call orders::checkout '[{sku: "pen", quantity: 2}, {sku: "notebook", quantity: 1}]')" = "ok({items: 3, total: 725})"
+          test "$(weasel call orders::checkout '[{sku: "pen", quantity: 2}, {sku: "ink", quantity: 1}]')" = "err(unknown-sku)"
+          test "$(weasel call orders::quote '"pen"' 0)" = "err(zero-quantity)"
+          test "$(weasel call orders::last_sku '[{sku: "pen", quantity: 1}]')" = 'some("pen")'
+          test "$(weasel call orders::last_sku '[]')" = "none"
       # The WASI target program of 0.3: built with the WIT of WASI 0.2 fetched from the
       # registry, and run as a command by the wasmtime CLI.
       - uses: bytecodealliance/actions/wasmtime/setup@v1

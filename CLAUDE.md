@@ -48,7 +48,7 @@ CHANGELOG.md    Keep a Changelog, with the versioning rules
 docs/spec_vX.Y  the specification of each version, one frozen folder per release
 waslc/          the compiler, a Rust library (lexer → parser → sema → HIR → codegen / wit → component)
 weasel/         the build tool, a Rust executable (init, build, check, wit, call, clean), runs components with wasmtime
-examples/       the target program of each version (calc for 0.1, invoice for 0.2), run in CI
+examples/       the target programs of each version (calc for 0.1, invoice for 0.2, catalog + checkout and hello for 0.3), run in CI
 ```
 
 - `waslc` and `weasel` are **separate Cargo projects**, with no root workspace; `weasel` depends on `waslc` by path. Keep it that way.

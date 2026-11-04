@@ -3,8 +3,9 @@
 use std::fmt::Write;
 
 use wasmtime::component::types::ComponentItem;
-use wasmtime::component::{Component, Linker, Type, Val, wasm_wave};
+use wasmtime::component::{Component, Linker, ResourceTable, Type, Val, wasm_wave};
 use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::error::{Error, Result};
 use crate::project::Project;
@@ -30,19 +31,9 @@ struct Export {
 pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option<String>> {
     let analysis = project.analyze()?;
     let (world, display) = resolve(analysis.worlds(), function)?;
-    if let Some(w) = analysis.worlds().iter().find(|w| w.name == world)
-        && !w.imports.is_empty()
-    {
-        return Err(Error::new(format!(
-            "`{display}` is only exported by world `{world}`, which imports {}: `weasel call` cannot provide imports yet",
-            w.imports
-                .iter()
-                .map(|i| format!("`{i}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-    let bytes = project.build(&analysis, world)?;
+    // The imports of the world are provided by other components, composed with it, or
+    // by the host (§ 14.2).
+    let bytes = crate::compose::component(project, &analysis, world)?;
 
     let engine = engine()?;
     let loaded = Component::new(&engine, &bytes).map_err(|e| {
@@ -89,8 +80,11 @@ pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut store = Store::new(&engine, ());
-    let instance = Linker::new(&engine)
+    let mut store = Store::new(&engine, Host::new());
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        .map_err(|e| Error::new(format!("cannot provide WASI: {e:#}")))?;
+    let instance = linker
         .instantiate(&mut store, &loaded)
         .map_err(|e| Error::new(format!("cannot instantiate world `{world}`: {e:#}")))?;
     let func = instance
@@ -114,6 +108,34 @@ pub fn call(project: &Project, function: &str, args: &[String]) -> Result<Option
         )));
     }
     Ok(results.first().map(format_value))
+}
+
+/// The state of the host: WASI 0.2, whose standard output goes to the standard error of
+/// `weasel`, so that its standard output only receives the result (§ 14.2).
+struct Host {
+    ctx: WasiCtx,
+    table: ResourceTable,
+}
+
+impl Host {
+    fn new() -> Self {
+        Host {
+            ctx: WasiCtx::builder()
+                .stdout(std::io::stderr())
+                .inherit_stderr()
+                .build(),
+            table: ResourceTable::new(),
+        }
+    }
+}
+
+impl WasiView for Host {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.ctx,
+            table: &mut self.table,
+        }
+    }
 }
 
 /// The wasmtime engine, with WasmGC and its prerequisites (§ 14.6).

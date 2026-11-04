@@ -112,7 +112,8 @@ weasel/
 │   ├── manifest.rs    # reads and writes wasl.toml
 │   ├── deps.rs        # resolves the dependencies: path projects, WIT directories, registries
 │   ├── init.rs        # weasel init
-│   ├── call.rs        # weasel call: function lookup, arguments, wasmtime
+│   ├── call.rs        # weasel call: function lookup, arguments, wasmtime and WASI
+│   ├── compose.rs     # plugs the components that provide the imports of a world
 │   └── error.rs       # errors reported to the user
 └── tests/
     └── cli.rs         # runs the weasel binary on temporary projects

@@ -550,10 +550,31 @@ fn imports() {
     ok(&app, &["build", "main"]);
     assert!(app.join("build/main.wasm").is_file());
     assert_eq!(ok(&app, &["call", "one"]), "1\n");
+    // `call` plugs the component of the world of `lib` that exports `i` (§ 14.2).
+    assert_eq!(ok(&app, &["call", "twice"]), "2\n");
+
+    // An interface of the package, provided by another world of the package, whose own
+    // imports are provided in turn; WASI comes from the host.
+    write(
+        &app.join("src/app.wasl"),
+        "world main {\n  import counter;\n  export calls;\n}\n\n\
+         world store {\n  import demo:lib/i;\n  export counter;\n}\n\n\
+         interface calls {\n  func twice() -> u32 {\n    return counter::next() + counter::next();\n  }\n}\n\n\
+         global n: mut u32 = 0;\n\n\
+         interface counter {\n  func next() -> u32 {\n    n = n + i::f();\n    return n;\n  }\n}\n",
+    );
+    assert_eq!(ok(&app, &["call", "twice"]), "3\n");
+
+    // An import that no world and no path dependency provides.
+    write(
+        &root.join("lib/src/lib.wasl"),
+        "world w {\n  import i;\n}\n\ninterface i {\n  func f() -> u32 {\n    return 1;\n  }\n}\n",
+    );
     assert_eq!(
         fails(&app, &["call", "twice"]),
-        "error: `calls::twice` is only exported by world `main`, which imports `demo:lib/i@0.1.0`: `weasel call` cannot provide imports yet\n"
+        "error: no component provides `demo:lib/i@0.1.0`: add it as a path dependency on a WaSL project\n"
     );
+    write(&root.join("lib/src/lib.wasl"), LIB);
 
     // Every package named in the source must be a dependency (E0215).
     write(
