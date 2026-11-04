@@ -14,6 +14,7 @@
 pub mod ast;
 pub mod codegen;
 pub mod component;
+pub mod deps;
 pub mod diag;
 pub mod hir;
 pub mod lexer;
@@ -24,9 +25,13 @@ pub mod source;
 pub mod types;
 pub mod wit;
 
+pub use deps::Dependencies;
 pub use diag::{Diagnostic, Result};
 pub use package::Package;
 pub use source::SourceMap;
+/// The WIT parser used by `waslc`, to parse directories of `.wit` files for
+/// [`Dependencies::add_resolve`].
+pub use wit_parser;
 
 use diag::Code;
 
@@ -56,8 +61,16 @@ pub struct Analysis {
 /// Analyzes a package: checks every source file and prepares the WIT of the package.
 ///
 /// Sources must be given in a deterministic order (by convention, sorted by path): that
-/// order decides which error is reported first.
-pub fn analyze(package: &Package, sources: &SourceMap) -> Result<Analysis> {
+/// order decides which error is reported first. `deps` holds the WIT of the packages it
+/// depends on (§ 3.5).
+pub fn analyze(package: &Package, sources: &SourceMap, deps: &Dependencies) -> Result<Analysis> {
+    let own = format!("{}:{}", package.namespace, package.name);
+    if deps.names().any(|name| name == own) {
+        return Err(Diagnostic::without_span(
+            Code::Manifest,
+            format!("the package `{own}` cannot depend on itself"),
+        ));
+    }
     let mut items = Vec::new();
     for id in sources.ids() {
         let tokens = lexer::tokenize(id, &sources.get(id).text)?;

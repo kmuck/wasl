@@ -136,11 +136,13 @@ let package = Package::new("example", "calc", "0.1.0")?;
 let mut sources = SourceMap::default();
 sources.add("src/calc.wasl".into(), text);
 
-// Dependencies (§ 3.5): the WIT of each one, as WIT text or as a binary WIT package
-// (what `wkg` fetches). For a WaSL project, its `analysis.wit()`.
+// Dependencies (§ 3.5), added after the packages they use:
 let mut deps = waslc::Dependencies::default();
-deps.add_wit_text("wasi:cli", "0.2.6", files)?;       // files: Vec<(display path, text)>
-deps.add_wit_binary("wasi:io", "0.2.6", bytes)?;
+deps.add_wit_binary("wasi:cli", "0.2.6", &bytes)?;                // a binary WIT package, as `wkg` fetches it
+deps.add_resolve("demo:base", None, resolve, package)?;         // a directory of .wit files, parsed with waslc::wit_parser
+deps.include(&catalog_deps)?;                                   // the dependencies of a WaSL dependency…
+deps.add_wit("example:catalog", "../catalog/wasl.toml", &wit)?;  // …then its WIT, `analysis.wit()`
+// A dependency whose WIT does not declare its package, or a package at two versions: E0200.
 
 // 1. Analysis of the whole package (chapters 4 to 9, 11).
 let analysis = waslc::analyze(&package, &sources, &deps)?;

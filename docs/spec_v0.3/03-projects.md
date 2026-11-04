@@ -56,7 +56,7 @@ version = "0.1.0"
 - `build/` only contains generated files; `weasel clean` removes it.
 - A component is a standard WebAssembly component: it can be inspected with `wasm-tools`, run with wasmtime and composed with other components.
 
-## 3.5 Dependencies (specified, not available yet)
+## 3.5 Dependencies
 
 A project depends on another package when one of its worlds imports or exports an interface of that package (§ 2.4.2, § 2.5). Dependencies are declared in the `[dependencies]` table of the manifest:
 
@@ -80,9 +80,9 @@ version = "0.1.0"
 - The key is the WIT name of the package, quoted because it contains `:`. Its namespace and name follow § 3.2.
 - A **version** is an exact SemVer version (§ 3.2), written in the generated WIT (§ 13.1). There are no version ranges: one dependency has one version, and the source code does not repeat it (§ 2.5).
 - A **path** designates either a WaSL project, a directory that contains `wasl.toml`, whose package must have the name of the key and whose version is the one of its manifest; or a directory of `.wit` files, parsed as a WIT package with its `deps/` subdirectory, as `wit-parser` does, which must declare the package of the key.
-- Every package that the source code names (`import example:catalog/carts;`) must be declared (E0215). Packages that a dependency uses without the source naming them, such as `wasi:io` for the types of `wasi:cli`, are resolved with it and need not be declared; the source can only name the packages declared in the manifest.
+- Every package that the source code names (`import example:catalog/carts;`) must be declared (E0215, with imports: specified, not available yet). Packages that a dependency uses without the source naming them, such as `wasi:io` for the types of `wasi:cli`, are resolved with it and need not be declared; the source can only name the packages declared in the manifest.
 - A package cannot depend on itself, and two dependencies that resolve to two versions of the same package are an error (E0200).
 
-**Registries.** A version is fetched with the crates of `wasm-pkg-tools` (`wkg`), from the registry that their configuration assigns to the namespace: `wasi` packages from `ghcr.io/webassembly` by default, and any OCI registry otherwise (§ 14.2). Fetched packages are cached by `wkg`, and the exact versions and digests are recorded in **`wkg.lock`**, at the root of the project, next to `wasl.toml`, in the format of `wkg`. The lock file is meant to be committed: a later build uses the recorded digests and works offline when the packages are in the cache.
+**Registries.** A version is fetched with the crates of `wasm-pkg-tools` (`wkg`), from the registry that their configuration assigns to the namespace: `wasi` packages from `ghcr.io/webassembly` by default, and any OCI registry otherwise (§ 14.2). Fetched packages are cached by `wkg`, and the exact versions and digests are recorded in **`wkg.lock`**, at the root of the project, next to `wasl.toml`, in the format of `wkg`. The lock file is meant to be committed: a later build resolves each package to the version and digest it records. The configuration of `wkg` is its usual file, `~/.config/wasm-pkg/config.toml`, which also says how to reach private registries.
 
 **Path dependencies on WaSL projects.** Only the WIT of the dependency is used to compile the project: its interfaces, types and functions, never its source code. The dependency is analyzed like a project of its own (chapter 11), and an error in it stops the build. Its components are built when they are needed to run the project (§ 14.2).

@@ -577,7 +577,7 @@ fn engine_and_component() -> &'static (Engine, Component) {
         let mut sources = SourceMap::default();
         let program = PROGRAM.replace("LONG", &"x".repeat(LONG));
         sources.add("src/h.wasl".into(), program);
-        let bytes = waslc::analyze(&package, &sources)
+        let bytes = waslc::analyze(&package, &sources, &Default::default())
             .and_then(|analysis| analysis.build("w"))
             .unwrap_or_else(|e| panic!("{}", e.display(&sources)));
         let engine = Engine::default();
@@ -861,7 +861,7 @@ fn invoice_functions() {
         include_str!("../../examples/invoice/src/invoice.wasl").to_string(),
     );
     sources.add("src/probe.wasl".into(), INVOICE_PROBE.to_string());
-    let bytes = waslc::analyze(&package, &sources)
+    let bytes = waslc::analyze(&package, &sources, &Default::default())
         .and_then(|analysis| analysis.build("probe"))
         .unwrap_or_else(|e| panic!("{}", e.display(&sources)));
     let engine = Engine::default();
