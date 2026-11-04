@@ -9,7 +9,9 @@ use crate::deps::Dependencies;
 use crate::diag::{Code, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
 use crate::source::Span;
-use crate::types::{CaseDef, DeclId, DeclKind, FieldDef, Mutable, Type, TypeDecl, TypeKind, Types};
+use crate::types::{
+    CaseDef, DeclId, DeclKind, FieldDef, Mutable, ResourceDef, Type, TypeDecl, TypeKind, Types,
+};
 use crate::wit::kebab;
 
 mod body;
@@ -121,7 +123,9 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
     let mut types = Types::default();
     types.interface_names = interfaces.iter().map(|i| i.name.name.clone()).collect();
     let mut funcs: Vec<&ast::Func> = Vec::new();
-    let mut decls: Vec<&ast::TypeDecl> = Vec::new();
+    // The name of each declared type, by id, and the kind of each function.
+    let mut decls: Vec<&Ident> = Vec::new();
+    let mut func_kinds: Vec<hir::FuncKind> = Vec::new();
     let mut scopes: Vec<InterfaceScope> = Vec::new();
     for (iface_id, iface) in interfaces.iter().enumerate() {
         let mut scope = InterfaceScope::default();
@@ -131,6 +135,7 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             let name = match item {
                 ast::InterfaceItem::Func(f) => &f.name,
                 ast::InterfaceItem::Type(t) => &t.name,
+                ast::InterfaceItem::Resource(r) => &r.name,
             };
             let previous = if scope.funcs.contains_key(name.name.as_str()) {
                 Some("a function")
@@ -166,8 +171,54 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                 ast::InterfaceItem::Func(func) => {
                     let id = funcs.len();
                     funcs.push(func);
+                    func_kinds.push(hir::FuncKind::Free);
                     scope.funcs.insert(func.name.name.clone(), id);
                     func_ids.push(id);
+                }
+                ast::InterfaceItem::Resource(res) => {
+                    if let Some(top) = names.get(res.name.name.as_str()) {
+                        return err(
+                            Code::TypeNamedLikeTopLevel,
+                            res.name.span,
+                            format!(
+                                "resource `{}` has the name of {} of the package",
+                                res.name.name,
+                                top.describe()
+                            ),
+                        );
+                    }
+                    check_resource_members(res)?;
+                    let id = decls.len();
+                    decls.push(&res.name);
+                    scope.types.insert(res.name.name.clone(), id);
+                    decl_ids.push(id);
+                    let mut def = ResourceDef::default();
+                    for rf in &res.funcs {
+                        let f = funcs.len();
+                        funcs.push(&rf.func);
+                        func_ids.push(f);
+                        let name = rf.func.name.name.clone();
+                        func_kinds.push(match rf.kind {
+                            ast::ResourceFuncKind::Constructor => {
+                                def.constructor = Some(f);
+                                hir::FuncKind::Constructor(id)
+                            }
+                            ast::ResourceFuncKind::Method => {
+                                def.methods.push((name, f));
+                                hir::FuncKind::Method(id)
+                            }
+                            ast::ResourceFuncKind::Static => {
+                                def.statics.push((name, f));
+                                hir::FuncKind::Static(id)
+                            }
+                        });
+                    }
+                    types.decls.push(TypeDecl {
+                        name: res.name.name.clone(),
+                        interface: iface_id,
+                        kind: DeclKind::Resource(def),
+                    });
+                    types.decl_type(id);
                 }
                 ast::InterfaceItem::Type(decl) => {
                     if let Some(top) = names.get(decl.name.name.as_str()) {
@@ -183,7 +234,7 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                     }
                     check_members(decl)?;
                     let id = decls.len();
-                    decls.push(decl);
+                    decls.push(&decl.name);
                     scope.types.insert(decl.name.name.clone(), id);
                     decl_ids.push(id);
                     // The members are resolved in step 3; the names are known now.
@@ -265,10 +316,12 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                         ast::TypeDeclKind::Record(fields) => {
                             let mut defs = Vec::new();
                             for f in fields {
+                                let ty = resolver.resolve(&mut types, &f.ty, Some(iface_id))?;
+                                no_borrow(&types, ty, f.ty.span)?;
                                 defs.push(FieldDef {
                                     name: f.name.name.clone(),
                                     mutable: f.mutable,
-                                    ty: resolver.resolve(&mut types, &f.ty, Some(iface_id))?,
+                                    ty,
                                 });
                             }
                             types.decls[id].kind = DeclKind::Record(defs);
@@ -278,7 +331,9 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                             for c in cases {
                                 let payload = match &c.payload {
                                     Some(ty) => {
-                                        Some(resolver.resolve(&mut types, ty, Some(iface_id))?)
+                                        let t = resolver.resolve(&mut types, ty, Some(iface_id))?;
+                                        no_borrow(&types, t, ty.span)?;
+                                        Some(t)
                                     }
                                     None => None,
                                 };
@@ -293,25 +348,30 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                     }
                 }
                 ast::InterfaceItem::Func(func) => {
-                    let mut params = Vec::new();
-                    for p in &func.params {
-                        params.push((
-                            p.name.name.clone(),
-                            resolver.resolve(&mut types, &p.ty, Some(iface_id))?,
-                        ));
+                    let def =
+                        signature(&resolver, &mut types, func, hir::FuncKind::Free, iface_id)?;
+                    program.funcs.push(def);
+                }
+                ast::InterfaceItem::Resource(res) => {
+                    let id = scopes[iface_id].types[res.name.name.as_str()];
+                    let mut fields = Vec::new();
+                    for f in &res.fields {
+                        let ty = resolver.resolve(&mut types, &f.ty, Some(iface_id))?;
+                        no_borrow(&types, ty, f.ty.span)?;
+                        fields.push(FieldDef {
+                            name: f.name.name.clone(),
+                            mutable: f.mutable,
+                            ty,
+                        });
                     }
-                    let ret = match &func.ret {
-                        Some(ty) => Some(resolver.resolve(&mut types, ty, Some(iface_id))?),
-                        None => None,
-                    };
-                    program.funcs.push(hir::FuncDef {
-                        name: func.name.name.clone(),
-                        interface: iface_id,
-                        params,
-                        ret,
-                        locals: Vec::new(),
-                        body: Vec::new(),
-                    });
+                    if let DeclKind::Resource(def) = &mut types.decls[id].kind {
+                        def.fields = fields;
+                    }
+                    for rf in &res.funcs {
+                        let kind = func_kinds[program.funcs.len()];
+                        let def = signature(&resolver, &mut types, &rf.func, kind, iface_id)?;
+                        program.funcs.push(def);
+                    }
                 }
             }
         }
@@ -320,14 +380,14 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
     // other packages come after them.
     program.funcs.extend(foreign_funcs);
     let inhabited = inhabited_decls(&types);
-    for (id, decl) in decls.iter().enumerate() {
+    for (id, name) in decls.iter().enumerate() {
         if !inhabited[id] {
             return err(
                 Code::EmptyType,
-                decl.name.span,
+                name.span,
                 format!(
                     "type `{}` has no value: {}; add a case without payload, or go through an `option` or a `list`",
-                    decl.name.name,
+                    name.name,
                     why_empty(&types, &inhabited, id)
                 ),
             );
@@ -407,6 +467,20 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                         ),
                     );
                 }
+                if id < interfaces.len()
+                    && program.interfaces[id]
+                        .types
+                        .iter()
+                        .any(|&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
+                {
+                    return err(
+                        Code::ForeignInterface,
+                        span,
+                        format!(
+                            "interface `{written}` declares resources, and importing resources is not available yet"
+                        ),
+                    );
+                }
                 def.imports.push(id);
             } else {
                 if def.exports.contains(&id) {
@@ -444,9 +518,8 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             .chain(&world.imports)
             .filter(|&&i| i < interfaces.len());
         for &iface_id in crossing {
-            let iface = interfaces[iface_id];
-            for func in iface.funcs() {
-                let def = &program.funcs[scopes[iface_id].funcs[func.name.name.as_str()]];
+            for &f in &program.interfaces[iface_id].funcs {
+                let def = &program.funcs[f];
                 let signature: Vec<Type> =
                     def.params.iter().map(|(_, t)| *t).chain(def.ret).collect();
                 check_boundary_types(
@@ -454,7 +527,7 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                     &program,
                     world,
                     &signature,
-                    &func.name,
+                    &funcs[f].name,
                     if world.exports.contains(&iface_id) {
                         "exported function"
                     } else {
@@ -463,14 +536,14 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
                 )?;
             }
             // The types of an exported interface all appear in the WIT (§ 13.1).
-            for decl in iface.types() {
-                let ty = types.decl_type_of(scopes[iface_id].types[decl.name.name.as_str()]);
+            for &d in &program.interfaces[iface_id].types {
+                let ty = types.decl_type_of(d);
                 check_boundary_types(
                     &types,
                     &program,
                     world,
                     &[ty],
-                    &decl.name,
+                    decls[d],
                     if world.exports.contains(&iface_id) {
                         "type of an exported interface"
                     } else {
@@ -546,16 +619,30 @@ pub fn analyze(items: &[Item], deps: &Dependencies) -> Result<hir::Program> {
             ret,
         );
         cx.scopes.push(Vec::new());
-        for (param, (_, ty)) in func.params.iter().zip(&program.funcs[id].params) {
+        let mut params = program.funcs[id].params.iter();
+        if let hir::FuncKind::Method(_) = program.funcs[id].kind {
+            let (_, ty) = params.next().expect("self");
+            let this = Ident {
+                name: "self".into(),
+                span: func.name.span,
+            };
+            cx.declare(&this, *ty)?;
+        }
+        for (param, (_, ty)) in func.params.iter().zip(params) {
             cx.declare(&param.name, *ty)?;
         }
         let body = cx.block(&func.body)?;
-        if func.ret.is_some() && !always_returns(&body) {
+        if ret.is_some() && !always_returns(&body) {
             return err(
                 Code::MissingReturn,
                 func.name.span,
                 format!(
-                    "function `{}` does not end with a `return` on every path",
+                    "{} `{}` does not end with a `return` on every path",
+                    if func.name.name == "constructor" {
+                        "the constructor of"
+                    } else {
+                        "function"
+                    },
                     func.name.name
                 ),
             );
@@ -716,6 +803,96 @@ fn foreign_interface(deps: &Dependencies, f: &ast::ForeignName) -> Result<wit_pa
     }
 }
 
+/// The signature of a function: its parameters, with `self` first for a method, and its
+/// return type, the resource for a constructor.
+fn signature(
+    resolver: &Resolver,
+    types: &mut Types,
+    func: &ast::Func,
+    kind: hir::FuncKind,
+    iface: InterfaceId,
+) -> Result<hir::FuncDef> {
+    let mut params = Vec::new();
+    if let hir::FuncKind::Method(r) = kind {
+        let ty = types.decl_type(r);
+        params.push(("self".to_string(), types.intern(TypeKind::Borrow(ty))));
+    }
+    for p in &func.params {
+        let ty = resolver.resolve(types, &p.ty, Some(iface))?;
+        // `borrow<T>` is the type of a parameter, never part of one (E0219).
+        if let TypeKind::Borrow(inner) = types.kind(ty) {
+            no_borrow(types, *inner, p.ty.span)?;
+        } else {
+            no_borrow(types, ty, p.ty.span)?;
+        }
+        params.push((p.name.name.clone(), ty));
+    }
+    let ret = match (&func.ret, kind) {
+        (_, hir::FuncKind::Constructor(r)) => Some(types.decl_type(r)),
+        (Some(ty), _) => {
+            let t = resolver.resolve(types, ty, Some(iface))?;
+            no_borrow(types, t, ty.span)?;
+            Some(t)
+        }
+        (None, _) => None,
+    };
+    Ok(hir::FuncDef {
+        name: func.name.name.clone(),
+        kind,
+        interface: iface,
+        params,
+        ret,
+        locals: Vec::new(),
+        body: Vec::new(),
+    })
+}
+
+/// `borrow<T>` anywhere in `ty`, which is not the type of a parameter (E0219).
+pub(super) fn no_borrow(types: &Types, ty: Type, span: Span) -> Result<()> {
+    let mut stack = vec![ty];
+    while let Some(t) = stack.pop() {
+        if let TypeKind::Borrow(_) = types.kind(t) {
+            return err(
+                Code::BorrowMisuse,
+                span,
+                format!(
+                    "`{}` is only allowed as the type of a parameter: a borrowed resource cannot be kept, stored or returned",
+                    types.display(t)
+                ),
+            );
+        }
+        if types.decl(t).is_none() {
+            stack.extend(types.children(t));
+        }
+    }
+    Ok(())
+}
+
+/// Fields and functions of a resource declared twice, or two constructors (E0202).
+fn check_resource_members(res: &ast::ResourceDecl) -> Result<()> {
+    let mut seen: Vec<&str> = Vec::new();
+    let names = res
+        .fields
+        .iter()
+        .map(|f| &f.name)
+        .chain(res.funcs.iter().map(|f| &f.func.name));
+    for name in names {
+        if seen.contains(&name.name.as_str()) {
+            let what = if name.name == "constructor" {
+                format!("resource `{}` already has a constructor", res.name.name)
+            } else {
+                format!(
+                    "`{}` is already declared in resource `{}`: its fields and functions share one namespace",
+                    name.name, res.name.name
+                )
+            };
+            return err(Code::DuplicateFunc, name.span, what);
+        }
+        seen.push(&name.name);
+    }
+    Ok(())
+}
+
 /// Fields, cases or flags declared twice (E0207), more than 32 flags (E0212).
 fn check_members(decl: &ast::TypeDecl) -> Result<()> {
     let (what, names): (&str, Vec<&Ident>) = match &decl.kind {
@@ -774,6 +951,7 @@ fn inhabited_decls(types: &Types) -> Vec<bool> {
 fn decl_has_value(types: &Types, inhabited: &[bool], id: DeclId) -> bool {
     match &types.decls[id].kind {
         DeclKind::Record(fields) => fields.iter().all(|f| has_value(types, inhabited, f.ty)),
+        DeclKind::Resource(r) => r.fields.iter().all(|f| has_value(types, inhabited, f.ty)),
         DeclKind::Variant(cases) => cases
             .iter()
             .any(|c| c.payload.is_none_or(|t| has_value(types, inhabited, t))),
@@ -787,7 +965,8 @@ fn has_value(types: &Types, inhabited: &[bool], ty: Type) -> bool {
         | TypeKind::Char
         | TypeKind::String
         | TypeKind::List { .. }
-        | TypeKind::Option(_) => true,
+        | TypeKind::Option(_)
+        | TypeKind::Borrow(_) => true,
         TypeKind::Tuple(elems) => elems.iter().all(|&t| has_value(types, inhabited, t)),
         TypeKind::Result { ok, err } => {
             ok.is_none_or(|t| has_value(types, inhabited, t))
@@ -801,8 +980,13 @@ fn has_value(types: &Types, inhabited: &[bool], ty: Type) -> bool {
 /// or the cases of a variant.
 fn why_empty(types: &Types, inhabited: &[bool], id: DeclId) -> String {
     let display = |t: Type| format!("`{}`", types.display(t));
-    match &types.decls[id].kind {
-        DeclKind::Record(fields) => {
+    let fields = match &types.decls[id].kind {
+        DeclKind::Record(fields) => Some(fields),
+        DeclKind::Resource(r) => Some(&r.fields),
+        _ => None,
+    };
+    match fields {
+        Some(fields) => {
             let field = fields
                 .iter()
                 .find(|f| !has_value(types, inhabited, f.ty))
@@ -958,6 +1142,22 @@ impl Resolver<'_> {
                     return Ok(t);
                 }
                 TypeKind::Decl(self.decl(name, iface)?)
+            }
+            K::Borrow(name) => {
+                let decl = self.decl(name, iface)?;
+                if !matches!(types.decls[decl].kind, DeclKind::Resource(_)) {
+                    return err(
+                        Code::BorrowMisuse,
+                        name.span(),
+                        format!(
+                            "`borrow<{}>`: only a resource can be borrowed, and `{}` is a {}",
+                            types.display(types.decl_type_of(decl)),
+                            name.name.name,
+                            types.decls[decl].kind.keyword()
+                        ),
+                    );
+                }
+                TypeKind::Borrow(types.decl_type(decl))
             }
         };
         Ok(types.intern(kind))

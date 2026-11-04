@@ -220,7 +220,7 @@ This section gives the checks of § 10.2 and § 10.5 used by § 12.2 to § 12.4.
 
 The built-in functions of § 8.17 use the same code without the trap: `T::wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg` and `wrapping_from` are the instructions and the normalization of § 12.2 to § 12.4, without the test; `T::checked_add`, `checked_sub` and `checked_mul` compute the same test and build `option::none` or `option::some` of the result instead of trapping.
 
-## 12.10 Resources and handles (specified, not available yet)
+## 12.10 Resources and handles
 
 **Resources of the package.** In a world that does not import its interface, a resource `r` is a struct, built like a record from its fields in declaration order, with `mut` fields as `(mut T')`:
 
@@ -234,7 +234,7 @@ The built-in functions of § 8.17 use the same code without the trap: `T::wrappi
 
 The table of handles that other components hold on these objects is part of the boundary (§ 13.11).
 
-**Handles.** In a world that imports the interface of a resource, or for a resource of another package, a value of the resource is an `i32` handle:
+**Handles** (*specified, not available yet*). In a world that imports the interface of a resource, or for a resource of another package, a value of the resource is an `i32` handle:
 
 | WaSL | Wasm |
 |---|---|

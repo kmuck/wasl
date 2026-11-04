@@ -36,6 +36,7 @@ pub enum Code {
     DuplicateImport,
     InterfaceNameClash,
     UnimportedCall,
+    BorrowMisuse,
     // Names
     UnknownName,
     UnknownFunc,
@@ -45,6 +46,8 @@ pub enum Code {
     UnknownType,
     UnknownField,
     UnknownCase,
+    UnknownMethod,
+    PrivateField,
     // Types
     TypeMismatch,
     LiteralOutOfRange,
@@ -106,6 +109,7 @@ impl Code {
             Code::DuplicateImport => "E0216",
             Code::InterfaceNameClash => "E0217",
             Code::UnimportedCall => "E0221",
+            Code::BorrowMisuse => "E0219",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",
@@ -114,6 +118,8 @@ impl Code {
             Code::UnknownType => "E0305",
             Code::UnknownField => "E0306",
             Code::UnknownCase => "E0307",
+            Code::UnknownMethod => "E0308",
+            Code::PrivateField => "E0309",
             Code::TypeMismatch => "E0400",
             Code::LiteralOutOfRange => "E0401",
             Code::UntypedLiteral => "E0402",

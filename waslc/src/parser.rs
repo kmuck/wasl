@@ -176,6 +176,13 @@ impl Parser {
                 }
             }
             TokenKind::Ident(_) => TypeExprKind::Named(self.type_name()?),
+            TokenKind::Borrow => {
+                self.bump();
+                self.expect(&TokenKind::Lt, "`<`")?;
+                let name = self.type_name()?;
+                self.close_angle()?;
+                TypeExprKind::Borrow(name)
+            }
             _ => return Err(self.unexpected("a type")),
         };
         Ok(TypeExpr {
@@ -265,6 +272,7 @@ impl Parser {
                 TokenKind::Record | TokenKind::Enum | TokenKind::Variant | TokenKind::Flags => {
                     InterfaceItem::Type(self.type_decl()?)
                 }
+                TokenKind::Resource => InterfaceItem::Resource(self.resource()?),
                 TokenKind::Global => {
                     return err(
                         Code::Syntax,
@@ -273,14 +281,85 @@ impl Parser {
                     );
                 }
                 _ => {
-                    return Err(
-                        self.unexpected("`func`, `record`, `enum`, `variant`, `flags` or `}`")
-                    );
+                    return Err(self.unexpected(
+                        "`func`, `record`, `enum`, `variant`, `flags`, `resource` or `}`",
+                    ));
                 }
             };
             items.push(item);
         }
         Ok(Interface { name, items })
+    }
+
+    /// `resource` declaration (§ 7.12): fields, each followed by `,`, then the
+    /// constructor, methods and static functions.
+    fn resource(&mut self) -> Result<ResourceDecl> {
+        self.bump();
+        let name = self.ident("a resource name")?;
+        self.expect(&TokenKind::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        let mut funcs = Vec::new();
+        while !self.eat(&TokenKind::RBrace) {
+            match self.peek() {
+                TokenKind::Ident(_) => {
+                    let field = self.ident("a field name")?;
+                    self.expect(&TokenKind::Colon, "`:` (the type of a field is required)")?;
+                    let mutable = self.eat(&TokenKind::Mut);
+                    let ty = self.ty()?;
+                    self.expect(
+                        &TokenKind::Comma,
+                        "`,` (each field of a resource ends with `,`)",
+                    )?;
+                    fields.push(Field {
+                        name: field,
+                        mutable,
+                        ty,
+                    });
+                }
+                TokenKind::Constructor => {
+                    let span = self.span();
+                    let mut func = self.func_rest(Ident {
+                        name: "constructor".into(),
+                        span,
+                    })?;
+                    if let Some(ret) = func.ret.take() {
+                        return err(
+                            Code::Syntax,
+                            ret.span,
+                            "a constructor has no return type: it returns its resource",
+                        );
+                    }
+                    funcs.push(ResourceFunc {
+                        kind: ResourceFuncKind::Constructor,
+                        func,
+                    });
+                }
+                TokenKind::Func => funcs.push(ResourceFunc {
+                    kind: ResourceFuncKind::Method,
+                    func: self.func()?,
+                }),
+                TokenKind::Static => {
+                    self.bump();
+                    if *self.peek() != TokenKind::Func {
+                        return Err(self.unexpected("`func` after `static`"));
+                    }
+                    funcs.push(ResourceFunc {
+                        kind: ResourceFuncKind::Static,
+                        func: self.func()?,
+                    });
+                }
+                _ => {
+                    return Err(
+                        self.unexpected("a field, `constructor`, `func`, `static func` or `}`")
+                    );
+                }
+            }
+        }
+        Ok(ResourceDecl {
+            name,
+            fields,
+            funcs,
+        })
     }
 
     /// `record`, `enum`, `variant` or `flags` declaration (§ 7.7).
@@ -364,6 +443,15 @@ impl Parser {
     fn func(&mut self) -> Result<Func> {
         self.bump();
         let name = self.ident("a function name")?;
+        self.func_rest(name)
+    }
+
+    /// The parameters, return type and body of a function, after its name (or after the
+    /// keyword `constructor`).
+    fn func_rest(&mut self, name: Ident) -> Result<Func> {
+        if name.name == "constructor" {
+            self.bump();
+        }
         self.expect(&TokenKind::LParen, "`(`")?;
         let mut params = Vec::new();
         if !self.eat(&TokenKind::RParen) {
@@ -453,13 +541,27 @@ impl Parser {
                 self.expect(&TokenKind::Semi, "`;`")?;
                 StmtKind::Return(value)
             }
-            TokenKind::Ident(_) => match self.peek_at(1) {
+            TokenKind::Ident(_) | TokenKind::SelfKw => match self.peek_at(1) {
                 TokenKind::Eq | TokenKind::Dot | TokenKind::LBracket => {
+                    // An assignment, or a method call: `c.add(x);`.
+                    let saved = self.pos;
                     let target = self.place()?;
-                    self.expect(&TokenKind::Eq, "`=` (a statement that starts with a name followed by `.` or `[` is an assignment)")?;
-                    let value = self.expr()?;
-                    self.expect(&TokenKind::Semi, "`;`")?;
-                    StmtKind::Assign { target, value }
+                    if *self.peek() == TokenKind::Eq {
+                        self.bump();
+                        if target.name.name == "self" && target.selectors.is_empty() {
+                            return err(
+                                Code::Syntax,
+                                start,
+                                "`self` cannot be assigned; its `mut` fields can",
+                            );
+                        }
+                        let value = self.expr()?;
+                        self.expect(&TokenKind::Semi, "`;`")?;
+                        StmtKind::Assign { target, value }
+                    } else {
+                        self.pos = saved;
+                        self.call_stmt(start)?
+                    }
                 }
                 TokenKind::LParen | TokenKind::ColonColon => self.call_stmt(start)?,
                 _ => {
@@ -489,18 +591,10 @@ impl Parser {
                     "`=` (`_ = f(…);` discards the value of a call)",
                 )?;
                 let value_start = self.span();
-                let path = match self.path_segments() {
-                    Ok(path) if *self.peek() == TokenKind::LParen => path,
-                    _ => {
-                        return err(
-                            Code::Syntax,
-                            value_start,
-                            "only the value of a function call can be discarded: `_ = f(…);`",
-                        );
-                    }
-                };
-                let call = self.call_args(path)?;
-                let value = self.tries(call, value_start);
+                let value = self.call_expr(
+                    value_start,
+                    "only the value of a function call can be discarded: `_ = f(…);`",
+                )?;
                 self.expect(&TokenKind::Semi, "`;`")?;
                 StmtKind::Discard(value)
             }
@@ -524,38 +618,39 @@ impl Parser {
 
     /// A call used as a statement: `f(…);`, `i::f(…);`.
     fn call_stmt(&mut self, start: Span) -> Result<StmtKind> {
-        let path = self.path_segments()?;
-        if *self.peek() != TokenKind::LParen {
-            return err(
-                Code::Syntax,
-                start,
-                "invalid statement: only an assignment or a function call can start with a name",
-            );
-        }
-        let call = self.call_args(path)?;
-        let value = self.tries(call, start);
+        let value = self.call_expr(
+            start,
+            "invalid statement: only an assignment or a function call can start with a name",
+        )?;
         self.expect(&TokenKind::Semi, "`;`")?;
         Ok(StmtKind::Call(value))
     }
 
-    /// A call of a call statement, followed by any number of `?` (§ 5.3).
-    fn tries(&mut self, call: Call, start: Span) -> Expr {
-        let mut expr = Expr {
-            kind: ExprKind::Call(call),
-            span: start.to(self.prev_span()),
-        };
-        while self.eat(&TokenKind::Question) {
-            expr = Expr {
-                kind: ExprKind::Try(Box::new(expr)),
-                span: start.to(self.prev_span()),
-            };
+    /// The expression of a call statement (§ 5.3): a call or a method call, possibly
+    /// followed by `?`.
+    fn call_expr(&mut self, start: Span, message: &str) -> Result<Expr> {
+        let expr = self.postfix()?;
+        let mut inner = &expr;
+        while let ExprKind::Try(e) = &inner.kind {
+            inner = e;
         }
-        expr
+        if !matches!(inner.kind, ExprKind::Call(_) | ExprKind::Method { .. }) {
+            return err(Code::Syntax, start, message);
+        }
+        Ok(expr)
     }
 
     /// Target of an assignment: `x`, `inv.status`, `rows[i].cells[j]`.
     fn place(&mut self) -> Result<Place> {
-        let name = self.ident("a name")?;
+        let name = if *self.peek() == TokenKind::SelfKw {
+            let span = self.bump().span;
+            Ident {
+                name: "self".into(),
+                span,
+            }
+        } else {
+            self.ident("a name")?
+        };
         let mut selectors = Vec::new();
         loop {
             match self.peek() {
@@ -874,6 +969,15 @@ impl Parser {
                 TokenKind::Dot => {
                     self.bump();
                     match self.dot_selector()? {
+                        Selector::Field(name) if *self.peek() == TokenKind::LParen => {
+                            self.bump();
+                            let args = self.expr_list(&TokenKind::RParen, "`)`", false)?;
+                            ExprKind::Method {
+                                receiver: Box::new(expr),
+                                name,
+                                args,
+                            }
+                        }
                         Selector::Field(name) => ExprKind::Field {
                             expr: Box::new(expr),
                             name,
@@ -936,6 +1040,10 @@ impl Parser {
                 ExprKind::Bool(false)
             }
             TokenKind::Ident(_) => self.name_expr()?,
+            TokenKind::SelfKw => {
+                self.bump();
+                ExprKind::Name("self".into())
+            }
             TokenKind::KwChar | TokenKind::KwString if *self.peek_at(1) == TokenKind::LParen => {
                 self.conversion()?
             }
@@ -1059,6 +1167,7 @@ fn expr_span(kind: &ExprKind) -> Span {
         | ExprKind::Elem { expr, .. }
         | ExprKind::Index { expr, .. }
         | ExprKind::Try(expr) => expr.span,
+        ExprKind::Method { receiver, .. } => receiver.span,
         _ => unreachable!(),
     }
 }

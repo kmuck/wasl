@@ -10,7 +10,7 @@ use wasm_encoder::{BlockType, Function, HeapType, Instruction, MemArg, ValType};
 use super::helpers::Helper;
 use super::{ModuleCx, ref_type};
 use crate::hir::{FuncDef, FuncId};
-use crate::types::{DeclKind, Prim, Type, TypeKind, Types};
+use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
 
 use Instruction as I;
 
@@ -38,6 +38,18 @@ pub(crate) enum Boundary {
     LiftList(Type),
     /// `(T') -> (ptr, len)`: lowers a string or a list into new memory.
     LowerList(Type),
+    /// `(handle) -> r`: takes the object of an `own` handle of an exported resource,
+    /// and drops the handle (§ 12.10).
+    LiftOwn(DeclId),
+    /// `(rep) -> r`: the object of a `borrow` of an exported resource, which the
+    /// Component Model passes as its rep.
+    LiftBorrow(DeclId),
+    /// `(r) -> handle`: stores the object in a free slot of the table and creates an
+    /// `own` handle for it.
+    LowerOwn(DeclId),
+    /// `(rep)`: the destructor of an exported resource, called when the last handle is
+    /// dropped: frees the slot.
+    Dtor(DeclId),
 }
 
 // ---- Layout of the Canonical ABI ----
@@ -145,9 +157,11 @@ pub(super) fn size_align(types: &Types, ty: Type) -> (u32, u32) {
         },
         TypeKind::Char => 4,
         TypeKind::String | TypeKind::List { .. } => return (8, 4),
+        TypeKind::Borrow(_) => 4,
         TypeKind::Decl(d) => match &types.decls[*d].kind {
             DeclKind::Enum(cases) => discriminant_size(cases.len()),
             DeclKind::Flags(flags) => flags_size(flags.len()),
+            DeclKind::Resource(_) => 4,
             _ => unreachable!("handled above"),
         },
         _ => unreachable!("handled above"),
@@ -438,6 +452,9 @@ impl<'c, 'a> Gen<'c, 'a> {
             read(self, pos, ValType::I32);
             read(self, pos + 1, ValType::I32);
             self.call(Boundary::LiftList(ty));
+        } else if let Some(lift) = lift_handle(types, ty) {
+            read(self, pos, ValType::I32);
+            self.call(lift);
         } else {
             let want = flat(types, ty)[0];
             read(self, pos, want);
@@ -538,6 +555,11 @@ impl<'c, 'a> Gen<'c, 'a> {
         if matches!(types.kind(ty), TypeKind::String | TypeKind::List { .. }) {
             self.code.extend(value.iter().cloned());
             self.call(Boundary::LowerList(ty));
+            return;
+        }
+        if let Some((d, _)) = types.resource(ty) {
+            self.code.extend(value.iter().cloned());
+            self.call(Boundary::LowerOwn(d));
             return;
         }
         let val = self.cx.val(ty);
@@ -645,6 +667,10 @@ impl<'c, 'a> Gen<'c, 'a> {
         if types.is_scalar(ty) {
             return;
         }
+        if let Some((d, _)) = types.resource(ty) {
+            self.call(Boundary::LowerOwn(d));
+            return;
+        }
         if let Some(fields) = fields(types, ty) {
             // A single flat value: a single field.
             let index = self.cx.heap(ty);
@@ -701,6 +727,10 @@ impl Boundary {
                     g.dispatch(disc, payloads.len(), result, |g, k| {
                         g.case(ty, k, payloads[k as usize], |g, p| g.lift_at(p, 0, offset))
                     });
+                } else if let Some(lift) = lift_handle(types, ty) {
+                    g.emit(I::LocalGet(0));
+                    g.emit(I::I32Load(mem(0, 2)));
+                    g.call(lift);
                 } else {
                     // A string or a list: (ptr, len).
                     g.emit(I::LocalGet(0));
@@ -729,6 +759,11 @@ impl Boundary {
                     }
                 } else if let Some(payloads) = cases(types, ty) {
                     lower_variant(&mut g, ty, &payloads);
+                } else if let Some((d, _)) = types.resource(ty) {
+                    g.emit(I::LocalGet(1));
+                    g.emit(I::LocalGet(0));
+                    g.call(Boundary::LowerOwn(d));
+                    g.emit(I::I32Store(mem(0, 2)));
                 } else {
                     // A string or a list: (ptr, len).
                     let (ptr, len) = (g.local(ValType::I32), g.local(ValType::I32));
@@ -747,6 +782,19 @@ impl Boundary {
             }
             Boundary::LiftList(ty) => lift_list(cx, ty),
             Boundary::LowerList(ty) => lower_list(cx, ty),
+            Boundary::LiftOwn(d) => lift_own(cx, d),
+            Boundary::LiftBorrow(d) => {
+                let rt = cx.resources[&d];
+                let (object, reps) = handle_types(cx, d);
+                let mut g = Gen::new(cx, vec![ValType::I32]);
+                g.emit(I::GlobalGet(rt.reps));
+                g.emit(I::LocalGet(0));
+                g.emit(I::ArrayGet(reps));
+                g.emit(I::RefAsNonNull);
+                g.finish(vec![ref_type(object, false)])
+            }
+            Boundary::LowerOwn(d) => lower_own(cx, d),
+            Boundary::Dtor(d) => dtor(cx, d),
         }
     }
 }
@@ -1161,4 +1209,154 @@ fn import_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, 
         }
     };
     g.finish(results)
+}
+
+// ---- Resources (§ 12.10) ----
+
+/// The helper that lifts a handle of an exported resource, `own` or `borrow`.
+fn lift_handle(types: &Types, ty: Type) -> Option<Boundary> {
+    let (d, _) = types.resource(ty)?;
+    Some(match types.kind(ty) {
+        TypeKind::Borrow(_) => Boundary::LiftBorrow(d),
+        _ => Boundary::LiftOwn(d),
+    })
+}
+
+/// The struct type of a resource and the array type of its table.
+fn handle_types(cx: &mut ModuleCx, d: DeclId) -> (u32, u32) {
+    let object = cx.heap(cx.types.decl_type_of(d));
+    let reps = cx.array(wasm_encoder::StorageType::Val(ref_type(object, true)));
+    (object, reps)
+}
+
+/// `(handle) -> r`: `rep(handle)` gives the slot of the object; dropping the handle
+/// then runs the destructor, which frees the slot.
+fn lift_own(cx: &mut ModuleCx, d: DeclId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let rt = cx.resources[&d];
+    let (object, reps) = handle_types(cx, d);
+    let mut g = Gen::new(cx, vec![ValType::I32]);
+    let result = g.local(ref_type(object, false));
+    g.emit(I::GlobalGet(rt.reps));
+    g.emit(I::LocalGet(0));
+    g.emit(I::Call(rt.rep));
+    g.emit(I::ArrayGet(reps));
+    g.emit(I::LocalSet(result));
+    g.emit(I::LocalGet(0));
+    g.emit(I::Call(rt.drop));
+    g.emit(I::LocalGet(result));
+    g.emit(I::RefAsNonNull);
+    g.finish(vec![ref_type(object, false)])
+}
+
+/// `(r) -> handle`: takes a free slot (the last freed one, or a new one, growing the
+/// table and the stack of free slots together), stores the object there and creates a
+/// handle whose rep is the slot. Locals: object = 0.
+fn lower_own(cx: &mut ModuleCx, d: DeclId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let rt = cx.resources[&d];
+    let (object, reps) = handle_types(cx, d);
+    let frees = cx.array(wasm_encoder::StorageType::Val(ValType::I32));
+    let mut g = Gen::new(cx, vec![ref_type(object, false)]);
+    let (slot, cap) = (g.local(ValType::I32), g.local(ValType::I32));
+    let (new_reps, new_frees) = (
+        g.local(ref_type(reps, true)),
+        g.local(ref_type(frees, true)),
+    );
+    g.code.extend([
+        I::GlobalGet(rt.nfree),
+        I::If(BlockType::Empty),
+        // slot = frees[--nfree]
+        I::GlobalGet(rt.nfree),
+        I::I32Const(1),
+        I::I32Sub,
+        I::GlobalSet(rt.nfree),
+        I::GlobalGet(rt.frees),
+        I::GlobalGet(rt.nfree),
+        I::ArrayGet(frees),
+        I::LocalSet(slot),
+        I::Else,
+        // slot = used++
+        I::GlobalGet(rt.used),
+        I::LocalTee(slot),
+        I::I32Const(1),
+        I::I32Add,
+        I::GlobalSet(rt.used),
+        // cap = reps == null ? 0 : len(reps)
+        I::GlobalGet(rt.reps),
+        I::RefIsNull,
+        I::If(BlockType::Result(ValType::I32)),
+        I::I32Const(0),
+        I::Else,
+        I::GlobalGet(rt.reps),
+        I::ArrayLen,
+        I::End,
+        I::LocalTee(cap),
+        I::LocalGet(slot),
+        I::I32Eq,
+        I::If(BlockType::Empty),
+        // Grow both arrays to max(8, 2 × cap).
+        I::LocalGet(cap),
+        I::I32Const(1),
+        I::I32Shl,
+        I::I32Const(8),
+        I::LocalGet(cap),
+        I::I32Const(4),
+        I::I32GeU,
+        I::Select,
+        I::LocalTee(cap),
+        I::ArrayNewDefault(reps),
+        I::LocalSet(new_reps),
+        I::LocalGet(cap),
+        I::ArrayNewDefault(frees),
+        I::LocalSet(new_frees),
+        I::LocalGet(slot),
+        I::If(BlockType::Empty),
+        I::LocalGet(new_reps),
+        I::I32Const(0),
+        I::GlobalGet(rt.reps),
+        I::I32Const(0),
+        I::LocalGet(slot),
+        I::ArrayCopy {
+            array_type_index_dst: reps,
+            array_type_index_src: reps,
+        },
+        I::End,
+        I::LocalGet(new_reps),
+        I::GlobalSet(rt.reps),
+        I::LocalGet(new_frees),
+        I::GlobalSet(rt.frees),
+        I::End,
+        I::End,
+        // reps[slot] = object
+        I::GlobalGet(rt.reps),
+        I::LocalGet(slot),
+        I::LocalGet(0),
+        I::ArraySet(reps),
+        I::LocalGet(slot),
+        I::Call(rt.new),
+    ]);
+    g.finish(vec![ValType::I32])
+}
+
+/// `(rep)`: empties the slot and pushes it on the stack of free slots, which is as large
+/// as the table. Locals: rep = 0.
+fn dtor(cx: &mut ModuleCx, d: DeclId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let rt = cx.resources[&d];
+    let (object, reps) = handle_types(cx, d);
+    let frees = cx.array(wasm_encoder::StorageType::Val(ValType::I32));
+    let mut g = Gen::new(cx, vec![ValType::I32]);
+    g.code.extend([
+        I::GlobalGet(rt.reps),
+        I::LocalGet(0),
+        I::RefNull(HeapType::Concrete(object)),
+        I::ArraySet(reps),
+        I::GlobalGet(rt.frees),
+        I::GlobalGet(rt.nfree),
+        I::LocalGet(0),
+        I::ArraySet(frees),
+        I::GlobalGet(rt.nfree),
+        I::I32Const(1),
+        I::I32Add,
+        I::GlobalSet(rt.nfree),
+    ]);
+    g.finish(Vec::new())
 }

@@ -42,3 +42,9 @@ jobs:
           echo "sample: $sample"
           test "$(weasel call invoices::total "$sample")" = "ok(1170)"
           test "$(weasel call invoices::summary "$sample")" = '"Weasel & Co: invoice 42 for ACME (draft)"'
+      # A target program of 0.3: its resource is called by waslc/tests/resources.rs, and
+      # by examples/checkout once imported resources land.
+      - name: Build examples/catalog
+        if: matrix.crate == 'weasel'
+        working-directory: examples/catalog
+        run: cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- build catalog

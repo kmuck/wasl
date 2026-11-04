@@ -203,9 +203,21 @@ pub struct WorldDef {
     pub items: Vec<(bool, InterfaceId)>,
 }
 
+/// What a function is: a function of an interface, or a function of a resource
+/// (§ 7.12), whose type is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuncKind {
+    Free,
+    Constructor(DeclId),
+    /// Its first parameter is `self`, a `borrow` of the resource.
+    Method(DeclId),
+    Static(DeclId),
+}
+
 #[derive(Debug)]
 pub struct FuncDef {
     pub name: String,
+    pub kind: FuncKind,
     pub interface: InterfaceId,
     pub params: Vec<(String, Type)>,
     pub ret: Option<Type>,

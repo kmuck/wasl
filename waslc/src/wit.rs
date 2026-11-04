@@ -11,7 +11,7 @@ use wit_parser::{PackageId, Resolve, WorldId};
 
 use crate::deps::Dependencies;
 use crate::diag::{Code, Diagnostic, Result};
-use crate::hir::{InterfaceId, Program};
+use crate::hir::{FuncKind, InterfaceId, Program};
 use crate::package::Package;
 use crate::types::{DeclId, DeclKind, Type, TypeKind, Types};
 
@@ -198,6 +198,39 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                         .unwrap();
                     }
                 }
+                DeclKind::Resource(def) => {
+                    // The fields are private: only the functions appear (§ 13.1).
+                    writeln!(text, "  resource %{name} {{").unwrap();
+                    let funcs = def
+                        .constructor
+                        .iter()
+                        .chain(def.methods.iter().map(|(_, f)| f))
+                        .chain(def.statics.iter().map(|(_, f)| f));
+                    let mut funcs: Vec<usize> = funcs.copied().collect();
+                    funcs.sort();
+                    for f in funcs {
+                        let func = &program.funcs[f];
+                        let skip = matches!(func.kind, FuncKind::Method(_)) as usize;
+                        let params = wit_params(types, &func.params[skip..], &names);
+                        let ret = func
+                            .ret
+                            .map(|t| format!(" -> {}", wit_type(types, t, &names)))
+                            .unwrap_or_default();
+                        match func.kind {
+                            FuncKind::Constructor(_) => {
+                                writeln!(text, "    constructor({params});").unwrap()
+                            }
+                            FuncKind::Static(_) => writeln!(
+                                text,
+                                "    %{}: static func({params}){ret};",
+                                kebab(&func.name)
+                            )
+                            .unwrap(),
+                            _ => writeln!(text, "    %{}: func({params}){ret};", kebab(&func.name))
+                                .unwrap(),
+                        }
+                    }
+                }
                 DeclKind::Enum(cases) | DeclKind::Flags(cases) => {
                     writeln!(text, "  {} %{name} {{", decl.kind.keyword()).unwrap();
                     for c in cases {
@@ -211,22 +244,15 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
         if exported {
             for &f in &iface.funcs {
                 let func = &program.funcs[f];
-                let params: Vec<String> = func
-                    .params
-                    .iter()
-                    .map(|(name, ty)| format!("%{}: {}", kebab(name), wit_type(types, *ty, &names)))
-                    .collect();
+                if func.kind != FuncKind::Free {
+                    continue;
+                }
+                let params = wit_params(types, &func.params, &names);
                 let ret = func
                     .ret
                     .map(|t| format!(" -> {}", wit_type(types, t, &names)))
                     .unwrap_or_default();
-                writeln!(
-                    text,
-                    "  %{}: func({}){ret};",
-                    kebab(&func.name),
-                    params.join(", ")
-                )
-                .unwrap();
+                writeln!(text, "  %{}: func({}){ret};", kebab(&func.name), params).unwrap();
             }
         }
         writeln!(text, "}}").unwrap();
@@ -385,6 +411,15 @@ fn named_decls(types: &Types, ty: Type, found: &mut Vec<DeclId>) {
     }
 }
 
+/// WIT text of parameters: `%a: u32, %b: string`.
+fn wit_params(types: &Types, params: &[(String, Type)], names: &HashMap<DeclId, String>) -> String {
+    params
+        .iter()
+        .map(|(name, ty)| format!("%{}: {}", kebab(name), wit_type(types, *ty, names)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// WIT text of a type; `names` gives the name of each declared type in the interface.
 fn wit_type(types: &Types, ty: Type, names: &HashMap<DeclId, String>) -> String {
     match types.kind(ty) {
@@ -402,6 +437,7 @@ fn wit_type(types: &Types, ty: Type, names: &HashMap<DeclId, String>) -> String 
                 .join(", ")
         ),
         TypeKind::Option(inner) => format!("option<{}>", wit_type(types, *inner, names)),
+        TypeKind::Borrow(inner) => format!("borrow<{}>", wit_type(types, *inner, names)),
         TypeKind::Result { ok, err } => match (ok, err) {
             (None, None) => "result".into(),
             (Some(ok), None) => format!("result<{}>", wit_type(types, *ok, names)),
