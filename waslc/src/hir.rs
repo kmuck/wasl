@@ -33,7 +33,7 @@ pub struct GlobalDef {
     pub name: String,
     pub ty: Type,
     pub mutable: bool,
-    /// A constant expression (§ v2.4.12).
+    /// A constant expression (§ 8.18).
     pub init: Expr,
 }
 
@@ -82,7 +82,7 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
-    /// `match` (§ v2.4.9). Exactly one arm or the `else` block runs.
+    /// `match` (§ 8.16). Exactly one arm or the `else` block runs.
     Match {
         scrutinee: Expr,
         arms: Vec<MatchArm>,
@@ -194,14 +194,14 @@ pub enum ExprKind {
         expr: Box<Expr>,
         index: Box<Expr>,
     },
-    /// Call to a built-in function (§ v2.4.11).
+    /// Call to a built-in function (§ 8.17).
     Builtin {
         func: Builtin,
         args: Vec<Expr>,
     },
 }
 
-/// Built-in functions (§ v2.4.11).
+/// Built-in functions (§ 8.17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
     StringLen,
@@ -215,7 +215,7 @@ pub enum Builtin {
     ListCopy,
     ListFreeze,
     /// `T::wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`: the result
-    /// modulo 2ⁿ (§ v2.5.6).
+    /// modulo 2ⁿ (§ 10.2).
     Wrapping(Arith),
     /// `T::checked_add`, `checked_sub`, `checked_mul`: `option::none` on overflow.
     Checked(Arith),
@@ -223,7 +223,7 @@ pub enum Builtin {
     WrappingFrom,
 }
 
-/// Integer arithmetic that can overflow (§ v2.5.6).
+/// Integer arithmetic that can overflow (§ 10.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Arith {
     Add,

@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The v0.2 specification is frozen. The [v0.3 specification](docs/spec_v0.3/README.md) merges v0.1 and v0.2 into one complete document, without changing any rule; it will receive the features of 0.3. Its README maps the old `§ v2.x.y` numbers to the new ones, and the comments of the compiler cite the new numbers.
+- `ROADMAP.md`: the scope of 0.3, with its two target programs (`catalog` and `checkout` composed, and a WASI 0.2 `hello`).
+
 ## [0.2.0] - 2026-11-04
 
 Data on the WasmGC heap, implementing the [v0.2 specification](docs/spec_v0.2/README.md) (provisional until v0.3). The target program, [`examples/invoice`](examples/invoice), builds and runs in the continuous integration.

@@ -1,4 +1,4 @@
-//! Types of the language: primitive types (§ 7) and the types of v0.2 (§ v2.2).
+//! Types of the language: primitive types (§ 7.1) and the heap and declared types (§ 7.5).
 //!
 //! Types are interned in a [`Types`] table: a [`Type`] is a small copyable handle, and two
 //! handles are equal exactly when they designate the same type.
@@ -8,7 +8,7 @@ use std::fmt;
 
 use wasm_encoder::ValType;
 
-/// Primitive type of v0.1 (§ 7.1).
+/// Primitive type (§ 7.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Prim {
     Bool,
@@ -239,7 +239,7 @@ pub enum TypeKind {
     Decl(DeclId),
 }
 
-/// A type declared in an interface (§ v2.2.3).
+/// A type declared in an interface (§ 7.7).
 #[derive(Debug)]
 pub struct TypeDecl {
     pub name: String,
@@ -274,7 +274,7 @@ pub struct FieldDef {
     pub ty: Type,
 }
 
-/// A part of a type that can change (§ v2.2.7).
+/// A part of a type that can change (§ 7.11).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mutable {
     /// A `list<mut T>`.
@@ -392,7 +392,7 @@ impl Types {
     }
 
     /// The first part of `ty` that can change, if any: a `list<mut T>`, or a record with
-    /// a `mut` field (§ v2.2.7).
+    /// a `mut` field (§ 7.11).
     pub fn first_mutable(&self, ty: Type) -> Option<Mutable> {
         let mut seen = Vec::new();
         let mut stack = vec![ty];
@@ -419,7 +419,7 @@ impl Types {
         None
     }
 
-    /// Whether a declared type is part of a cycle of types (§ v2.2.5).
+    /// Whether a declared type is part of a cycle of types (§ 7.9).
     pub fn is_recursive(&self, id: DeclId) -> bool {
         let start = self.decl_type_of(id);
         let mut seen = Vec::new();
@@ -438,7 +438,7 @@ impl Types {
     }
 
     /// Whether the type is a scalar: a primitive type, `char`, an enum or a flags type
-    /// (§ v2.2.1).
+    /// (§ 7.5).
     pub fn is_scalar(&self, ty: Type) -> bool {
         match self.kind(ty) {
             TypeKind::Prim(_) | TypeKind::Char => true,

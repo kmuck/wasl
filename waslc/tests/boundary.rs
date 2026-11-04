@@ -1,4 +1,4 @@
-//! Values that cross the component boundary (specification v0.2, chapter v2.7): the
+//! Values that cross the component boundary (specification, chapter 13): the
 //! adapters lift the arguments from linear memory and lower the results into it.
 
 use wasmtime::component::{Component, Instance, Linker, Val};
@@ -105,7 +105,7 @@ fn sample() -> Val {
     )
 }
 
-/// The target program of v0.2 (§ v2.10.1), called from the host.
+/// The target program of v0.2 (§ 15.3), called from the host.
 #[test]
 fn invoice_example() {
     use Val::*;
@@ -189,7 +189,7 @@ interface orders {
 }
 "#;
 
-/// A types-only interface (§ v2.7.1, open question 6): imported implicitly by a world
+/// A types-only interface (§ 13.1, open question 6): imported implicitly by a world
 /// that uses its types, or exported along with the interface that uses them.
 #[test]
 fn types_only_interface() {

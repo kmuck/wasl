@@ -1,5 +1,5 @@
 //! Analysis of function bodies and of the initial values of globals: names, typing and
-//! control flow (§ 8 to 10, chapter v2.4).
+//! control flow (§ 8 to 10, chapter 8).
 
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ use crate::hir::{self, Const, FuncId, InterfaceId, LocalId, Place};
 use crate::source::Span;
 use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
 
-/// A block always returns if one of its statements always returns (§ 8.8, § v2.4.15).
+/// A block always returns if one of its statements always returns (§ 8.8, § 8.8).
 pub(super) fn always_returns(stmts: &[hir::Stmt]) -> bool {
     stmts.iter().any(|s| match s {
         hir::Stmt::Return(_) => true,
@@ -23,7 +23,7 @@ pub(super) fn always_returns(stmts: &[hir::Stmt]) -> bool {
     })
 }
 
-/// Whether an expression determines its own type (§ v2.4.1). Numeric literals,
+/// Whether an expression determines its own type (§ 8.2). Numeric literals,
 /// `option::none`, `result::…`, `[]` and lists of literals take the expected type.
 fn self_typed(e: &ast::Expr) -> bool {
     if needs_type_context(e) {
@@ -46,7 +46,7 @@ fn self_typed(e: &ast::Expr) -> bool {
     }
 }
 
-/// What a path designates (§ v2.4.2).
+/// What a path designates (§ 9.8).
 enum PathTarget {
     Builtin(hir::Builtin),
     /// `option::c` or `result::c`, with `c` not yet checked.
@@ -195,7 +195,7 @@ impl<'a> FnCx<'a> {
                 let ty = self.resolver.resolve(self.types, written, self.iface)?;
                 // Without an initial value, a local starts at the default value of its Wasm
                 // type: zero for a scalar, null (`option::none`) for an option. The other
-                // types are non-nullable references, which have none (§ v2.4.13).
+                // types are non-nullable references, which have none (§ 9.4).
                 let has_default =
                     self.types.is_scalar(ty) || matches!(self.types.kind(ty), TypeKind::Option(_));
                 if init.is_none() && !has_default {
@@ -770,7 +770,7 @@ impl<'a> FnCx<'a> {
         ))
     }
 
-    // ---- Paths and calls (§ v2.4.2) ----
+    // ---- Paths and calls (§ 9.8) ----
 
     /// What the function name of a call designates.
     fn call_target(&self, call: &ast::Call) -> Result<PathTarget> {
@@ -818,7 +818,7 @@ impl<'a> FnCx<'a> {
         Ok(target)
     }
 
-    /// Resolves `path::name`, where `path` has one or two names (§ v2.4.2).
+    /// Resolves `path::name`, where `path` has one or two names (§ 9.8).
     fn resolve_path(&self, path: &[Ident], name: &Ident) -> Result<PathTarget> {
         let head = &path[0];
         let scopes = self.resolver.scopes;
@@ -969,7 +969,7 @@ impl<'a> FnCx<'a> {
     }
 
     /// A case or a constructor, with its arguments if written with parentheses
-    /// (§ v2.4.7, § v2.4.8).
+    /// (§ 8.14, § 8.15).
     fn construct(
         &mut self,
         target: PathTarget,
@@ -1128,7 +1128,7 @@ impl<'a> FnCx<'a> {
         }
     }
 
-    /// A call to a built-in function (§ v2.4.11).
+    /// A call to a built-in function (§ 8.17).
     fn builtin(
         &mut self,
         func: hir::Builtin,
@@ -1239,7 +1239,7 @@ impl<'a> FnCx<'a> {
         )
     }
 
-    /// A built-in function of an integer type `prim`: `u32::wrapping_add(a, b)`… (§ v2.4.11).
+    /// A built-in function of an integer type `prim`: `u32::wrapping_add(a, b)`… (§ 8.17).
     fn int_builtin(
         &mut self,
         func: hir::Builtin,
@@ -1352,7 +1352,7 @@ impl<'a> FnCx<'a> {
         }
     }
 
-    // ---- Literals (§ v2.4.4 to § v2.4.7) ----
+    // ---- Literals (§ 8.11 to § 8.14) ----
 
     fn record(
         &mut self,
@@ -1466,7 +1466,7 @@ impl<'a> FnCx<'a> {
             Some((t, TypeKind::List { elem, .. })) => (t, elem),
             Some((t, _)) => return self.mismatch_desc(span, t, "a list"),
             None => {
-                // The type of the first element that has one (§ v2.4.6).
+                // The type of the first element that has one (§ 8.13).
                 let Some(first) = elems.iter().position(self_typed) else {
                     return cannot_infer(span);
                 };
@@ -1538,7 +1538,7 @@ impl<'a> FnCx<'a> {
         }
     }
 
-    // ---- Field accesses and indexes (§ v2.4.5, § v2.4.6) ----
+    // ---- Field accesses and indexes (§ 8.12, § 8.13) ----
 
     fn field(&mut self, expr: &ast::Expr, name: &Ident) -> Result<hir::Expr> {
         let base = self.expr(expr, None)?;
@@ -1664,7 +1664,7 @@ impl<'a> FnCx<'a> {
         err(Code::InvalidOperator, span, message)
     }
 
-    // ---- Assignment and `match` (§ v2.4.14, § v2.4.9) ----
+    // ---- Assignment and `match` (§ 9.5, § 8.16) ----
 
     /// Target of an assignment with at least one selector: `inv.status`, `xs[i]`.
     fn place(&mut self, target: &ast::Place) -> Result<(Place, Type)> {
