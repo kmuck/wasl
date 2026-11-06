@@ -84,7 +84,7 @@ version = "0.1.0"
 
 Every command except `init` resolves the dependencies first (specification § 3.5). Registry packages are fetched with the crates of [`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools), configured by its usual file (`~/.config/wasm-pkg/config.toml`), cached by it, and pinned in `wkg.lock`.
 
-The project rules are defined by the [specification](../docs/spec_v0.3/03-projects.md) (chapter 3), and the commands by its [chapter 14](../docs/spec_v0.3/14-tooling.md).
+The project rules are defined by the [specification](../docs/spec_v0.4/03-projects.md) (chapter 3), and the commands by its [chapter 14](../docs/spec_v0.4/14-tooling.md).
 
 ## Output
 

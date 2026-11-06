@@ -1,0 +1,30 @@
+// Target program of WaSL v0.4 (docs/spec_v0.4, § 15.8): an HTTP service for WASI 0.3,
+// served with `weasel serve hello_http`. `GET /karim` answers `Hello, /karim!`. The
+// response is delivered with `task::return` before its body is written (§ 8.21).
+world hello_http {
+  import wasi:http/types;
+
+  export wasi:http/handler {
+    async func handle(request: types::request) -> result<types::response, types::error_code> {
+      local path: string = "/";
+      match (request.get_path_with_query()) {
+        case some(p) {
+          path = p;
+        }
+        case none {
+        }
+      }
+
+      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+      local (trailers: future<result<option<types::trailers>, types::error_code>>,
+             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future::new();
+      local (response: types::response, _) =
+        types::response::new(types::fields(), option::some(body), trailers);
+      task::return(result::ok(response));
+
+      _ = stream::write(body_tx, string::bytes("Hello, " + path + "!\n"));
+      stream::close(body_tx);
+      _ = future::write(trailers_tx, result::ok(option::none));
+    }
+  }
+}
