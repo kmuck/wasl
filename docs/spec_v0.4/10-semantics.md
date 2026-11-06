@@ -98,9 +98,12 @@ A **trap** stops the current call immediately. The host receives an error and th
 | heap exhausted | the runtime's out-of-memory message |
 | call stack exhaustion (recursion too deep) | `call stack exhausted` |
 | use of a moved handle: a method call or an argument with the empty handle `0` (§ 9.9) | `unknown handle index 0` |
+| a stream end given to another component after its other end has left: a read that returned `option::none`, or a write that returned fewer elements (§ 10.12) | `unknown handle index 4294967295` |
+| release of a `future_writer<T>` that has not written its value (§ 9.9, § 7.13) | `cannot drop future write end without first writing a value` |
+| every task waits and nothing can wake any of them, such as a task that reads a stream it writes itself (§ 10.12) | `deadlock detected: event loop cannot make further progress` |
 | a trap in an imported function, in the component or host that provides it | the message of that trap |
 
-Nothing else traps: float operations never trap, there is no null reference (the empty handle is not a reference), no failing cast, and no invalid UTF-8 (`string::from_bytes` returns `option::none`). Messages are those of the reference runtime; their exact text is not part of the language.
+The three traps of streams and futures are *specified, not available yet*. Nothing else traps: float operations never trap, there is no null reference (the empty handle is not a reference), no failing cast, and no invalid UTF-8 (`string::from_bytes` returns `option::none`). Messages are those of the reference runtime; their exact text is not part of the language.
 
 ## 10.8 References and sharing
 
@@ -147,6 +150,20 @@ The difference cannot be observed. The values that cross the boundary contain no
 
 **Handles.** A handle of an imported resource is released at the points of § 9.9, in this order at the end of a block: the locals in the reverse order of their declarations. Releasing a handle runs the destructor of the resource in the component that owns it, which is the only way a WaSL program runs code in another component without a call written in the source.
 
-**Calls to imported functions.** A call to a function of an imported interface evaluates its arguments from left to right, then transfers control to the component or the host that provides it (§ 13.10). Its arguments are copied (§ 10.10), except handles, which are moved or lent (§ 9.9). It cannot call the component back: a component that calls an import is not re-entered before the call returns, which the Component Model guarantees for synchronous calls.
+**Calls to imported functions.** A call to a function of an imported interface evaluates its arguments from left to right, then transfers control to the component or the host that provides it (§ 13.10). Its arguments are copied (§ 10.10), except handles, which are moved or lent (§ 9.9). It cannot call the component back: a component that calls an import is not re-entered by that call, which the Component Model guarantees. While a call to an async import waits, other tasks may run in the component (§ 10.12).
 
 **State of an imported interface of the package.** An interface of the package imported by a world (§ 2.5) runs in another instance, with its own globals: the importing component does not share the globals of that instance, even though the source code is the same.
+
+## 10.12 Tasks and async calls
+
+*Specified, not available yet.*
+
+- **A task** runs the body of an exported function for one call from outside (§ 2.8). It delivers its result once: at its `return e;`, at a `?` that propagates, at its `task::return(e);`, or at the end of its body when it has no return type. The caller resumes as soon as the result is delivered. After `task::return`, the task goes on running until its body ends.
+- **An async call** suspends the calling task until the callee delivers its result. A function of an imported interface runs in another component or in the host. A function of the package compiled into the component is a plain call, which returns when its body ends.
+- **Suspension points.** Each async call, including the async built-in functions, is a point where other tasks of the same instance may run, and change its `mut` globals and the `mut` fields of the objects it shares with them. Between two suspension points, a task runs alone: code without an async call is never interrupted. The order in which waiting tasks resume is the runtime's.
+- **Streams are rendezvous.** A stream has no buffer: `stream::write` waits until the reader reads, and `stream::read` waits until the writer writes. The elements arrive in order, never duplicated, and none is lost while both ends exist. A write waits for ever if nobody reads: a function that returns a stream must deliver it with `task::return` before writing to it (§ 8.21).
+- **A future** is written once and read once: `future::write` waits until the reader takes the value, `future::read` until the writer gives it.
+- **A reader or a writer that leaves.** When the readable end of a stream is released, the writer is told: `stream::write` returns fewer elements than it was given, then `0`. When the readable end of a future is released, `future::write` returns `false`. When the writable end of a stream is released or closed, the reader reads the remaining elements, then `option::none`. An end whose other end has left holds no handle any more: reading or writing it again is allowed and does nothing, giving it to another component traps (§ 10.7, § 12.12). A `future_writer<T>` must write its value before it is released (§ 10.7).
+- **Waiting for nothing.** When every task waits and nothing outside the component can wake any of them, the runtime traps (§ 10.7). A task that reads a stream that it writes itself is the simplest case.
+- **Cancellation.** A caller can ask the Component Model to cancel a task, for instance when an HTTP client disconnects. In 0.4, a WaSL task is not told: it runs to its end, and its writes to readers that have left return fewer elements or `false` (§ 16).
+- **Instances in 0.4.** The compiler of 0.4 never runs two async tasks of one instance at the same time: an async task that waits keeps the instance, and the other async calls to that instance wait for their turn (§ 13.13). A call to an exported function that is not async can still run while an async task waits. A host that serves several requests at once creates several instances, which `weasel serve` does (§ 14.2). Programs must not rely on this: when a later compiler interleaves the tasks of an instance (§ 16), the suspension points stay the only guarantee.

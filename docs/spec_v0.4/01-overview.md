@@ -29,12 +29,13 @@ Each decision follows from the principles of § 1.2. The rest of this specificat
 1. **The types are the types of WIT.** Each type has the name, the cases and the meaning of the WIT type of the same name; the WIT of a package is derived by erasure (§ 2.6). Types are declared **inside interfaces**, as in WIT, and named from another interface with a path, `invoices::line`.
 2. **Values live on the WasmGC heap.** A record is a WasmGC `struct`, a list a WasmGC `array`, a string an `array` of UTF-8 bytes. The component embeds no allocator and no collector: the runtime provides both (§ 1.1). Enums, flags and chars are plain integers, as in the Canonical ABI.
 3. **Reference semantics inside a component.** Assigning a record, a list or a string, or passing it to a function, copies a reference, as for objects in Java or JavaScript. Nothing is copied implicitly inside a component.
-4. **Copies at the boundary only.** A value that crosses the boundary of a component is deep-copied through linear memory, as the Canonical ABI requires today. Linear memory is used **only** as a scratch buffer for these copies, managed by a bump allocator that is reset after every call (§ 13.7). When runtimes support the `gc` option of the Canonical ABI, these copies disappear without changing the language (§ 16).
+4. **Copies at the boundary only.** A value that crosses the boundary of a component is deep-copied through linear memory, as the Canonical ABI requires today. Linear memory is used **only** as a scratch buffer for these copies, managed by a bump allocator that is reset after every call, with one region per task (§ 13.7). When runtimes support the `gc` option of the Canonical ABI, these copies disappear without changing the language (§ 16).
 5. **Mutability where WasmGC declares it.** A record field is immutable unless declared `mut`, exactly like a WasmGC struct field (§ 1.2, principle 2). A `list<T>` is immutable, for everyone and for ever, and only the elements of a `list<mut T>` can be assigned (§ 7.10). Strings and tuples are immutable. Mutability stays inside the component: the WIT has none, so the types that appear in it have no `mut` field and no `list<mut T>` (§ 7.11).
 6. **No null, and the defaults of Wasm.** Every value of a heap type is a valid value: there is no `null`, and the absence of a value is written `option<T>`, whose `none` is the null reference of Wasm. A local without initial value takes the default value of its Wasm type, which only scalars and options have: `0`, the first case of an enum, `option::none`. A local of another heap type needs an initial value (§ 9.4).
 7. **One way to write each thing.** A record literal lists its fields in declaration order; every constructor is written with its type (`option::some(x)`, `status::paid`); a variant is inspected only with `match`.
 8. **An integer is exact, or the call stops.** Integer arithmetic and conversions trap when their exact result does not fit in its type, instead of wrapping (§ 10.2). Wrapping remains available when it is written: `u32::wrapping_add(a, b)` is the plain `i32.add`. Wasm has both wrapping instructions (`i32.add`) and trapping ones (`i32.div_s`, `i32.trunc_f64_s`), and the `+` of WaSL checks its result.
 9. **No value is dropped silently.** Wasm removes an unused value with an explicit `drop`; WaSL writes it `_ = f();`. A call used as a statement must call a function without a return value (§ 9.6), so the error of a `result` cannot be lost by accident.
+10. **Async is the Component Model's.** An `async func` is the `async func` of WIT. A call to it waits for its result, as the synchronous lowering of the Component Model does, and nothing marks the call: there is no `await` (§ 2.8). Only an `async func` can call one, which is the rule of the Component Model, checked at compile time. Streams and futures are the `stream<T>` and `future<T>` of WIT, with their writable ends (§ 7.13), and `task::return` is the `task.return` of the Component Model, which delivers the result of a task before its end (§ 8.21). *Specified, not available yet.*
 
 ## 1.4 Scope
 
@@ -61,7 +62,19 @@ With these, every WIT type except resources (`own`, `borrow`) and async types (`
 
 With these, every WIT type except async types (`stream`, `future`) has its WaSL equivalent, and a WaSL component can run as a WASI 0.2 command (§ 15.6).
 
-**Not yet available** ([ROADMAP.md](../../ROADMAP.md), chapter 16): type aliases (`type`), `use` in source code, async and WASI 0.3, `weasel run` and `weasel serve`, string formatting, a standard library.
+**Added in 0.4** (*specified, not available yet*):
+
+- async functions: their declaration, calls that wait without a marker, and the rule that only an async function calls one (§ 2.8, § 8.21);
+- `stream<T>` and `future<T>`, their writable ends `stream_writer<T>` and `future_writer<T>`, and their built-in functions (§ 7.13, § 8.21);
+- `task::return`, which delivers the result of an exported async function before its end (§ 8.21);
+- tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12);
+- WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2);
+- the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12);
+- `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2).
+
+With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and `future` without an element type has its WaSL equivalent, and a WaSL component can run as a WASI 0.3 command (§ 15.7) or HTTP service (§ 15.8).
+
+**Not yet available** ([ROADMAP.md](../../ROADMAP.md), chapter 16): type aliases (`type`), `use` in source code, concurrency inside a task (`async f(x)`, § 16), cancellation, string formatting, a standard library.
 
 A component whose exported functions only exchange scalars uses neither WasmGC at the boundary, nor linear memory, nor imports (§ 13.6).
 
@@ -99,7 +112,10 @@ wasl.toml + src/**/*.wasl
 | **Export** | An interface that a component provides to its host or to other components. |
 | **Import** | An interface that a component needs and that its host or another component provides (§ 2.5). |
 | **Resource** | A Component Model type with an identity and methods, reached from outside its component only through a handle (§ 7.12). |
-| **Handle** | An `i32` that designates a resource owned by another component, in the handle table of the current instance (§ 9.9). |
+| **Handle** | An `i32` that designates a resource owned by another component, or an end of a stream or a future, in the handle table of the current instance (§ 9.9). |
+| **Task** | One call of an exported function, as the Component Model runs it. It delivers its result once, with `task.return`, and may keep running after (§ 2.8). |
+| **Async function** | A function declared `async func`, the `async func` of WIT: a call to it may wait, and other tasks may run while it waits (§ 2.8). |
+| **Stream**, **future** | Values of the Component Model that carry data from one component to another over time: a sequence of values for `stream<T>`, one value for `future<T>`. Each has a readable end and a writable end, both handles (§ 7.13). |
 | **Dependency** | Another package whose interfaces a project imports or implements, declared in `wasl.toml` (§ 3.5). |
 | **Canonical ABI** | The rules that translate component-level values into core Wasm values when crossing the boundary of a component. |
 | **WasmGC** | The garbage collection proposal of WebAssembly, part of WebAssembly 3.0: typed structs and arrays allocated and reclaimed by the runtime. |
@@ -139,3 +155,19 @@ Version 0.3 accepts every valid v0.2 program with the same behavior. `resource`,
 |---|---|
 | `?` is a token (§ 4.10) | `?` reports a syntax error (E0100) where it is misplaced, instead of E0001 |
 | `wasl.toml` accepts a `[dependencies]` table (§ 3.2) | a manifest with `[dependencies]` is no longer E0200 |
+
+## 1.9 Changes from v0.3
+
+Version 0.4 accepts every valid v0.3 program with the same behavior. `async`, `stream` and `future` were already reserved (§ 4.4) and become a keyword and type names; the only other changes are:
+
+| Change | Effect on v0.3 programs |
+|---|---|
+| `task` is a keyword, `stream_writer` and `future_writer` are type names, `subtask` is reserved (§ 4.4) | an identifier named `task`, `stream_writer`, `future_writer` or `subtask` is now E0005 |
+| `await` has its own error (§ 4.4) | `await` reports E0101 instead of E0005 |
+| a tuple can hold handles, as a temporary (§ 7.12) | a function that returns `tuple<carts::cart, u32>` is no longer E0220 |
+| `local` can destructure a tuple (§ 9.4) | `local (a: u32, b: u32) = t;` is no longer E0100 |
+| the items of a foreign interface that use `stream<T>`, `future<T>` or `async` functions can be used (§ 2.5) | they are no longer E0215 |
+| a foreign interface with `async` functions can be exported (§ 13.12) | `export wasi:cli/run { … }` for WASI 0.3 is no longer E0218 |
+| a WIT name with uppercase letters is written in lowercase (§ 13.2) | `error_code::dns_timeout` names `DNS-timeout`, which was E0215 |
+
+All of these are *specified, not available yet*.

@@ -49,11 +49,14 @@ Targets:
 
 ### 0.4: async and WASI 0.3
 
-- `async func`, `.await`, `stream<T>`, `future<T>`.
-- Worlds implementing `wasi:cli/run` and `wasi:http/handler`.
-- `weasel run <world>` and `weasel serve <world>`.
+- `async func`, with the async model of the Component Model: a call to an async function waits for its result, without `await`, and only an async function can call one (§ 2.8).
+- `stream<T>`, `future<T>`, their writable ends and their built-in functions (§ 7.13, § 8.21); `task::return` to deliver a result before the end of the function, such as an HTTP response before its body (§ 8.21).
+- Tuple destructuring, `local (a: A, b: B) = e;`, for the tuples of handles that WASI 0.3 returns (§ 9.4).
+- Worlds implementing `wasi:cli/run` and `wasi:http/handler` of WASI 0.3.
+- `weasel run <world>`, `weasel serve <world>` and `weasel init --template cli|http` (§ 14.2).
+- Components run one async task at a time per instance; `weasel serve` gives each concurrent request its own instance (§ 13.13).
 
-Target: a hello-world command-line program and a small HTTP service served by wasmtime.
+Targets: `hello` for WASI 0.3, run with `weasel run` (§ 15.7), and `hello-http`, a small HTTP service served by `weasel serve` and called with `curl` in CI (§ 15.8).
 
 ### 0.5: standard library and tooling
 
@@ -77,7 +80,8 @@ These land whenever a version needs them, rather than being tied to one:
 - hexadecimal and binary literals, digit separators, exponents;
 - `///` documentation comments copied into the WIT;
 - unqualified constructors where the expected type is known (§ 16, question 2);
-- structural equality of heap values (§ 16, question 4).
+- structural equality of heap values (§ 16, question 4);
+- type aliases, `type trailers = fields;` as in WIT, to shorten long types such as those of futures.
 
 ## Further out
 
@@ -94,5 +98,6 @@ What the project will need beyond the language itself:
 
 Some versions depend on the standards and runtimes WaSL builds on:
 
-- WASI 0.3 and Component Model async in wasmtime, for 0.4;
+- WASI 0.3 and Component Model async in wasmtime, for 0.4 (enabled by default since wasmtime 46);
+- the stackful tasks or the threads of the Component Model, enabled by default, to run many tasks in one instance and to start calls without waiting, `async f(x)` (§ 16, questions 15 and 16);
 - the `gc` option of the Canonical ABI, to remove the copies at component boundaries (§ 16).

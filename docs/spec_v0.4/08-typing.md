@@ -125,11 +125,13 @@ A conversion is written as a call to the name of the target type: `u64(n)`, `f32
 - A built-in function (§ 8.17) is called the same way, with the name of its type as path: `string::len(s)`.
 - A function of an imported interface is called like a function of the package, with the last part of the interface name as path: `stdout::get_stdout()` (§ 2.5).
 - Constructors, methods and static functions of resources are in § 8.20.
+- A call to an async function is only allowed in an async function (E0416, § 8.21). *Specified, not available yet.*
 
 ## 8.7 Return
 
 - In a function with return type `T`, every `return` carries an expression of type `T`. A `return;` without value is an error (E0502).
 - In a function without a return type, `return;` is allowed and `return <expr>;` is an error (E0503). Reaching the end of the body is an implicit `return;`.
+- In an async function that has delivered its result with `task::return`, only `return;` is allowed after it (E0418, § 8.21). *Specified, not available yet.*
 
 ## 8.8 Every path returns
 
@@ -139,7 +141,8 @@ A function with a return type must end with a `return` on **every** execution pa
 - a `return` always returns;
 - an `if` always returns if it has an `else` branch and every branch (including the branches of `else if`s) always returns;
 - a `while` never always returns, whatever its condition (`while (true) { return 1; }` does not count);
-- a `match` always returns if the block of each of its cases, and its `else` block if present, always returns. A `match` is always exhaustive (§ 8.16), so no other path exists.
+- a `match` always returns if the block of each of its cases, and its `else` block if present, always returns. A `match` is always exhaustive (§ 8.16), so no other path exists;
+- a `task::return(e);` always returns: the result is delivered, and the rest of the body runs after (§ 8.21).
 
 Statements after a statement that always returns are allowed; they never run.
 
@@ -298,7 +301,7 @@ func hash(s: string) -> u32 {
 }
 ```
 
-This set is deliberately minimal: it is what libraries written in WaSL need to build everything else (number formatting, search, slicing, sorting), following § 1.2, principle 7.
+This set is deliberately minimal: it is what libraries written in WaSL need to build everything else (number formatting, search, slicing, sorting), following § 1.2, principle 7. The built-in functions of streams and futures are in § 8.21.
 
 ## 8.18 Globals
 
@@ -368,3 +371,54 @@ local d: carts::cart = carts::cart::single(150);   // static function
 - In `r::s(args)`, `s` is a static function of `r` (E0308). In a path of three names, `i::x::y(…)`, `x` is a variant (a constructor of § 8.14) or a resource (a static function), never both: types have one namespace (§ 7.7).
 - Arguments and return values follow the rules of calls (§ 8.6): the number of arguments, their types, and a method without a return value used only as a statement.
 - The resources of an imported interface are called the same way, with the names of their WIT converted to WaSL (§ 13.2): `out.blocking_write_and_flush(bytes)` calls the method `blocking-write-and-flush` of `wasi:io/streams`.
+
+## 8.21 Async calls, streams, futures and `task::return`
+
+*Specified, not available yet.*
+
+### Async calls
+
+- A call to an async function, an async method or an async static function, of the package or of an imported interface, and a call to an async built-in function (below), is an **async call**. It is only allowed in the body of an async function (E0416), wherever a call is allowed: as a statement, in an expression, in the arguments of another call, after `_ =`.
+- An async call has the type of the result of its function, like any call (§ 8.6), and waits for it (§ 2.8). `?` applies to it like to any other value: `client::send(req)?`.
+- A function of an imported interface is async when its WIT says `async func`. An exported async function of the package is written `async func` in the WIT (§ 13.1).
+- A foreign export block implements each function with the color of its WIT: `async func` for an `async func`, `func` for a `func` (E0218).
+
+### Built-in functions of streams and futures
+
+| Function | Async | Type | Result |
+|---|---|---|---|
+| `stream::new()` | no | `() -> tuple<stream<T>, stream_writer<T>>` | a new stream: its readable end, then its writable end, in the order of the Component Model |
+| `stream::write(tx, xs)` | yes | `(stream_writer<T>, list<T>) -> u32` | writes the elements of `xs` in order, and waits until the reader has taken all of them; returns how many it wrote: `list::len(xs)`, or fewer if the readable end was released, after which every write returns `0` |
+| `stream::read(rx, n)` | yes | `(stream<T>, u32) -> option<list<T>>` | waits for elements and returns `option::some` of 1 to `n` of them, in order; returns `option::none` once the writer has closed the stream and every element has been read, and on every read after that |
+| `stream::close(tx)` | no | `(stream_writer<T>)` | closes the stream: after the last element, the reader gets `option::none` |
+| `future::new()` | no | `() -> tuple<future<T>, future_writer<T>>` | a new future: its readable end, then its writable end |
+| `future::write(tx, v)` | yes | `(future_writer<T>, T) -> bool` | gives `v` to the reader and waits until it has taken it; returns `false` if the readable end was released, and then releases the handles of `v` |
+| `future::read(rx)` | yes | `(future<T>) -> T` | waits for the value of the future and returns it |
+
+- As in § 8.17, a `list<T>` parameter accepts a `list<mut T>`.
+- For `stream::new()` and `future::new()`, `T` comes from the expected type, from either position of the tuple: `local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();`. Without an expected type, they are E0408. For the other functions, `T` is the element type of the end they receive.
+- `stream::write` and `stream::read` **borrow** their end, which stays in its local. `stream::close`, `future::write` and `future::read` **move** it and release it (§ 9.9): a future is written once and read once, and a closed stream is not written again.
+- A `stream_writer<T>` is also closed when it is released at the end of its block (§ 9.9). `stream::close` closes it earlier, which is often needed: the standard output of WASI completes its future only once its stream is closed, so `hello` closes the stream before it reads that future (§ 15.7). It is the only function that releases a handle explicitly, because closing a stream has a meaning of its own: the end of the data.
+- `stream::read(rx, 0)` takes no element: it waits until the writer writes or closes the stream, then returns `option::some([])` or `option::none`, as a read of length 0 does in the Component Model.
+- `stream::write` writes everything: a write in the Component Model is a rendezvous that copies what the reader takes, sometimes less than what was offered, and `stream::write` repeats it until every element is taken. A read stays a single read, since reading by pieces is its purpose.
+- `future::read` returns `T`, not an `option`: a future of WASI already holds a `result`, and a future whose writable end is released without a value has already trapped in the writer (§ 10.7).
+- Their value is a temporary when it holds a handle (§ 7.12): `stream::new()` and `future::new()` are destructured at once, and the value of `future::read(rx)` is used by `match`, `?`, `return`, `_ =` or a destructuring.
+
+### `task::return`
+
+```wasl
+async func handle(request: types::request) -> result<types::response, types::error_code> {
+  …                                            // prepare the response: `return result::err(…);` and `?` are allowed
+  task::return(result::ok(response));          // the caller has the response now
+  …                                            // write its body: only `return;` is allowed
+}
+```
+
+`task::return(e);` is the `task.return` of the Component Model: it delivers `e`, the result of the task, to its caller, and the function goes on running. It exists for the results that the caller needs before the function can go on. A stream has no buffer (§ 10.12): a function that returns a `stream<u8>` must deliver it before it writes to it, or it would wait for ever for a reader that does not have the stream yet.
+
+- `task::return(e);` is only allowed in an async function with a return type, and `e` has that type (E0417, § 8.1).
+- It is a statement of the **top level** of the body, not inside an `if`, a `while` or a `match`, and a body contains at most one (E0417). So the result is delivered exactly once on every path, as the Component Model requires, and the check is syntactic.
+- **Before it**, the body is an ordinary body: `return e;` and `?` deliver their value and end the function, for instance with an error before any response.
+- **After it**, the result is delivered: `return e;` and `?` are errors (E0418), at any depth of the statements that follow, and `return;` ends the function, as does reaching the end of its body. For § 8.8, `task::return(e);` always returns.
+- A handle that `e` holds is moved (§ 9.9).
+- **A function that contains `task::return` is an entry point**: only the host and other components call it. A function reachable from the exports of a world cannot call a function that contains `task::return` compiled into the same component (E0419); it can call one of an interface that the world imports, which runs in another component. Inside a component, a call is a plain `call`, which returns at the end of the callee: the caller would wait for the whole function, and could not read a stream that the callee writes after delivering it. The check is a flag per function, like E0221. Concurrency inside a component will lift this rule (§ 16).

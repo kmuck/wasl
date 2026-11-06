@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The [v0.4 specification](docs/spec_v0.4/README.md) specifies async and WASI 0.3, not implemented yet: `async func` with calls that wait without `await` (§ 2.8), `stream<T>`, `future<T>` and their writable ends with their built-in functions (§ 7.13, § 8.21), `task::return` (§ 8.21), tuple destructuring `local (a: A, b: B) = e;` (§ 9.4), WIT names with uppercase letters written in lowercase (§ 13.2), the async boundary of a component (§ 13.13), `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2), and the error codes E0101, E0222, E0223 and E0416 to E0419 (§ 11.3).
+- The target program [`examples/hello-http`](examples/hello-http), an HTTP service for WASI 0.3 (§ 15.8). The WASI 0.3 version of `examples/hello` is in § 15.7.
+
 ### Changed
 
 - `weasel call` takes the world to run, as `build` does: `weasel call <world> <interface>::<function> [<arguments>…]` (§ 14.2). The function is always written with its interface; a function that the world does not export is an error that lists the functions of the world. `call` no longer looks for the function in every world.

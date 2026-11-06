@@ -61,6 +61,19 @@ local d: option<discount>;  // option::none
 local t: string;            // E0410: a string needs an initial value
 ```
 
+- A **destructuring** `local (a: A, b: B, …) = e;` declares one local per element of the tuple `e` (*specified, not available yet*):
+
+```wasl
+local (count: u32, total: u64) = stats(lines);
+local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+local (response: types::response, _) = types::response::new(headers, option::some(body), trailers);
+```
+
+- `e` must be a tuple with one element per position (E0400). Each position is a name with its type, which is the type of the element (E0400), or `_`, which keeps nothing. The expected type of `e` is the tuple of the written types; a `_` gives no expected type for its position (§ 8.2).
+- The locals follow the rules of every local: they are visible from the end of the declaration, cannot have the name of a global (E0303) or of a visible local (E0304), and two positions cannot have the same name (E0304).
+- A position written `_` is released at once when its element holds handles (§ 9.9). `types::response::new` returns, with the response, a future that reports when the body has been sent; a handler that does not need it writes `_`.
+- Destructuring is the only way to take handles out of a tuple, which is a temporary when it holds one (§ 7.12). A tuple without handles can also be kept in one local and read with `t.0` (§ 8.12), which reads an element and declares nothing.
+
 ## 9.5 Assignment
 
 The target of an assignment `p = e;` (§ 5.3) is:
@@ -89,7 +102,7 @@ This is what Wasm itself requires: a value left on the stack must be removed wit
 - Only a call statement can follow `_ =` (§ 5.3): `_ = x;` is E0100.
 - `_ =` releases the handles that the discarded value contains (§ 9.9).
 - `_ = f();` on a function without a return value is E0400, as any other use of its call as a value (§ 8.6).
-- The built-in functions all return a value: `string::len(s);` is E0413.
+- The built-in functions all return a value, except `stream::close` (§ 8.21): `string::len(s);` is E0413, `stream::close(tx);` is valid.
 
 ## 9.7 `break` and `continue`
 
@@ -103,7 +116,7 @@ A path `a::b` or `a::b::c`, as an expression or before a call, is resolved by th
 
 | First name | Meaning | Examples |
 |---|---|---|
-| `string`, `list`, `char`, an integer type | a built-in function (§ 8.17) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)`, `u32::wrapping_add(h, c)` |
+| `string`, `list`, `char`, an integer type, `stream`, `future` | a built-in function (§ 8.17, § 8.21) | `string::len(s)`, `list::filled(3, 0)`, `char::from_u32(n)`, `u32::wrapping_add(h, c)`, `stream::new()` |
 | `option`, `result` | a constructor of the built-in type | `option::none`, `result::ok(sum)` |
 | a type of the current interface | a case of that enum or variant | `status::paid`, `discount::fixed(500)` |
 | a resource of the current interface | its static function (§ 8.20) | `cart::single(150)` |
@@ -124,18 +137,19 @@ A handle (§ 7.12) designates a resource that belongs to another component. The 
 
 - `return x;`, `return result::ok(x);`, and every constructor that holds `x` (`option::some(x)`, `result::ok(x)`, a variant case);
 - an argument for a parameter of type `T` (not `borrow<T>`);
-- `local y: T = x;` and `y = x;`.
+- `local y: T = x;` and `y = x;`;
+- the end given to `stream::close`, `future::write` or `future::read`, and the value given to `task::return` (§ 8.21; *specified, not available yet*).
 
 After a move, `x` holds the empty handle, `0`, which is never a valid handle. Using `x` again as a handle traps (§ 10.7): the Component Model rejects the index `0`. Assigning `x` a new handle makes it usable again.
 
-**Borrows.** Calling a method on `x` (`x.add(…)`), or passing `x` for a parameter of type `borrow<T>`, **borrows** it: the handle stays in `x`. A parameter of type `borrow<T>` can only be borrowed again: moving it (returning it, passing it for a `T` parameter, assigning it) is an error (E0219).
+**Borrows.** Calling a method on `x` (`x.add(…)`), passing `x` for a parameter of type `borrow<T>`, or giving it to `stream::write` or `stream::read`, **borrows** it: the handle stays in `x`. A parameter of type `borrow<T>` can only be borrowed again: moving it (returning it, passing it for a `T` parameter, assigning it) is an error (E0219).
 
 **Release.** A handle is given back to its owner (`resource.drop`, § 12.10) when the place that owns it gives it up without moving it:
 
 - a local, at the end of the block that declares it, including when `break`, `continue`, `return` or `?` leave the block, and when a new value is assigned to it (the old handle is released after the new value is computed);
 - a parameter of type `T`, on every exit of the function;
 - a temporary handle that is borrowed (`carts::cart().total()`, `f(carts::cart())` with a `borrow` parameter), right after the call that borrows it;
-- a temporary given to `_ =`, and the payload of a `match` case written without a name, with every handle they contain;
+- a temporary given to `_ =`, the payload of a `match` case written without a name, and an element of a destructuring written `_`, with every handle they contain;
 - the operand of `?` gives its payload to the expression, and its error to the `return`: nothing is released.
 
 The empty handle `0` is never released. A handle that was moved is therefore released once, by its new owner:
@@ -151,6 +165,8 @@ func checkout(items: list<item>) -> result<receipt, carts::cart_error> {
   return result::ok(receipt { items: c.count(), total: c.total() });   // releases `c`
 }
 ```
+
+**Streams and futures.** Their ends follow the same rules (§ 7.13; *specified, not available yet*): releasing a `stream_writer<T>` closes its stream, releasing a readable end tells the writer that nobody reads any more, and releasing a `future_writer<T>` that has not written its value traps (§ 10.7).
 
 **Received from outside.** An exported function owns the handles it receives as `T` and releases them as above. The handles it receives as `borrow<T>` belong to its caller, and the Component Model requires them to be released before the call returns: the adapter of the function does it (§ 13.8).
 

@@ -42,7 +42,7 @@ resource_item     = field ","
 
 global            = "global" identifier ":" [ "mut" ] type "=" expression ";" ;
 
-function          = "func" identifier "(" [ parameters ] ")" [ "->" type ] block ;
+function          = [ "async" ] "func" identifier "(" [ parameters ] ")" [ "->" type ] block ;
 parameters        = parameter { "," parameter } ;
 parameter         = identifier ":" type ;
 
@@ -55,6 +55,10 @@ type              = primitive_type
                   | "option" "<" type ">"
                   | "result" [ "<" result_args ">" ]
                   | "borrow" "<" type_name ">"
+                  | "stream" "<" type ">"
+                  | "future" "<" type ">"
+                  | "stream_writer" "<" type ">"
+                  | "future_writer" "<" type ">"
                   | type_name ;
 result_args       = type [ "," type ] | "_" "," type ;
 type_name         = identifier [ "::" identifier ] ;
@@ -73,9 +77,12 @@ statement         = local_declaration
                   | "continue" ";"
                   | "return" [ expression ] ";"
                   | call_statement ";"
-                  | "_" "=" call_statement ";" ;
+                  | "_" "=" call_statement ";"
+                  | "task" "::" "return" "(" expression ")" ";" ;
 
-local_declaration = "local" identifier ":" type [ "=" expression ] ";" ;
+local_declaration = "local" identifier ":" type [ "=" expression ] ";"
+                  | "local" "(" binding { "," binding } [ "," ] ")" "=" expression ";" ;
+binding           = identifier ":" type | "_" ;
 assignment        = place "=" expression ";" ;
 place             = identifier { selector } | "self" selector { selector } ;
 selector          = "." ( identifier | int_literal ) | "[" expression "]" ;
@@ -119,7 +126,7 @@ primary           = int_literal
 
 path              = path_head "::" identifier [ "::" identifier ] ;
 path_head         = identifier | "char" | "string" | "list" | "option" | "result"
-                  | int_type ;
+                  | "stream" | "future" | int_type ;
 int_type          = "s8" | "s16" | "s32" | "s64" | "u8" | "u16" | "u32" | "u64" ;
 call              = [ path_head "::" [ identifier "::" ] ] identifier "(" [ arguments ] ")" ;
 arguments         = expression { "," expression } ;
@@ -133,7 +140,7 @@ tuple_literal     = "tuple" "(" expression { "," expression } [ "," ] ")" ;
 
 ## 5.3 Syntactic rules
 
-These rules follow from the grammar; they are listed because they differ from many other languages. Breaking one of them is a syntax error (E0100).
+These rules follow from the grammar; they are listed because they differ from many other languages. Breaking one of them is a syntax error (E0100). The rules of 0.4, for `async`, destructuring and `task::return`, are *specified, not available yet*.
 
 **Blocks and conditions**
 
@@ -153,6 +160,8 @@ These rules follow from the grammar; they are listed because they differ from ma
 - `match` is a statement, not an expression. It has at least one `case`; `else`, if present, comes last.
 - There are no compound assignments (`+=`, `-=`, …) and no `++` / `--`: write `i = i + 1;`.
 - `local` always has a type: `local x = 5;` is invalid.
+- A **destructuring** `local (a: A, b: B) = e;` declares one local per element of a tuple, each with its type, or `_` for an element that is not kept (§ 9.4). It always has a value: `local (a: u32, b: u32);` is invalid. Its elements are names, never patterns: `local ((a: u32, b: u32), c: u32) = e;` is invalid.
+- `task::return(e);` is a statement of its own (§ 8.21), not a call: it cannot be used as a value, `local x: u32 = task::return(1);` is invalid, and `_ = task::return(1);` too.
 
 **Declarations**
 
@@ -160,6 +169,7 @@ These rules follow from the grammar; they are listed because they differ from ma
 - An interface contains functions and type declarations, in any order. A type can be used before its declaration.
 - A `world` only contains `import` and `export` items: types are not declared in worlds. The block of a foreign export only contains functions (§ 2.4.2).
 - A foreign name is written `namespace:package/interface`, with WaSL identifiers and no version: `wasi:cli/run`, `example:catalog/carts`. An interface of the package is written with its name alone; `export` of an interface of the package ends with `;`, `export` of a foreign interface is followed by its implementation in braces.
+- `async` is written right before `func`, after `static`: `async func run()`, `static async func open()` (§ 2.8). A constructor is never async: `async constructor()` is invalid. `async` is not written on a call (§ 16).
 - A resource contains fields, at most one constructor, methods (`func`) and static functions (`static func`), in any order (§ 7.12). Each field ends with `,`. A resource may be empty: `resource token { }`.
 - Records, enums, variants and flags have at least one field, case or flag: `record r { }` is invalid. Tuples have at least one element: `tuple<>` and `tuple()` are invalid.
 
@@ -174,4 +184,5 @@ These rules follow from the grammar; they are listed because they differ from ma
 - A `.` followed by a name and `(` is a method call: `c.add(x)`, `stdout::get_stdout().blocking_flush()` (§ 8.20). A field that holds a value cannot be called: `r.f(x)` always calls the method `f`.
 - `?` applies to the postfix expression on its left and binds tighter than every operator: `-f()?` is `-(f()?)`, `c.last_line()?.sku` reads the field of the payload (§ 8.19).
 - `borrow<T>` is a type, but it is accepted only as the type of a parameter (§ 7.12, E0219).
+- There is no `await`: a call to an async function waits by itself (§ 2.8). `f(x).await` and `await f(x)` are E0101, not E0100, so that the message can say to remove it (§ 4.4).
 - Commas separate the fields of a record literal, the flags of a flags literal and the elements of a list or a tuple; a trailing comma is allowed, which keeps multi-line literals uniform.

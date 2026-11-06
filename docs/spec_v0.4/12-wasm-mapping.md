@@ -11,7 +11,7 @@ For a world `w`, the module contains:
 - **types**: the type definitions of § 12.5 used by the included functions and globals, then one function type per distinct signature;
 - **functions**: every function of the interfaces exported by `w`, plus every function they call, directly or transitively, whatever its interface. Other functions of the package are not included. To these are added the helpers they use (§ 12.8) and the boundary adapters of the exported functions (§ 13.8);
 - **globals**: every global read or assigned by those functions, one immutable global per distinct string literal and per shared case without payload (§ 12.6), then the globals of § 13.7 when the module has a memory;
-- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10; they come first in the function index space;
+- **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10, then the built-in functions of the Component Model that async functions, streams and futures use (§ 12.12, § 13.13); they come first in the function index space;
 - **exports**: one export per function of each interface exported by `w`, with the name of § 13.3, and the functions of the resources of these interfaces (§ 13.11);
 - **memory**, **realloc** and **post-return** functions only when an exported function needs them (§ 13.6).
 
@@ -260,3 +260,27 @@ The adapter of an exported function (§ 13.8) keeps the handles lent to it, `bor
 | `option<T>` | `e` `br_on_non_null $l`, the releases, `ref.null` of the function's option, `return`; at `$l`, the reference itself or `struct.get $box_T 0` |
 
 The `err` value is rebuilt because `result<T, E>` and `result<U, E>` are two distinct struct families (§ 12.6), even with the same `E`; its payload is not copied, only its reference.
+
+## 12.12 Async functions, streams and futures
+
+*Specified, not available yet.*
+
+Inside the core module, an async function is an ordinary Wasm function. Being async changes how it is lifted when it is exported, and how the imports it calls are lowered (§ 13.13), never its body. The code of 0.4 **blocks** where the source waits: each wait starts the operation of the Component Model, then waits for its event in `waitable-set.wait`, the blocking wait of the Component Model. No function is cut into states, and the locals stay Wasm locals.
+
+| WaSL | Wasm |
+|---|---|
+| `async func f(…)` of the package | `(func $f …)`, like any function |
+| call to an async function of the package | `call $f` |
+| call to an async function of an imported interface | `call` of the import, lowered without `async` (§ 13.13): it returns when the callee has delivered its result |
+| `stream::new()`, `future::new()` | `call` of `stream.new` or `future.new`, which returns an `i64`: the readable end in its low 32 bits, the writable end in its high 32 bits |
+| `stream::write(tx, xs)` | the elements of `xs` lowered into the region of the task (§ 13.13); then, until they are all written, `stream.write` lowered `async` on the elements that remain, the wait below when it returns `BLOCKED`, and the count of its result added to the total |
+| `stream::read(rx, n)` | room for `n` elements in the region of the task, `stream.read` lowered `async`, the wait when it returns `BLOCKED`, then a new `$list_T` lifted from the elements it copied, in `option::some`, or `option::none` when it copied none and reports `DROPPED` |
+| `stream::close(tx)` | `stream.drop-writable`, then `i32.const 0` `local.set $tx` |
+| `future::write(tx, v)` | `v` lowered into the region, `future.write` lowered `async`, the wait when it returns `BLOCKED`, `future.drop-writable`; `i32.const 1` for `COMPLETED`, or the release of the handles of `v` and `i32.const 0` for `DROPPED` |
+| `future::read(rx)` | room for the value in the region, `future.read` lowered `async`, the wait when it returns `BLOCKED`, `future.drop-readable`, the value lifted; `unreachable` for `DROPPED`, which only a writer that has trapped leaves |
+| `task::return(e);` | `e` lowered as the result of the function, then `call` of the `task.return` of the function (§ 13.13) |
+| release of an end (§ 9.9) | `stream.drop-readable`, `stream.drop-writable`, `future.drop-readable` or `future.drop-writable` of its type, with the tests of § 12.10 |
+
+**The wait.** An operation lowered `async` returns `BLOCKED` (`-1`) when it cannot complete at once. The task then adds the end to its **waitable set** (`waitable.join`), calls `waitable-set.wait`, which suspends it until the operation has an event, and takes the end out of the set again (`waitable.join` with `0`). The event gives the result that the operation would have returned. Each task has one waitable set, created by `waitable-set.new` at its first wait, kept in its region (§ 13.13), and dropped when the task ends.
+
+**Closed ends.** When `stream.write` or `stream.read` reports `DROPPED`, the other end has left, and the Component Model allows no other operation than releasing this one. The code releases it at once and stores `-1` in its local, a value that is never a handle: `stream::read` of `-1` returns `option::none` and `stream::write` of `-1` returns `0`, without calling the Component Model, and a release skips `-1` like `0`. This is how a read after the last element returns `option::none` again, even when the last elements and the closing arrived together (§ 8.21).

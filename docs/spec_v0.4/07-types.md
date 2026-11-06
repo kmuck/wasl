@@ -240,7 +240,8 @@ Any type can be used for parameters, return values, locals, globals, fields, lis
 
 - no recursive type (E0208, § 7.9);
 - every type they use must be declared in an interface that can appear in the WIT of the world (E0209, § 13.1);
-- nothing that can change: no `mut` field and no `list<mut T>`, at any depth (E0214).
+- nothing that can change: no `mut` field and no `list<mut T>`, at any depth (E0214);
+- no writable end of a stream or a future, `stream_writer<T>` or `future_writer<T>`, at any depth (E0222, § 7.13): WIT only names readable ends. *Specified, not available yet.*
 
 **Mutability stays inside the component.** The WIT has no mutability, as it has no recursive types: what it cannot express stays internal. A record with a `mut` field, or a type that contains a `list<mut T>`, is declared in an interface that no world exports, and does not appear in an exported signature. An exported function that needs to change a list it receives takes a `list<T>` and works on `list::copy(xs)`; one that changes a record returns a new record.
 
@@ -323,11 +324,12 @@ A resource has two representations, depending on where its object lives (§ 12.1
 - A resource of an interface of the package that the world does **not** import is a WasmGC struct inside the component, exactly like a record whose fields are private: values are references, shared and reclaimed by the runtime like any heap value (§ 10.8). When it crosses the boundary, the component gives the other side a handle to it, and gets it back when the other side gives the handle back.
 - A resource of an interface of another package, or of an interface of the package that the world imports, lives in another component. The component only holds **handles** to it: `i32` indexes into the handle table that the Component Model keeps for the instance. A handle must be given back to its owner when it is no longer needed; WaSL does it automatically (§ 9.9).
 
-A **handle type** is a resource type declared in an interface of another package, or in an interface of the package that at least one world imports. The rules below apply to handle types everywhere in the package, so that the same code is valid in every world, whatever the representation the world gives it; the only exception is that the locals and parameters of the functions of the interface that declares the resource, which are only compiled where it is a struct, may hold it in any type:
+A **handle type** is a resource type declared in an interface of another package, or in an interface of the package that at least one world imports. The ends of streams and futures, `stream<T>`, `stream_writer<T>`, `future<T>` and `future_writer<T>`, are handle types too (§ 7.13). The rules below apply to handle types everywhere in the package, so that the same code is valid in every world, whatever the representation the world gives it; the only exception is that the locals and parameters of the functions of the interface that declares the resource, which are only compiled where it is a struct, may hold it in any type:
 
-- A handle type can be the type of a local, a parameter, a match binding, the return type of a function, and the payload of an `option`, a `result` or a variant that is returned or passed on at once.
-- A value whose type contains a handle type, other than the handle type itself, is a **temporary**: the result of a call, or a constructor such as `option::some(c)`, used at once by `?`, `match`, `return` or `_ =` (§ 9.9).
-- A handle type cannot appear in a record, a tuple, a list, a global or a field, and a local, a parameter or a match binding cannot have a type that contains one without being one (E0220). This keeps the ownership of every handle in a single local, so that releasing it is a local decision (§ 9.9).
+- A handle type can be the type of a local, a parameter, a match binding, the return type of a function, and the payload of an `option`, a `result` or a variant, or an element of a tuple, that is returned or passed on at once.
+- A value whose type contains a handle type, other than the handle type itself, is a **temporary**: the result of a call, or a constructor such as `option::some(c)` or `tuple(c, n)`, used at once by `?`, `match`, `return`, `_ =` or a destructuring `local (…) = e;` (§ 9.4, § 9.9).
+- A handle type cannot appear in a record, a list, a global or a field, and a local, a parameter or a match binding cannot have a type that contains one without being one (E0220). This keeps the ownership of every handle in a single local, so that releasing it is a local decision (§ 9.9).
+- A tuple that holds a handle is the way WASI 0.3 returns several handles at once: `types::response::new(…)` returns `tuple<response, future<…>>`, `stream::new()` returns both ends of a stream. Its destructuring gives each handle its own local (§ 9.4). A tuple was a forbidden place for a handle in 0.3; as a temporary, it is *specified, not available yet*.
 - A local of a resource type needs an initial value (E0410), as for every heap type.
 - Resources cannot be compared: `==` does not apply to them (§ 8.3).
 
@@ -337,3 +339,30 @@ A **handle type** is a resource type declared in an interface of another package
 - A parameter of type `borrow<T>` **borrows** it: the callee can call its methods during the call, but cannot keep it, return it or give it away. For a handle type, the caller keeps the handle.
 - `borrow<T>` is only valid as the type of a parameter, with a resource `T` (E0219): `borrow<u32>`, a `borrow` return type or a `borrow` field are errors.
 - `self` is a `borrow<T>` of its resource, as in WIT, where a method takes `self: borrow<T>`.
+
+## 7.13 Streams and futures
+
+*Specified, not available yet.*
+
+A **stream** carries a sequence of values from one component to another, and a **future** carries one value that will be available later. They are the `stream<T>` and `future<T>` of WIT, with which WASI 0.3 passes the body of an HTTP request or the standard output of a command. Each of them has two ends:
+
+| Type | Designates | In WIT |
+|---|---|---|
+| `stream<T>` | the readable end of a stream of `T` | `stream<T>` |
+| `stream_writer<T>` | the writable end of a stream of `T` | none |
+| `future<T>` | the readable end of a future of `T` | `future<T>` |
+| `future_writer<T>` | the writable end of a future of `T` | none |
+
+```wasl
+local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+// `body` is given to another component, which reads it; this one writes to `body_tx`.
+```
+
+- **WIT only names readable ends.** A function that takes a `stream<T>` reads from it; a function that returns one gives its caller something to read. The writable end stays with the component that created the stream, which writes to it. So `stream_writer<T>` and `future_writer<T>` never appear in the WIT (E0222, § 7.11).
+- **The four types are handle types** (§ 7.12): an `i32` index into the table of the instance, with one owner, moved and released automatically (§ 9.9). Releasing a readable end tells the writer that nobody reads any more. Releasing a `stream_writer<T>` closes the stream. Releasing a `future_writer<T>` before it has written its value traps, as the Component Model requires (§ 10.7).
+- There is no `borrow` of an end: `borrow<T>` only applies to resources (E0219).
+- They are created and used with the built-in functions of § 8.21. They cannot be compared (§ 8.3).
+- **Elements.** The elements of a `stream<T>` cannot contain a handle type (E0220): they are written and read as lists (§ 8.21), and lists cannot hold handles. The value of a `future<T>` can: `future<result<option<types::trailers>, types::error_code>>` carries the handle of the trailers of an HTTP response, and reading it gives a temporary (§ 7.12).
+- `stream` and `future` without an element type, which WIT allows, are not available (E0215, § 2.5).
+
+**The types come from the WIT of the world.** The Component Model creates the two ends with an instruction that names the type, `stream.new` or `future.new`. The tools that build a component from a core module, which `waslc` uses (§ 13.9), only know the stream and future types that appear in the functions of the WIT of the world. So a function reachable from the exports of a world can only use a stream or a future whose readable type appears in a function of that world, imported or exported (E0223). Programs meet this rule naturally: a stream connects two components, and the function of the other side, which receives or returns the readable end, names its type. `stdout::write_via_stream(data: stream<u8>)` lets a component create a `stream<u8>`; `types::response::new(…)` lets it create the `stream<u8>` of a body and the `future<result<option<types::trailers>, types::error_code>>` of its trailers. A stream between two functions of the same component could not be used anyway: in 0.4, two async tasks never run at the same time in one instance (§ 13.13), and the Component Model only copies numbers between two ends held by the same instance.

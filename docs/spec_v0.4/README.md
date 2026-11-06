@@ -1,6 +1,6 @@
 # WaSL v0.4 Specification
 
-Status: **draft, in progress, provisional until v0.5**. This document continues the frozen [v0.3 specification](../spec_v0.3/README.md), with the same section numbers, and receives the features of version 0.4. At this point it describes exactly the language that `waslc` 0.3 implements, the language of v0.3; the sections marked *specified, not available yet* describe what later versions add. v0.3 merged the [v0.1](../spec_v0.1/README.md) and [v0.2](../spec_v0.2/README.md) specifications into one complete specification, without changing any of their rules, and added imports, dependencies, resources, error propagation and implementations of foreign interfaces. The target programs of 0.3 are `examples/catalog` with `examples/checkout` (§ 15.5), and `examples/hello` (§ 15.6).
+Status: **draft, in progress, provisional until v0.5**. This document continues the frozen [v0.3 specification](../spec_v0.3/README.md), with the same section numbers, and receives the features of version 0.4. It describes the language that `waslc` 0.3 implements, the language of v0.3, and the features of 0.4: async functions, streams and futures, `task::return`, tuple destructuring, and the commands `weasel run` and `weasel serve`. Each of them is marked *specified, not available yet* until `waslc` implements it. The target programs of 0.4 are `examples/hello` for WASI 0.3 (§ 15.7) and `examples/hello-http` (§ 15.8). v0.3 merged the [v0.1](../spec_v0.1/README.md) and [v0.2](../spec_v0.2/README.md) specifications into one complete specification, without changing any of their rules, and added imports, dependencies, resources, error propagation and implementations of foreign interfaces. The target programs of 0.3 are `examples/catalog` with `examples/checkout` (§ 15.5), and `examples/hello` (§ 15.6).
 
 This specification defines WaSL completely: the language, how it maps onto WebAssembly, WasmGC and the Component Model, the compiler contract and the build tool. It is written so that a reader who discovers the project, human or AI agent, can understand everything the language is without any other context, and can implement, test or extend it. The earlier versions are frozen and are no longer needed to read it.
 
@@ -57,20 +57,20 @@ The number of a chapter is the number of its sections: § 8.2 is section 2 of ch
 
 | § | Chapter | Content |
 |---|---|---|
-| 1 | [Overview](01-overview.md) | Goals, design principles and decisions, scope, glossary, changes from v0.1 and v0.2 |
-| 2 | [Component Model](02-component-model.md) | How WaSL maps onto packages, interfaces, worlds and components; the two kinds of exports; imports; entry points; resources |
+| 1 | [Overview](01-overview.md) | Goals, design principles and decisions, scope, glossary, changes from v0.1, v0.2 and v0.3 |
+| 2 | [Component Model](02-component-model.md) | How WaSL maps onto packages, interfaces, worlds and components; the two kinds of exports; imports; entry points; resources; async functions and tasks |
 | 3 | [Projects](03-projects.md) | Project layout, manifest, source files, outputs, dependencies |
 | 4 | [Lexical structure](04-lexical.md) | Characters, comments, identifiers, keywords, literals, punctuation |
 | 5 | [Grammar](05-grammar.md) | Complete EBNF grammar and syntactic rules |
 | 6 | [Declarations](06-declarations.md) | Package namespace, `world` with `import` and `export`, `interface`, `global`, `func` |
-| 7 | [Types](07-types.md) | Primitive types, built-in and declared types, recursion, mutability, types in the WIT, resources |
-| 8 | [Typing](08-typing.md) | Literals, operators, conversions, constructors, field access, lists, `match`, built-in functions, globals, `?`, resource calls |
-| 9 | [Names and scopes](09-names.md) | Name resolution, paths, locals and their default values, assignment, calls as statements, loops, handles |
-| 10 | [Runtime semantics](10-semantics.md) | Evaluation order, integer and float arithmetic, conversions, references and sharing, traps, resources and imports |
+| 7 | [Types](07-types.md) | Primitive types, built-in and declared types, recursion, mutability, types in the WIT, resources, streams and futures |
+| 8 | [Typing](08-typing.md) | Literals, operators, conversions, constructors, field access, lists, `match`, built-in functions, globals, `?`, resource calls, async calls, `task::return` |
+| 9 | [Names and scopes](09-names.md) | Name resolution, paths, locals and their default values, tuple destructuring, assignment, calls as statements, loops, handles |
+| 10 | [Runtime semantics](10-semantics.md) | Evaluation order, integer and float arithmetic, conversions, references and sharing, traps, resources and imports, tasks |
 | 11 | [Diagnostics](11-diagnostics.md) | Error format, order of analysis, error codes |
-| 12 | [Mapping to Wasm and WasmGC](12-wasm-mapping.md) | Core module generated for a world, representation of each type, resources and handles, `?` |
-| 13 | [Mapping to the Component Model](13-component-mapping.md) | Generated WIT, names, core exports, Canonical ABI, copies through linear memory, imports, resources at the boundary, foreign exports |
-| 14 | [Tooling](14-tooling.md) | The `weasel` commands, values in WAVE, the `waslc` library API |
+| 12 | [Mapping to Wasm and WasmGC](12-wasm-mapping.md) | Core module generated for a world, representation of each type, resources and handles, `?`, async and streams |
+| 13 | [Mapping to the Component Model](13-component-mapping.md) | Generated WIT, names, core exports, Canonical ABI, copies through linear memory, imports, resources at the boundary, foreign exports, async at the boundary |
+| 14 | [Tooling](14-tooling.md) | The `weasel` commands, including `run` and `serve`, values in WAVE, the `waslc` library API |
 | 15 | [Examples](15-examples.md) | The target programs, invalid programs |
 | 16 | [Open questions](16-open-questions.md) | What this specification leaves undecided |
 

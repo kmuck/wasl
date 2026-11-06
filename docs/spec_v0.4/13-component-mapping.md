@@ -26,7 +26,7 @@ world calculator {
 }
 ```
 
-- A function `func f(p: T, …) -> R` becomes `f: func(p: T, …) -> R;`; without a return type, `f: func(p: T, …);`.
+- A function `func f(p: T, …) -> R` becomes `f: func(p: T, …) -> R;`; without a return type, `f: func(p: T, …);`. An `async func` becomes `f: async func(…)`, and an async static function `s: static async func(…)` (§ 2.8; *specified, not available yet*).
 - A world `world w { export i; }` becomes `world w { export i; }`. An import or an export of an interface of another package is written with its WIT name and the version of the dependency (§ 3.5): `import wasi:cli/stdout@0.2.6;`, `export wasi:cli/run@0.2.6;`. The foreign interfaces themselves are not written in the WIT of the package: they belong to their packages, and the component embeds them (below).
 - A resource becomes `resource r { … }` with its constructor (`constructor(p: T, …);`), its methods (`m: func(…) -> R;`) and its static functions (`s: static func(…) -> R;`), in declaration order; its fields never appear (§ 7.12). A parameter `c: r` is written `c: r` (an `own`), `c: borrow<r>` as is.
 - `weasel wit` prints the WIT of the package (§ 14.2). The layout of the printed text (indentation, blank lines) is not specified; its content is.
@@ -86,7 +86,9 @@ The WIT of the world, embedded in its component, contains `import types;` added 
 - This applies to interfaces, worlds, functions, parameters, types, fields, enum cases, variant cases and flags: `invoice_error` → `invoice-error`, `discount_too_large` → `discount-too-large`.
 - The primitive and built-in types have the same names in WaSL and in WIT (§ 7.1, § 7.6).
 - A WaSL identifier may coincide with a WIT keyword that is not reserved in WaSL (for instance `from`). The WIT then writes it with the WIT escape `%` (`%from`), which is the standard way to use a keyword as a name in WIT.
-- **Names of other packages** go the other way: a WIT name of a dependency is written in WaSL by replacing each `-` with `_` (`incoming-handler` → `incoming_handler`, `output-stream` → `output_stream`, `blocking-write-and-flush` → `blocking_write_and_flush`), and the namespace and package the same way (`my-org:http-tools` → `my_org:http_tools`). A WIT name that gives no valid WaSL identifier, because it has uppercase letters, a word that starts with a digit or is a WaSL keyword or reserved word (§ 4.4), cannot be named from WaSL: using the item is E0215, and the interface stays usable for its other items. The WIT escape `%` is removed: `%from` is `from`.
+- **Names of other packages** go the other way: a WIT name of a dependency is written in WaSL by replacing each `-` with `_` (`incoming-handler` → `incoming_handler`, `output-stream` → `output_stream`, `blocking-write-and-flush` → `blocking_write_and_flush`), and the namespace and package the same way (`my-org:http-tools` → `my_org:http_tools`). The WIT escape `%` is removed: `%from` is `from`.
+- **Uppercase letters** of a WIT name are written in lowercase (*specified, not available yet*): the case `HTTP` of `scheme` is `scheme::http`, the case `DNS-timeout` of `error-code` is `error_code::dns_timeout`, `TLS-protocol-error` is `tls_protocol_error`. Two names of the same scope never give the same WaSL name: the Component Model requires the names of a scope to stay distinct once their hyphens are removed and their uppercase letters lowercased (*strongly-unique* names). The compiler writes each name with the spelling of the WIT of the dependency, where it appears in the WIT of the world and in the names of the core module.
+- A WIT name with a word that starts with a digit, or that is a WaSL keyword or reserved word (§ 4.4), gives no valid WaSL identifier and cannot be named from WaSL: using the item is E0215, and the interface stays usable for its other items.
 
 ## 13.3 Exports of the core module
 
@@ -157,13 +159,13 @@ Because parameters beyond 16 flat values go through memory, exported functions h
 
 ## 13.7 Linear memory as a scratch buffer
 
-Linear memory only holds values **during** a boundary crossing: never a WaSL value, never between two calls. It is managed by a bump allocator, with one mutable `i32` global, `$scratch_top`, starting at 0:
+Linear memory only holds values **during** a boundary crossing: never a WaSL value, never between two calls. It is managed by a bump allocator, with one mutable `i32` global, `$scratch_top`, starting at 0. This section describes it for components without async functions; § 13.13 gives each task its own region of it:
 
 - **`cm32p2_realloc(old_ptr, old_size, align, new_size) -> ptr`**: rounds `$scratch_top` up to `align`, returns it as `ptr` and adds `new_size`; if the memory is too small, it grows it with `memory.grow`, and traps if the runtime refuses. If `old_ptr` is not 0, the `old_size` bytes at `old_ptr` are copied to `ptr`. Nothing is ever freed individually.
 - After the adapter has lifted the arguments, it sets `$scratch_top` back to 0: the arguments are now on the WasmGC heap.
 - Lowering the result allocates from 0 again. The **post-return** function sets `$scratch_top` back to 0 once the host has read the result.
 
-The memory starts with zero pages and grows to the size of the largest single crossing; it never shrinks. This is enough because a component is never re-entered: a synchronous export cannot be called again while it runs, and an import cannot call the component back. The calls to imports use the same buffer, in the reverse direction (§ 13.10). Async will extend this scheme.
+The memory starts with zero pages and grows to the size of the largest single crossing; it never shrinks. This is enough because a component is never re-entered: a synchronous export cannot be called again while it runs, and an import cannot call the component back. The calls to imports use the same buffer, in the reverse direction (§ 13.10). With async functions, a task can wait while its data is in memory, and another task can run meanwhile: each task then allocates from its own region (§ 13.13).
 
 ## 13.8 Adapters
 
@@ -216,6 +218,8 @@ module: cm32p2|<interface>         name: <function>
 
 **Handles.** An own handle passed as an argument is given to the callee: the Component Model removes it from the handle table, which is why WaSL sets the local to `0` (§ 9.9). A borrowed handle is passed as is and stays in the table. A handle received in a result is a new entry of the table, owned by the place that receives it.
 
+**Async functions.** A function of an imported interface whose WIT is `async func` is lowered without `async`, under the same names (*specified, not available yet*): the call returns when the callee has delivered its result, as a call to an async function does in WaSL (§ 2.8). Starting a call without waiting for it, `canon lower async`, is for a later version (§ 16).
+
 **Same package.** For `import accounts;` the component imports the functions of `accounts` that it calls, under the name of the package; the functions of `accounts` are not compiled into it (§ 2.5). The component of the world that exports `accounts` provides them when the two are composed (§ 14.2).
 
 ## 13.11 Resources at the boundary
@@ -242,4 +246,39 @@ The constructor, the methods and the static functions are exported like function
 
 The functions of the block `export wasi:cli/run { … }` (§ 2.4.2) are exported like the functions of an interface of the package: with the canonical name of the foreign interface, `cm32p2|wasi:cli/run@0.2|run`, their adapters (§ 13.8) and their canonical options (§ 13.6).
 
-The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, and no other function. The types are compared after the conversion of names of § 13.2. A foreign interface with `async` functions cannot be exported until WaSL has them (§ 16), and a foreign interface that declares resources cannot be exported in 0.3: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).
+The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, the same color (`async func` or `func`), and no other function. The types are compared after the conversion of names of § 13.2. An `async func` of the block is lifted as in § 13.13, which makes `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 exportable (*specified, not available yet*). A foreign interface that declares resources cannot be exported yet: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).
+
+## 13.13 Async at the boundary
+
+*Specified, not available yet.*
+
+**Exported async functions.** An exported `async func`, of an interface of the package or of a foreign export block, is lifted with `canon lift async` and a `callback`, the mode of the Component Model that every runtime of WASI 0.3 supports. In 0.4 the callback is never called: the adapter runs the whole body of the function, which blocks wherever it waits (§ 12.12), then returns the code `EXIT` (`0`). The adapter:
+
+1. lifts the arguments, as in § 13.8;
+2. calls the WaSL function;
+3. if the function delivered nothing yet, lowers its value and calls the `task.return` of the function; a `task::return(e);` of the body has already done it, and for a function without a return type `task.return` takes no value;
+4. gives back the region of the task (below), and returns `EXIT`.
+
+The result is never returned as flat values and there is no post-return function: the Component Model copies the result during `task.return`, while it is still in memory.
+
+**Names.** The standard names of § 13.3 have no form for async yet. The items that only exist for async use the names that `wit-component` reads for them, its *legacy* names, which carry the full version of the interface; a module can mix them with the standard names of its other items:
+
+| Item | Module | Name | Core type |
+|---|---|---|---|
+| the adapter (export) | | `[async-lift]<interface>#<function>`: `[async-lift]wasi:http/handler@0.3.0#handle` | the lifted parameters, `(result i32)` |
+| the callback (export) | | `[callback][async-lift]<interface>#<function>` | `(param i32 i32 i32) (result i32)`, its body is `unreachable` |
+| `task.return` | `[export]<interface>` | `[task-return]<function>` | the flat result as parameters: `(param i32)` for `run` |
+| `stream.new`, `future.new` | the interface of `f`, `[export]<interface>` if `f` is exported | `[stream-new-N]f`, `[future-new-N]f` | `(result i64)` |
+| `stream.write`, `stream.read` | same | `[async-lower][stream-write-N]f`, `[async-lower][stream-read-N]f` | `(param i32 i32 i32) (result i32)`: the end, an address, a count |
+| `future.write`, `future.read` | same | `[async-lower][future-write-N]f`, `[async-lower][future-read-N]f` | `(param i32 i32) (result i32)`: the end, an address |
+| release of an end | same | `[stream-drop-readable-N]f`, `[stream-drop-writable-N]f`, `[future-drop-readable-N]f`, `[future-drop-writable-N]f` | `(param i32)` |
+| waitable sets | `$root` | `[waitable-set-new]`, `[waitable-join]`, `[waitable-set-wait]`, `[waitable-set-drop]` | `(result i32)`, `(param i32 i32)`, `(param i32 i32) (result i32)`, `(param i32)` |
+| storage of the task | `$root` | `[context-get-0]`, `[context-set-0]` | `(result i32)`, `(param i32)` |
+
+`f` is a function of the WIT of the world whose signature carries the stream or future type, and `N` the position of that type among the stream and future types of the signature, parameters then result, from 0. In `response.new(headers, option<stream<u8>>, future<result<option<trailers>, error-code>>) -> tuple<response, future<result<_, error-code>>>`, the body is 0, the trailers are 1 and the future of the result is 2. For each stream or future type that its code uses, the compiler takes the first function of the world, in the order of its WIT, that carries it (§ 7.13, E0223).
+
+**Async imports** are lowered without `async` (§ 13.10): `canon lower` of an `async func` suspends the caller until the callee delivers its result. In a task that is not async, the Component Model would trap; E0416 rules it out.
+
+**Regions of linear memory.** With async functions, a task can wait while some of its data is in linear memory, such as the elements of a write that the reader has not taken yet or the room of a read, and another task may run meanwhile (§ 10.12). So the allocator of § 13.7 gives each task its own **region**, whose address the task keeps with `context.set 0`, the storage of the current task in the Component Model. The region also holds the waitable set of the task (§ 12.12). It is given back when the task ends; within a region, everything else in § 13.7 holds. How regions are placed in memory is not specified.
+
+**One async task at a time per instance.** A task lifted with a callback holds its instance until it returns `EXIT`, including while it blocks: the other async calls to the same instance wait for it (§ 10.12). A host that serves several requests at once must therefore give each concurrent request its own instance, which `weasel serve` does (§ 14.2); with `wasmtime serve`, it is `--max-instance-concurrent-reuse-count 1`. Later versions can lift the same body as a *stackful* task of the Component Model, or run it on a thread of the Component Model, so that one instance interleaves many tasks: the WaSL code does not change, only the adapter and the regions (§ 16).

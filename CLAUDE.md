@@ -38,6 +38,10 @@ Do not re-propose these unless Karim asks.
 - **Imported resource handles are released automatically** (0.3): when their local is overwritten and on every exit of the function, unless they were moved; no explicit `drop`. A resource of the package is a plain WasmGC value inside the component.
 - **Resource calls** (0.3): methods are called `c.add(x)`, constructors `carts::cart(…)` like a conversion.
 - **Imports** (0.3) cover interfaces of other packages and interfaces of the same package exported by another world; dependencies are fetched with the `wkg` crates.
+- **Async is the Component Model's** (0.4): `async func` as in WIT; a call to an async function waits for its result, with **no `await`** (written, it is E0101); only an async function calls one (E0416). Revisited only at the spec freeze of 0.5.
+- **Streams and futures** (0.4): `stream<T>`, `future<T>` and the writable ends `stream_writer<T>`, `future_writer<T>` (never in the WIT, E0222) are handle types; built-in functions `stream::new/write/read/close`, `future::new/write/read`, with the reader first in the tuples, as in the Component Model. `stream::write` writes everything. A tuple that holds handles is destructured at once, `local (a: A, _) = e;`.
+- **`task::return(v);`** (0.4) is the Component Model's `task.return`: once, at the top level of an async function's body; after it only `return;` (E0418); a function that contains it is an entry point, never called inside its component (E0419).
+- **Codegen of async** (0.4): callback lift whose callback is never called, the body blocks with `waitable-set.wait`, one region of scratch memory per task via `context.set`; one async task at a time per instance, so `weasel serve` uses one instance per request. Stackful or threaded tasks come later without changing programs; no state-machine transformation.
 
 ## Repository
 
@@ -48,7 +52,7 @@ CHANGELOG.md    Keep a Changelog, with the versioning rules
 docs/spec_vX.Y  the specification of each version, one frozen folder per release
 waslc/          the compiler, a Rust library (lexer → parser → sema → HIR → codegen / wit → component)
 weasel/         the build tool, a Rust executable (init, build, check, wit, call, clean), runs components with wasmtime
-examples/       the target programs of each version (calc for 0.1, invoice for 0.2, catalog + checkout and hello for 0.3), run in CI
+examples/       the target programs of each version (calc for 0.1, invoice for 0.2, catalog + checkout and hello for 0.3, hello for WASI 0.3 and hello-http for 0.4), run in CI
 ```
 
 - `waslc` and `weasel` are **separate Cargo projects**, with no root workspace; `weasel` depends on `waslc` by path. Keep it that way.

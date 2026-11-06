@@ -1,0 +1,7 @@
+[package]
+namespace = "example"
+name = "hello-http"
+version = "0.1.0"
+
+[dependencies]
+"wasi:http" = "0.3.0"

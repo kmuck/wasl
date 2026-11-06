@@ -11,7 +11,7 @@ WaSL comes with two programs: the build tool `weasel`, used by developers, and t
   error: could not find the `src` directory next to `wasl.toml`
   ```
 
-- **Standard output** only receives results: the value returned by `call`, the WIT printed by `wit`.
+- **Standard output** only receives results: the value returned by `call`, the WIT printed by `wit`, and the output of the program that `run` runs.
 - **Standard error** receives progress messages (`Built …`) and errors.
 - Compilation errors use the format of § 11.1, manifest errors the format of § 11.4, other errors `error: <message>` (§ 11.5).
 - A compilation shows its **first ten errors** (§ 11.2), one per line, as the Go compiler does; the others are counted on a last line: `error: 3 more errors not shown`.
@@ -27,6 +27,7 @@ Creates a new project in a new directory `<name>` of the current directory.
 - The package is written as in WIT (§ 3.2): `weasel init acme:todo-api`, or `weasel init acme:todo-api@0.2.0`. The namespace and the name follow the rule of § 3.2; the version is a SemVer version and defaults to `0.1.0`. A package without namespace is an error: ``error: invalid package `todo-api`: expected `namespace:name`, such as `acme:shop` ``.
 - The project contains one world, named after the project with `-` replaced by `_` (`todo-api` → `todo_api`). If that name is a keyword or reserved word of WaSL (§ 4.4), the command fails.
 - The command fails if the directory `<name>` already exists.
+- `--template <template>` chooses the program the project starts with (*specified, not available yet*): `lib`, the default, the interface below; `cli`, a command for WASI 0.3, the program of § 15.7 with the dependency `"wasi:cli" = "0.3.0"`; `http`, an HTTP service for WASI 0.3, the program of § 15.8 with the dependency `"wasi:http" = "0.3.0"`. The world has the name above in every template. An unknown template is an error that lists the three.
 - Generated files (no `.gitignore` and no other file):
 
 ```
@@ -122,7 +123,42 @@ Each `call` runs on a fresh instance: globals start from their initial values.
 - an interface of WASI 0.2 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`) is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1);
 - any other import is an error: ``error: no component provides `example:catalog/carts@0.1.0`: add it as a path dependency on a WaSL project``.
 
-Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export, such as `wasi:cli/run`, run with `wasmtime run` until `weasel run` exists (§ 14.4).
+Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export run with `weasel run` (`wasi:cli/run`) and `weasel serve` (`wasi:http/handler`), below. An async function is called like the others: `call` waits until it has delivered its result, and until its task has ended (*specified, not available yet*). The interfaces of WASI 0.3 that wasmtime provides are provided by the host, like those of WASI 0.2.
+
+### `weasel run <world> [<arguments>…]`
+
+*Specified, not available yet.*
+
+Compiles the world `<world>` in memory and runs it as a command: it calls the `run` function of its export of `wasi:cli/run`, of WASI 0.2 or 0.3. Nothing is written to `build/`.
+
+- The world must export `wasi:cli/run`: ``error: world `app` does not export `wasi:cli/run`; its exports are `math` ``.
+- Every argument after the world is given to the program, unchanged, even one that starts with `--`. The program receives the name of the world as its first argument, followed by `<arguments>`, as a command receives its own name first.
+- The standard input, output and error of the program are those of `weasel`. The program has no environment variables and no access to the filesystem or the network.
+- Imports are composed as for `call`.
+- **Exit code**: `0` when `run` returns `result::ok`, `1` when it returns `result::err`, and `1` with an error message for a trap (``error: `run` trapped: integer divide by zero``).
+
+```sh
+weasel run hello
+# Hello, world!
+```
+
+### `weasel serve <world> [--addr <host>:<port>]`
+
+*Specified, not available yet.*
+
+Compiles the world `<world>` in memory and serves it as an HTTP service: each request is given to the `handle` function of its export of `wasi:http/handler`, of WASI 0.3. Nothing is written to `build/`.
+
+- The world must export `wasi:http/handler`: ``error: world `app` does not export `wasi:http/handler`; its exports are `math` ``.
+- The service listens on `127.0.0.1:8080`, or on the address of `--addr`, and prints ``Serving `hello_http` on http://127.0.0.1:8080`` on standard error. It runs until it is interrupted, then exits with the code `0`.
+- **Each request gets a new instance**, which no other request uses: globals start from their initial values for every request, and a request never waits for another one (§ 13.13).
+- A trap ends the request, which receives the status 500 if no response was delivered yet, and is printed on standard error (``error: request `GET /` trapped: …``); the service goes on.
+- The standard output and error of the component go to the standard error of `weasel`. Imports are composed as for `call`.
+
+```sh
+weasel serve hello_http &
+curl http://127.0.0.1:8080/karim
+# Hello, /karim!
+```
 
 ### `weasel clean`
 
@@ -175,13 +211,11 @@ The following commands are planned ([ROADMAP.md](../../ROADMAP.md)):
 
 | Command | Purpose |
 |---|---|
-| `weasel run <world> [args…]` | run a world that exports `wasi:cli/run`; in 0.3, `wasmtime run build/<world>.wasm` does it (§ 15.6) |
-| `weasel serve <world>` | serve a world that exports `wasi:http/handler` |
 | `weasel build --all` | build every world |
 | `weasel test` | run the tests of the project |
 | `weasel publish` | publish a component or a WIT package with wasm-pkg-tools |
 
-Like `build`, `run` and `serve` always take the world explicitly.
+`weasel run` and `weasel serve`, planned in 0.3, are specified in § 14.2 for 0.4. Like `build`, they always take the world explicitly.
 
 ## 14.5 Values in `weasel call`
 
@@ -205,9 +239,9 @@ Like `build`, `run` and `serve` always take the world explicitly.
 - Each argument is one shell argument; a value that contains spaces or quotes is quoted for the shell: `weasel call billing invoices::summary '{number: 7, …}'`.
 - The result is printed in WAVE on one line. Integers are printed in decimal (`55`, `-3`, `18446744073709551615`); floats in the shortest decimal form that reads back the same value, always with a `.` or an exponent (`3.0`, not `3`; `1.5`, `12.56636`, `1e20`, `inf`), and NaN as `nan`, as WAVE requires. Every field of a record is printed, including those whose value is `none`. Both choices are valid WAVE; they make the output complete and stable.
 - A `result` is a value like any other: `err(…)` is printed on standard output with the exit code `0`. Only a trap fails the command (§ 14.2).
-- WAVE has no value for a resource: a function whose parameters or result contain a resource, and the constructors, methods and static functions of resources, cannot be called with `weasel call` (``error: `carts::cart::of` cannot be called from the command line: its result contains the resource `cart` ``). They are called by other components (§ 15.5).
+- WAVE has no value for a resource, a stream or a future: a function whose parameters or result contain one, and the constructors, methods and static functions of resources, cannot be called with `weasel call` (``error: `carts::cart::of` cannot be called from the command line: its result contains the resource `cart` ``). They are called by other components (§ 15.5).
 - An argument that is not a valid WAVE value of its type is an error: ``error: invalid value `{number: 1}` for parameter `inv` of type `invoice`: missing field "customer"``. The reason after the last colon comes from the WAVE parser, which quotes names with `"`.
 
 ## 14.6 Runtime configuration
 
-`weasel` creates the wasmtime engine with the WasmGC proposal and its prerequisites enabled (chapter 12), for every component, whether it uses heap types or not.
+`weasel` creates the wasmtime engine with the WasmGC proposal and its prerequisites enabled (chapter 12), for every component, whether it uses heap types or not. The async features of the Component Model that WASI 0.3 needs are enabled too; they are enabled by default in wasmtime since version 46. No feature beyond WASI 0.3, such as stackful tasks or threads of the Component Model, is enabled.

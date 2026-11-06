@@ -955,3 +955,174 @@ What the program shows:
 - **A foreign export.** `run` implements the function of `wasi:cli/run` in the world, with the signature of its WIT, `run: func() -> result;` (§ 2.4.2, § 13.12).
 - **Imported functions and resources of WASI.** `stdout::get_stdout()` returns an `output-stream` of `wasi:io/streams`, a handle provided by the host; `out.blocking_write_and_flush(…)` is a method call on it, and the stream is released when `run` returns (§ 9.9). The error of the write, a `stream-error` that holds a handle of its own, is released by the `case err` that does not name it.
 - **Registry dependencies.** `wasi:cli` and `wasi:io` are fetched from `ghcr.io/webassembly` with the crates of `wkg`, and pinned in `wkg.lock` (§ 3.5).
+
+## 15.7 A WASI 0.3 command: `hello`
+
+*Specified, not available yet.* This is `examples/hello` for WASI 0.3, one of the two target programs of version 0.4. It replaces the program of § 15.6 in `examples/hello` once `waslc` implements async; until then, `examples/hello` stays the WASI 0.2 program, which CI runs.
+
+`examples/hello/wasl.toml`:
+
+```toml
+[package]
+namespace = "example"
+name = "hello"
+version = "0.1.0"
+
+[dependencies]
+"wasi:cli" = "0.3.0"
+```
+
+`examples/hello/src/hello.wasl`:
+
+```wasl
+world hello {
+  import wasi:cli/types;
+  import wasi:cli/stdout;
+
+  export wasi:cli/run {
+    async func run() -> result {
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
+      _ = stream::write(tx, string::bytes(greeting::text("world")));
+      stream::close(tx);
+      match (future::read(done)) {
+        case ok {
+          return result::ok;
+        }
+        case err {
+          return result::err;
+        }
+      }
+    }
+  }
+}
+
+interface greeting {
+  func text(name: string) -> string {
+    return "Hello, " + name + "!\n";
+  }
+}
+```
+
+Its WIT:
+
+```wit
+package example:hello@0.1.0;
+
+world hello {
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  export wasi:cli/run@0.3.0;
+}
+```
+
+```sh
+cd examples/hello
+weasel run hello
+# Hello, world!
+```
+
+What the program shows:
+
+- **An async foreign export.** `run` is an `async func`, as its WIT says, `run: async func() -> result;` (§ 13.12). Its component lifts it with a callback that is never called, and its body blocks where it waits (§ 13.13).
+- **A stream, read top to bottom.** The program creates a stream, gives its readable end to the standard output (`rx` moves into `write_via_stream`), writes the bytes, closes the stream, then waits until the standard output is done. `stream::write` waits until the host has taken the bytes: a stream has no buffer (§ 10.12).
+- **No `await`.** `stream::write` and `future::read` are async built-in functions: each call waits, and is allowed because `run` is async (§ 2.8, E0416). `write_via_stream` is not async: it only starts the transfer, and its future reports the end.
+- **Closing before waiting.** The standard output completes `done` only once the stream is closed. Without `stream::close(tx)`, `tx` would be released at the end of `run`, after `future::read(done)`, which would wait for ever, and the runtime would trap (§ 10.7).
+- **The error of the future** is a `types::error_code`, an enum without handles: the `case err` that does not name it releases nothing.
+
+## 15.8 An HTTP service: `hello-http`
+
+*Specified, not available yet.* The second target program of version 0.4 is a small HTTP service for WASI 0.3, in `examples/hello-http`. `GET /karim` answers `Hello, /karim!`.
+
+`examples/hello-http/wasl.toml`:
+
+```toml
+[package]
+namespace = "example"
+name = "hello-http"
+version = "0.1.0"
+
+[dependencies]
+"wasi:http" = "0.3.0"
+```
+
+`examples/hello-http/src/hello_http.wasl`:
+
+```wasl
+world hello_http {
+  import wasi:http/types;
+
+  export wasi:http/handler {
+    async func handle(request: types::request) -> result<types::response, types::error_code> {
+      local path: string = "/";
+      match (request.get_path_with_query()) {
+        case some(p) {
+          path = p;
+        }
+        case none {
+        }
+      }
+
+      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+      local (trailers: future<result<option<types::trailers>, types::error_code>>,
+             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future::new();
+      local (response: types::response, _) =
+        types::response::new(types::fields(), option::some(body), trailers);
+      task::return(result::ok(response));
+
+      _ = stream::write(body_tx, string::bytes("Hello, " + path + "!\n"));
+      stream::close(body_tx);
+      _ = future::write(trailers_tx, result::ok(option::none));
+    }
+  }
+}
+```
+
+Its WIT:
+
+```wit
+package example:hello-http@0.1.0;
+
+world hello-http {
+  import wasi:http/types@0.3.0;
+  export wasi:http/handler@0.3.0;
+}
+```
+
+```sh
+cd examples/hello-http
+weasel serve hello_http &
+curl http://127.0.0.1:8080/karim
+# Hello, /karim!
+```
+
+What the program shows:
+
+- **`task::return`.** The line `task::return(result::ok(response));` cuts the body in two: before it, the handler prepares the response; after it, the host has the response and sends its headers, and the handler writes the body. Writing the body before delivering the response would wait for ever, since the host would not have the body stream yet (§ 8.21). After `task::return`, `return result::err(…);` and `?` are errors (E0418).
+- **Tuples of handles.** `stream::new()`, `future::new()` and `types::response::new(…)` return tuples that hold handles, destructured at once (§ 9.4). The future that `response::new` returns, which reports when the body has been sent, is not needed: `_` releases it at once.
+- **Moves.** `body` and `trailers` move into `types::response::new`, and `response` into `task::return`. `body_tx` is closed explicitly, and `trailers_tx` moves into `future::write`, so nothing is left to release but `request`, at the end of `handle` (§ 9.9).
+- **A future must be written.** `trailers_tx` writes `result::ok(option::none)`, no trailers: releasing it without a value would trap (§ 10.7).
+- **One instance per request.** `weasel serve` gives each request its own instance (§ 14.2), so two requests never wait for each other, although the component of 0.4 runs one async task at a time (§ 13.13).
+
+## 15.9 Invalid programs of 0.4
+
+*Specified, not available yet.* Each line is written in `run` of § 15.7 or in `handle` of § 15.8, unless it says otherwise.
+
+| Code | Error |
+|---|---|
+| `_ = stream::write(tx, bytes).await;` | E0101: there is no `await`; a call to an async function waits by itself |
+| `func run() -> result { … }` in `export wasi:cli/run` | E0218: `run` is an `async func` in WASI 0.3 |
+| `func greet(tx: stream_writer<u8>) { _ = stream::write(tx, string::bytes("hi")); }` | E0416: `stream::write` is async, and `greet` is not |
+| `func pipe() -> stream_writer<u8>` in an exported interface | E0222: a writable end never appears in the WIT |
+| `local (rx: stream<string>, tx: stream_writer<string>) = stream::new();` in `hello` | E0223: no function of the world `hello` carries a `stream<string>` |
+| `local p: tuple<stream<u8>, stream_writer<u8>> = stream::new();` | E0220: a tuple that holds handles is destructured at once |
+| `local (rx: stream<u8>, tx: stream_writer<u8>) = future::new();` | E0400: `future::new()` returns a `tuple<future<T>, future_writer<T>>` |
+| `local (body: stream<u8>) = stream::new();` | E0400: the tuple has two elements |
+| `stream::new();` | E0413: the ends of the stream would be lost; destructure them |
+| `if (ready) { task::return(result::ok(response)); }` | E0417: `task::return` is a statement of the top level of the body |
+| `task::return(result::ok);` in `run`, written twice | E0417: the result is delivered once |
+| `task::return(result::ok(response));` in a function without `async` | E0417: only an async function delivers its result early |
+| `return result::err(types::error_code::internal_error(option::none));` after `task::return` | E0418: the response is already delivered; write `return;` |
+| `local d: u32 = digits(path)?;` after `task::return`, with `func digits(s: string) -> result<u32, types::error_code>` | E0418: `?` would deliver an error after the response |
+| `local lines: stream<u8> = feed::lines();` in a function of the package, where `feed::lines` contains `task::return` and the world does not import `feed` | E0419: a function that delivers early is only called by the host or another component |
+| `local await: u32 = 1;` | E0101: `await` is reserved |
