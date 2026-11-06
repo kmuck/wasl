@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Each option of `weasel` has a single spelling, its long name (§ 14.1): `--help` and `--version`. The one-letter options `-h` and `-V` and the `help` command are removed.
 - `waslc::Analysis::world` returns a world of the package, or E9001 when the package does not define it.
 - A compilation reports several errors (§ 11.2): the first syntax error of each file, then, when there is none, the first error of the declarations, or the first error of each function body and every call to an interface that the world does not import. `weasel` shows the first ten, one per line, and counts the others (§ 14.1). `waslc::analyze` returns its errors as a `Vec<Diagnostic>`.
+- The v0.3 specification is frozen. The [v0.4 specification](docs/spec_v0.4/README.md) continues it with the same section numbers and becomes the reference; it will receive the features of 0.4.
 
 ## [0.3.0] - 2026-11-04
 

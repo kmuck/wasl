@@ -410,7 +410,7 @@ fn invoice_example() {
         Err(e) => panic!("{}", e.display(&sources)),
     };
     let wit = analysis.wit().unwrap();
-    let spec = include_str!("../../docs/spec_v0.3/15-examples.md");
+    let spec = include_str!("../../docs/spec_v0.4/15-examples.md");
     let start = spec.find("package example:invoice@0.1.0;").unwrap();
     let end = start + spec[start..].find("```").unwrap();
     // The printer separates functions with blank lines; the specification does not.

@@ -59,7 +59,7 @@ examples/       the target programs of each version (calc for 0.1, invoice for 0
 ## Specification
 
 - The specification is the reference. A language change starts in the spec, and the compiler follows; behavior found during implementation is written back into the spec.
-- v0.1 and v0.2 are frozen. [docs/spec_v0.3](docs/spec_v0.3/README.md) merges them into one complete specification, the reference, and receives the features of 0.3; it is **provisional until v0.4**. References are written `§ 8.2`, and point to v0.3; its README maps the old `§ v2.x.y` numbers.
+- v0.1, v0.2 and v0.3 are frozen. v0.3 merged v0.1 and v0.2 into one complete specification; [docs/spec_v0.4](docs/spec_v0.4/README.md) continues it with the same section numbers, is the reference, and receives the features of 0.4; it is **provisional until v0.5**. References are written `§ 8.2`, and point to v0.4; its README maps the old `§ v2.x.y` numbers.
 - Each version is **example-driven**: its target program in `examples/` is written first, and the version is done when that program builds and runs in CI.
 
 ## Workflow
