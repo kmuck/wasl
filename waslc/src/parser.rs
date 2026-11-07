@@ -261,10 +261,12 @@ impl Parser {
                     let mut funcs = Vec::new();
                     while !self.eat(&TokenKind::RBrace) {
                         match self.peek() {
-                            TokenKind::Func => funcs.push(InterfaceItem::Func(self.func()?)),
+                            TokenKind::Func | TokenKind::Async => {
+                                funcs.push(InterfaceItem::Func(self.func()?))
+                            }
                             _ => {
                                 return Err(self.unexpected(
-                                    "`func` or `}`: the implementation of an interface of another package only has functions",
+                                    "`func`, `async func` or `}`: the implementation of an interface of another package only has functions",
                                 ));
                             }
                         }
@@ -295,7 +297,7 @@ impl Parser {
         let mut items = Vec::new();
         while !self.eat(&TokenKind::RBrace) {
             let item = match self.peek() {
-                TokenKind::Func => InterfaceItem::Func(self.func()?),
+                TokenKind::Func | TokenKind::Async => InterfaceItem::Func(self.func()?),
                 TokenKind::Record | TokenKind::Enum | TokenKind::Variant | TokenKind::Flags => {
                     InterfaceItem::Type(self.type_decl()?)
                 }
@@ -309,7 +311,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(self.unexpected(
-                        "`func`, `record`, `enum`, `variant`, `flags`, `resource` or `}`",
+                        "`func`, `async func`, `record`, `enum`, `variant`, `flags`, `resource` or `}`",
                     ));
                 }
             };
@@ -361,14 +363,21 @@ impl Parser {
                         func,
                     });
                 }
-                TokenKind::Func => funcs.push(ResourceFunc {
+                TokenKind::Async if *self.peek_at(1) == TokenKind::Constructor => {
+                    return err(
+                        Code::Syntax,
+                        self.span(),
+                        "a constructor is never async, as in WIT: remove `async`",
+                    );
+                }
+                TokenKind::Func | TokenKind::Async => funcs.push(ResourceFunc {
                     kind: ResourceFuncKind::Method,
                     func: self.func()?,
                 }),
                 TokenKind::Static => {
                     self.bump();
-                    if *self.peek() != TokenKind::Func {
-                        return Err(self.unexpected("`func` after `static`"));
+                    if !matches!(self.peek(), TokenKind::Func | TokenKind::Async) {
+                        return Err(self.unexpected("`func` or `async func` after `static`"));
                     }
                     funcs.push(ResourceFunc {
                         kind: ResourceFuncKind::Static,
@@ -467,10 +476,14 @@ impl Parser {
         })
     }
 
+    /// `func` or `async func` (§ 6.5), at the keyword.
     fn func(&mut self) -> Result<Func> {
-        self.bump();
+        let is_async = self.eat(&TokenKind::Async);
+        self.expect(&TokenKind::Func, "`func`")?;
         let name = self.ident("a function name")?;
-        self.func_rest(name)
+        let mut func = self.func_rest(name)?;
+        func.is_async = is_async;
+        Ok(func)
     }
 
     /// The parameters, return type and body of a function, after its name (or after the
@@ -503,6 +516,7 @@ impl Parser {
         };
         let body = self.block("`{`")?;
         Ok(Func {
+            is_async: false,
             name,
             params,
             ret,

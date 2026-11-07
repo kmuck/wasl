@@ -41,7 +41,7 @@ Do not re-propose these unless Karim asks.
 - **Async is the Component Model's** (0.4): `async func` as in WIT; a call to an async function waits for its result, with **no `await`** (written, it is E0101); only an async function calls one (E0416). Revisited only at the spec freeze of 0.5.
 - **Streams and futures** (0.4): `stream<T>`, `future<T>` and the writable ends `stream_writer<T>`, `future_writer<T>` (never in the WIT, E0222) are handle types; built-in functions `stream::new/write/read/close`, `future::new/write/read`, with the reader first in the tuples, as in the Component Model. `stream::write` writes everything. A tuple that holds handles is destructured at once, `local (a: A, _) = e;`.
 - **`task::return(v);`** (0.4) is the Component Model's `task.return`: once, at the top level of an async function's body; after it only `return;` (E0418); a function that contains it is an entry point, never called inside its component (E0419).
-- **Codegen of async** (0.4): callback lift whose callback is never called, the body blocks with `waitable-set.wait`, one region of scratch memory per task via `context.set`; one async task at a time per instance, so `weasel serve` uses one instance per request. Stackful or threaded tasks come later without changing programs; no state-machine transformation.
+- **Codegen of async** (0.4): callback lift whose callback is never called, the body blocks with `waitable-set.wait`, one region of scratch memory per task (a stack in 0.4, with `$scratch_base`; `context.set` once an instance runs several async tasks); one async task at a time per instance, so `weasel serve` uses one instance per request. Stackful or threaded tasks come later without changing programs; no state-machine transformation.
 
 ## Repository
 

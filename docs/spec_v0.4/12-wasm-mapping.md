@@ -263,7 +263,7 @@ The `err` value is rebuilt because `result<T, E>` and `result<U, E>` are two dis
 
 ## 12.12 Async functions, streams and futures
 
-*Specified, not available yet.*
+Async functions are available. Streams, futures and `task::return` are *specified, not available yet*.
 
 Inside the core module, an async function is an ordinary Wasm function. Being async changes how it is lifted when it is exported, and how the imports it calls are lowered (§ 13.13), never its body. The code of 0.4 **blocks** where the source waits: each wait starts the operation of the Component Model, then waits for its event in `waitable-set.wait`, the blocking wait of the Component Model. No function is cut into states, and the locals stay Wasm locals.
 
@@ -281,6 +281,6 @@ Inside the core module, an async function is an ordinary Wasm function. Being as
 | `task::return(e);` | `e` lowered as the result of the function, then `call` of the `task.return` of the function (§ 13.13) |
 | release of an end (§ 9.9) | `stream.drop-readable`, `stream.drop-writable`, `future.drop-readable` or `future.drop-writable` of its type, with the tests of § 12.10 |
 
-**The wait.** An operation lowered `async` returns `BLOCKED` (`-1`) when it cannot complete at once. The task then adds the end to its **waitable set** (`waitable.join`), calls `waitable-set.wait`, which suspends it until the operation has an event, and takes the end out of the set again (`waitable.join` with `0`). The event gives the result that the operation would have returned. Each task has one waitable set, created by `waitable-set.new` at its first wait, kept in its region (§ 13.13), and dropped when the task ends.
+**The wait.** An operation lowered `async` returns `BLOCKED` (`-1`) when it cannot complete at once. The task then adds the end to its **waitable set** (`waitable.join`), calls `waitable-set.wait`, which suspends it until the operation has an event, and takes the end out of the set again (`waitable.join` with `0`). The event gives the result that the operation would have returned. Each task has one waitable set, created by `waitable-set.new` at its first wait, kept by the task (§ 13.13), and dropped when the task ends.
 
 **Closed ends.** When `stream.write` or `stream.read` reports `DROPPED`, the other end has left, and the Component Model allows no other operation than releasing this one. The code releases it at once and stores `-1` in its local, a value that is never a handle: `stream::read` of `-1` returns `option::none` and `stream::write` of `-1` returns `0`, without calling the Component Model, and a release skips `-1` like `0`. This is how a read after the last element returns `option::none` again, even when the last elements and the closing arrived together (§ 8.21).

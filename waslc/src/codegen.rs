@@ -18,7 +18,7 @@ use crate::hir::{
     Program, Stmt, visit_expr, visit_stmts,
 };
 use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
-use crate::wit::kebab;
+use crate::wit::{InterfaceName, kebab};
 
 mod boundary;
 mod helpers;
@@ -33,11 +33,11 @@ const MAX_FIXED: usize = 1000;
 /// Produces the core module of world `world`: its exported functions, the functions they
 /// call transitively, the globals they use and the helpers they need.
 ///
-/// `interface_names` gives the canonical WIT name of each exported interface.
+/// `interface_names` gives the WIT names of each interface of the WIT.
 pub fn generate(
     program: &Program,
     world: usize,
-    interface_names: &[Option<String>],
+    interface_names: &[Option<InterfaceName>],
 ) -> Result<Vec<u8>> {
     let (used_funcs, imported) = program.reach(world);
     let world = &program.worlds[world];
@@ -103,10 +103,22 @@ pub fn generate(
     }
     handles.sort();
 
+    let exported: Vec<FuncId> = world
+        .exports
+        .iter()
+        .flat_map(|&i| program.interfaces[i].funcs.iter().copied())
+        .collect();
+    let async_exports: Vec<FuncId> = exported
+        .iter()
+        .copied()
+        .filter(|&f| program.funcs[f].is_async)
+        .collect();
+
     // Imported functions come first in the function index space (§ 13.10), then the
     // intrinsics of the resources: `new`, `rep` and `drop`, then the `drop` of the
-    // handles.
-    let import_count = (imported.len() + 3 * resources.len() + handles.len()) as u32;
+    // handles, then the `task.return` of the async exports (§ 13.13).
+    let import_count =
+        (imported.len() + 3 * resources.len() + handles.len() + async_exports.len()) as u32;
     let mut func_index = index_map(&used_funcs);
     for index in func_index.iter_mut().flatten() {
         *index += import_count;
@@ -123,15 +135,16 @@ pub fn generate(
     for (k, &d) in handles.iter().enumerate() {
         cx.drops.insert(d, first_drop + k as u32);
     }
-    let exported: Vec<FuncId> = world
-        .exports
-        .iter()
-        .flat_map(|&i| program.interfaces[i].funcs.iter().copied())
-        .collect();
+    let first_task_return = first_drop + handles.len() as u32;
+    for (k, &f) in async_exports.iter().enumerate() {
+        cx.task_returns.insert(f, first_task_return + k as u32);
+    }
     let memory = exported
         .iter()
-        .chain(&imported)
-        .any(|&f| boundary::needs_memory(types, &program.funcs[f]));
+        .any(|&f| boundary::export_needs_memory(types, &program.funcs[f]))
+        || imported
+            .iter()
+            .any(|&f| boundary::import_needs_memory(types, &program.funcs[f]));
 
     // Shared immutable values (§ 12.8, § 12.6): string literals and cases without
     // payload. Their globals come first, so that the initializers of the program's
@@ -157,9 +170,14 @@ pub fn generate(
         })
         .collect();
     // The top of the scratch buffer (§ 13.7) comes after the program's globals, then the
-    // rep tables of the resources.
+    // bottom of the scratch memory of the sync tasks (§ 13.13), then the rep tables of
+    // the resources.
     cx.scratch_top = memory.then_some(next);
     if memory {
+        next += 1;
+    }
+    if memory && !async_exports.is_empty() {
+        cx.scratch_base = Some(next);
         next += 1;
     }
     for (k, &decl) in resources.iter().enumerate() {
@@ -191,11 +209,17 @@ pub fn generate(
         bodies.push(FuncGen::run(&mut cx, func));
     }
     // Core exports (§ 13.8): an adapter for each function that takes or returns a heap
-    // value, the function itself otherwise.
+    // value, the function itself otherwise. An async function always has an adapter,
+    // with the callback of its lift (§ 13.13).
     let mut core_exports: Vec<(FuncId, u32, Option<u32>)> = Vec::new();
+    let mut async_core_exports: Vec<(FuncId, u32, u32)> = Vec::new();
     for &f in &exported {
         let func = &program.funcs[f];
-        if boundary::needs_adapter(types, func) {
+        if func.is_async {
+            let adapter = cx.helper(Helper::Boundary(Boundary::AsyncAdapter(f)));
+            let callback = cx.helper(Helper::Boundary(Boundary::Callback));
+            async_core_exports.push((f, adapter, callback));
+        } else if boundary::needs_adapter(types, func) {
             let adapter = cx.helper(Helper::Boundary(Boundary::Adapter(f)));
             let post_return = boundary::result_in_memory(types, func)
                 .then(|| cx.helper(Helper::Boundary(Boundary::PostReturn)));
@@ -245,8 +269,8 @@ pub fn generate(
             &ConstExpr::extended(init),
         );
     }
-    if let Some(top) = cx.scratch_top {
-        debug_assert_eq!(top as usize, globals.len() as usize);
+    for global in [cx.scratch_top, cx.scratch_base].into_iter().flatten() {
+        debug_assert_eq!(global as usize, globals.len() as usize);
         globals.global(
             GlobalType {
                 val_type: ValType::I32,
@@ -293,6 +317,13 @@ pub fn generate(
         import_sigs.push(cx.signature(params, results));
     }
     let drop_sig = cx.signature(vec![ValType::I32], vec![]);
+    let task_return_sigs: Vec<u32> = async_exports
+        .iter()
+        .map(|&f| {
+            let params = boundary::task_return_params(types, &program.funcs[f]);
+            cx.signature(params, Vec::new())
+        })
+        .collect();
     let intrinsic_sigs: Vec<[u32; 3]> = resources
         .iter()
         .map(|_| {
@@ -309,7 +340,8 @@ pub fn generate(
     for (f, index, post_return) in core_exports {
         let func = &program.funcs[f];
         let path = interface_names[func.interface]
-            .as_deref()
+            .as_ref()
+            .map(|n| &n.canonical)
             .expect("exported interface present in the WIT");
         let name = format!("cm32p2|{path}|{}", wit_func_name(types, func));
         exports.export(&name, ExportKind::Func, index);
@@ -317,9 +349,26 @@ pub fn generate(
             exports.export(&format!("{name}_post"), ExportKind::Func, post_return);
         }
     }
+    // Async exports (§ 13.13) have no standard name yet: they take the names that
+    // `wit-component` reads, with the full name of the interface.
+    for &(f, adapter, callback) in &async_core_exports {
+        let func = &program.funcs[f];
+        let path = &interface_names[func.interface]
+            .as_ref()
+            .expect("exported interface present in the WIT")
+            .full;
+        let name = format!("{path}#{}", wit_func_name(types, func));
+        exports.export(&format!("[async-lift]{name}"), ExportKind::Func, adapter);
+        exports.export(
+            &format!("[callback][async-lift]{name}"),
+            ExportKind::Func,
+            callback,
+        );
+    }
     for &(decl, dtor) in &dtors {
         let path = interface_names[types.decls[decl].interface]
-            .as_deref()
+            .as_ref()
+            .map(|n| &n.canonical)
             .expect("exported interface present in the WIT");
         let name = kebab(&types.decls[decl].name);
         exports.export(
@@ -355,7 +404,8 @@ pub fn generate(
     for (&f, sig) in imported.iter().zip(import_sigs) {
         let func = &program.funcs[f];
         let path = interface_names[func.interface]
-            .as_deref()
+            .as_ref()
+            .map(|n| &n.canonical)
             .expect("imported interface present in the WIT");
         import_section.import(
             &format!("cm32p2|{path}"),
@@ -365,7 +415,8 @@ pub fn generate(
     }
     for (&decl, sigs) in resources.iter().zip(intrinsic_sigs) {
         let path = interface_names[types.decls[decl].interface]
-            .as_deref()
+            .as_ref()
+            .map(|n| &n.canonical)
             .expect("exported interface present in the WIT");
         let name = kebab(&types.decls[decl].name);
         for (suffix, sig) in ["new", "rep", "drop"].iter().zip(sigs) {
@@ -378,12 +429,25 @@ pub fn generate(
     }
     for &decl in &handles {
         let path = interface_names[types.decls[decl].interface]
-            .as_deref()
+            .as_ref()
+            .map(|n| &n.canonical)
             .expect("imported interface present in the WIT");
         import_section.import(
             &format!("cm32p2|{path}"),
             &format!("{}_drop", kebab(&types.decls[decl].name)),
             EntityType::Function(gc_types + drop_sig),
+        );
+    }
+    for (&f, sig) in async_exports.iter().zip(task_return_sigs) {
+        let func = &program.funcs[f];
+        let path = &interface_names[func.interface]
+            .as_ref()
+            .expect("exported interface present in the WIT")
+            .full;
+        import_section.import(
+            &format!("[export]{path}"),
+            &format!("[task-return]{}", wit_func_name(types, func)),
+            EntityType::Function(gc_types + sig),
         );
     }
     let mut functions = FunctionSection::new();
@@ -547,6 +611,12 @@ struct ModuleCx<'a> {
     handle_ifaces: Vec<bool>,
     /// The `resource.drop` import of each handle type used by the module.
     drops: HashMap<DeclId, u32>,
+    /// The `task.return` import of each exported async function (§ 13.13).
+    task_returns: HashMap<FuncId, u32>,
+    /// The global `$scratch_base`, when the module has a memory and async exports: the
+    /// bottom of the scratch memory of the sync tasks, above the data of the async task
+    /// that waits (§ 13.13).
+    scratch_base: Option<u32>,
 }
 
 /// The functions and globals behind the handles of an exported resource (§ 12.10): the
@@ -590,6 +660,8 @@ impl<'a> ModuleCx<'a> {
             resources: HashMap::new(),
             handle_ifaces: Vec::new(),
             drops: HashMap::new(),
+            task_returns: HashMap::new(),
+            scratch_base: None,
         }
     }
 
@@ -854,10 +926,13 @@ impl<'a> ModuleCx<'a> {
     }
 
     /// The function a call to `f` calls: the reverse adapter of an imported function
-    /// that needs one (§ 13.10), the function itself otherwise.
+    /// that needs one (§ 13.10), or of an async import that may let sync tasks run
+    /// (§ 13.13); the function itself otherwise.
     fn call_index(&mut self, f: FuncId) -> u32 {
+        let func = &self.program.funcs[f];
         if self.imports.contains(&f)
-            && boundary::import_needs_adapter(self.types, &self.program.funcs[f])
+            && (boundary::import_needs_adapter(self.types, func)
+                || (func.is_async && self.scratch_base.is_some()))
         {
             return self.helper(Helper::Boundary(Boundary::Import(f)));
         }

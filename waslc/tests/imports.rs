@@ -494,12 +494,19 @@ fn errors() {
         )
         .is_ok()
     );
-    // Items WaSL cannot use.
+    // An imported async function is called from an async function (§ 2.8).
     fails(
         "world w { import demo:host/files; export t; }
          interface t { func f() { files::wait(); } }",
-        Code::ForeignInterface,
-        "`files::wait` cannot be used from WaSL: `wait` is an `async` function",
+        Code::AsyncCall,
+        "`files::wait(…)` is async, and only an async function can call it",
+    );
+    assert!(
+        analyze(
+            "world w { import demo:host/files; export t; }
+             interface t { async func f() { files::wait(); } }"
+        )
+        .is_ok()
     );
     assert!(
         analyze(

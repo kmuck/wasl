@@ -754,6 +754,7 @@ pub fn analyze(
                 Some(iface),
                 ret,
             );
+            cx.in_async = program.funcs[id].is_async;
             cx.scopes.push(Vec::new());
             let mut params = program.funcs[id].params.iter();
             if let hir::FuncKind::Method(_) = program.funcs[id].kind {
@@ -990,6 +991,7 @@ fn signature(
     Ok(hir::FuncDef {
         name: func.name.name.clone(),
         kind,
+        is_async: func.is_async,
         interface: iface,
         params,
         ret,
@@ -1528,7 +1530,7 @@ fn check_implementation(
             );
         };
         let have = &program.funcs[g];
-        if have.params != want.params || have.ret != want.ret {
+        if have.params != want.params || have.ret != want.ret || have.is_async != want.is_async {
             return err(
                 Code::ForeignExport,
                 funcs[g].name.span,
@@ -1571,7 +1573,8 @@ fn signature_text(types: &Types, f: &hir::FuncDef) -> String {
         .ret
         .map(|t| format!(" -> {}", types.display(t)))
         .unwrap_or_default();
-    format!("`func {}({}){ret}`", f.name, params.join(", "))
+    let func = if f.is_async { "async func" } else { "func" };
+    format!("`{func} {}({}){ret}`", f.name, params.join(", "))
 }
 
 #[cfg(test)]

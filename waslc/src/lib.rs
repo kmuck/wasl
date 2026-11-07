@@ -57,7 +57,7 @@ pub struct ExportedInterface {
 pub struct Analysis {
     program: hir::Program,
     wit: wit::Wit,
-    interface_names: Vec<Option<String>>,
+    interface_names: Vec<Option<wit::InterfaceName>>,
     worlds: Vec<World>,
 }
 
@@ -98,7 +98,7 @@ pub fn analyze(
         return Err(errors);
     }
     let wit = wit::generate(&program, package, deps).map_err(|d| vec![d])?;
-    let interface_names = wit.canonical_interface_names(&program);
+    let interface_names = wit.interface_names(&program);
     let worlds = program
         .worlds
         .iter()

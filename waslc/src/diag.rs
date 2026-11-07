@@ -17,6 +17,7 @@ pub enum Code {
     InvalidCharLiteral,
     // Syntax
     Syntax,
+    Await,
     // Declarations
     Manifest,
     DuplicateItem,
@@ -67,6 +68,7 @@ pub enum Code {
     IgnoredValue,
     TryOperand,
     TryReturn,
+    AsyncCall,
     // Control flow
     AssignImmutable,
     BreakOutsideLoop,
@@ -93,6 +95,7 @@ impl Code {
             Code::InvalidString => "E0006",
             Code::InvalidCharLiteral => "E0007",
             Code::Syntax => "E0100",
+            Code::Await => "E0101",
             Code::Manifest => "E0200",
             Code::DuplicateItem => "E0201",
             Code::DuplicateFunc => "E0202",
@@ -140,6 +143,7 @@ impl Code {
             Code::IgnoredValue => "E0413",
             Code::TryOperand => "E0414",
             Code::TryReturn => "E0415",
+            Code::AsyncCall => "E0416",
             Code::AssignImmutable => "E0500",
             Code::BreakOutsideLoop => "E0501",
             Code::MissingReturnValue => "E0502",

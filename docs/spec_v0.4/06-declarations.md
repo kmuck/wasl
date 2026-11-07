@@ -83,7 +83,7 @@ func reset() { … }
 - A function has no limit on its number of parameters: in an exported function, parameters beyond 16 flat values go through linear memory (§ 13.6).
 - Functions can call each other freely, including recursively and across interfaces.
 - The types of the signature of an exported function are restricted by § 7.11.
-- `async func` declares an **async function** (§ 2.8): its calls may wait, and only an async function can call it (E0416, § 8.21). Its WIT is `name: async func(…)` (§ 13.1). Methods and static functions can be async; constructors cannot. *Specified, not available yet.*
+- `async func` declares an **async function** (§ 2.8): its calls may wait, and only an async function can call it (E0416, § 8.21). Its WIT is `name: async func(…)` (§ 13.1). Methods and static functions can be async; constructors cannot.
 
 ```wasl
 async func fetch(url: string) -> result<string, fetch_error> { … }

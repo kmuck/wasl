@@ -139,7 +139,7 @@ Rules:
 - Two interfaces that code can name, the interfaces of the package and the interfaces of other packages that a world of the package imports or exports, cannot have the same last name (E0217): `example:catalog/carts` cannot coexist with an `interface carts` of the package.
 - A function reachable from the exports of a world that calls a function of another package must belong to a world that imports that interface (E0221). An interface of the package that a world does not import is compiled into its component, as in § 2.3.
 - An imported interface has no implementation in the component: its functions are imported functions of the core module (§ 13.10). Its resources are **handles** (§ 7.12).
-- An item of an interface of another package that WaSL cannot use, because its name gives no WaSL identifier (§ 13.2), or because it uses a WIT type WaSL does not have (`map`, `error-context`, or a `stream` or `future` without an element type), can be named, but naming it is an error (E0215) that says why. The other items of the interface stay usable. Async functions and the types `stream<T>` and `future<T>` can be used (§ 2.8, § 7.13; *specified, not available yet*: `waslc` 0.3 still reports E0215 for them).
+- An item of an interface of another package that WaSL cannot use, because its name gives no WaSL identifier (§ 13.2), or because it uses a WIT type WaSL does not have (`map`, `error-context`, or a `stream` or `future` without an element type), can be named, but naming it is an error (E0215) that says why. The other items of the interface stay usable. Async functions can be used (§ 2.8). The types `stream<T>` and `future<T>` can be used too (§ 7.13; *specified, not available yet*: `waslc` still reports E0215 for the items that use them).
 - A type alias of another package (`type instant = u64;`) is named like a declared type (`clocks::instant`) and designates the type it aliases.
 
 Why this model:
@@ -199,7 +199,7 @@ A **resource** is the Component Model's object: a type with an identity, a priva
 
 ## 2.8 Async functions and tasks
 
-*Specified, not available yet.*
+Async functions are available. Streams, futures and `task::return`, which the example below uses, are *specified, not available yet*.
 
 WASI 0.3 makes input and output async: `wasi:cli/run` declares `run: async func() -> result`, and `wasi:http/handler` declares `handle: async func(request: request) -> result<response, error-code>`. WaSL takes the async model of the Component Model as it is:
 

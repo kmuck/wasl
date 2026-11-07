@@ -27,6 +27,11 @@ pub(crate) enum Boundary {
     PostReturn,
     /// The core export of an exported function (§ 13.8).
     Adapter(FuncId),
+    /// The core export of an exported async function (§ 13.13): lifts the arguments,
+    /// calls the function, gives its result to `task.return`, and returns `EXIT`.
+    AsyncAdapter(FuncId),
+    /// The callback of the async exports, never called in 0.4 (§ 13.13).
+    Callback,
     /// The reverse adapter of an imported function (§ 13.10): lowers the arguments,
     /// calls the import, lifts the result.
     Import(FuncId),
@@ -237,7 +242,7 @@ pub(super) fn result_in_memory(types: &Types, func: &FuncDef) -> bool {
 
 /// Whether a call to an imported function goes through a reverse adapter (§ 13.10).
 pub(super) fn import_needs_adapter(types: &Types, func: &FuncDef) -> bool {
-    needs_adapter(types, func) || needs_memory(types, func)
+    needs_adapter(types, func) || import_needs_memory(types, func)
 }
 
 /// The core type of an imported function, following the Canonical ABI: its flat
@@ -259,11 +264,44 @@ pub(super) fn import_signature(types: &Types, func: &FuncDef) -> (Vec<ValType>, 
     (params, results)
 }
 
-/// Whether an exported function needs linear memory (§ 13.6).
-pub(super) fn needs_memory(types: &Types, func: &FuncDef) -> bool {
+/// Whether an exported function needs linear memory (§ 13.6). The result of an async
+/// function goes to `task.return`, in memory only beyond 16 flat values (§ 13.13).
+pub(super) fn export_needs_memory(types: &Types, func: &FuncDef) -> bool {
+    if !func.is_async {
+        return import_needs_memory(types, func);
+    }
+    params_need_memory(types, func)
+        || func
+            .ret
+            .is_some_and(|t| has_list(types, t) || task_return_in_memory(types, func))
+}
+
+/// Whether an imported function needs linear memory (§ 13.6). An async import is
+/// lowered without `async`, like the others (§ 13.13).
+pub(super) fn import_needs_memory(types: &Types, func: &FuncDef) -> bool {
+    params_need_memory(types, func) || result_in_memory(types, func)
+}
+
+fn params_need_memory(types: &Types, func: &FuncDef) -> bool {
     func.params.iter().any(|(_, t)| has_list(types, *t))
         || params_flat(types, func).len() > MAX_FLAT_PARAMS
-        || result_in_memory(types, func)
+}
+
+/// Whether the `task.return` of an exported async function takes its result in memory:
+/// beyond 16 flat values, as for parameters (§ 13.13).
+fn task_return_in_memory(types: &Types, func: &FuncDef) -> bool {
+    func.ret
+        .is_some_and(|t| flat(types, t).len() > MAX_FLAT_PARAMS)
+}
+
+/// The core type of the `task.return` of an exported async function: its result as
+/// flat parameters, or a pointer to it (§ 13.13).
+pub(super) fn task_return_params(types: &Types, func: &FuncDef) -> Vec<ValType> {
+    match func.ret {
+        None => Vec::new(),
+        Some(_) if task_return_in_memory(types, func) => vec![ValType::I32],
+        Some(t) => flat(types, t),
+    }
 }
 
 // ---- Code generation ----
@@ -381,6 +419,19 @@ impl<'c, 'a> Gen<'c, 'a> {
 
     fn scratch_top(&self) -> u32 {
         self.cx.scratch_top.expect("module with a memory")
+    }
+
+    /// Gives back the scratch memory of a sync task (§ 13.7): everything above
+    /// `$scratch_base`, which keeps the data of the async task that waits, if any
+    /// (§ 13.13).
+    fn free_scratch(&mut self) {
+        let Some(top) = self.cx.scratch_top else {
+            return;
+        };
+        match self.cx.scratch_base {
+            Some(base) => self.code.extend([I::GlobalGet(base), I::GlobalSet(top)]),
+            None => self.code.extend([I::I32Const(0), I::GlobalSet(top)]),
+        }
     }
 
     /// `if`/`else` chain on the discriminant in local `disc`: `case(k)` pushes the value
@@ -705,12 +756,16 @@ impl Boundary {
             Boundary::Realloc => realloc(cx),
             Boundary::PostReturn => {
                 let mut g = Gen::new(cx, vec![ValType::I32]);
-                let top = g.scratch_top();
-                g.emit(I::I32Const(0));
-                g.emit(I::GlobalSet(top));
+                g.free_scratch();
                 g.finish(Vec::new())
             }
             Boundary::Adapter(f) => adapter(cx, f),
+            Boundary::AsyncAdapter(f) => async_adapter(cx, f),
+            Boundary::Callback => {
+                let mut g = Gen::new(cx, vec![ValType::I32; 3]);
+                g.emit(I::Unreachable);
+                g.finish(vec![ValType::I32])
+            }
             Boundary::Import(f) => import_adapter(cx, f),
             Boundary::LiftMem(ty) => {
                 let mut g = Gen::new(cx, vec![ValType::I32]);
@@ -1067,23 +1122,24 @@ fn realloc(cx: &mut ModuleCx) -> (Vec<ValType>, Vec<ValType>, Function) {
     g.finish(vec![ValType::I32])
 }
 
-/// The core export of an exported function (§ 13.8): lifts the arguments, frees the
-/// scratch buffer, calls the function, lowers the result.
-fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
-    let types = cx.types;
-    let func = &cx.program.funcs[f];
+/// The core parameters of an exported function: its flat parameters, or a pointer to
+/// them beyond 16 (§ 13.6).
+fn adapter_params(types: &Types, func: &FuncDef) -> Vec<ValType> {
     let flat_params = params_flat(types, func);
-    let in_memory = flat_params.len() > MAX_FLAT_PARAMS;
-    let params = if in_memory {
+    if flat_params.len() > MAX_FLAT_PARAMS {
         vec![ValType::I32]
     } else {
-        flat_params.clone()
-    };
-    let target = cx.func_index[f].expect("exported function");
-    let mut g = Gen::new(cx, params);
+        flat_params
+    }
+}
 
+/// Lifts the arguments of an exported function onto the stack. Returns the locals that
+/// keep the handles lent to it, with their `resource.drop`: they are given back before
+/// the function delivers its result (§ 9.9).
+fn lift_args(g: &mut Gen, func: &FuncDef) -> Vec<(u32, u32)> {
+    let types = g.types;
+    let flat_params = params_flat(types, func);
     let param_types: Vec<Type> = func.params.iter().map(|(_, t)| *t).collect();
-    // The handles lent to the function are given back before it returns (§ 9.9).
     let mut lent = Vec::new();
     let mut keep_lent = |g: &mut Gen, t: Type| {
         if let (TypeKind::Borrow(_), Some(d)) = (types.kind(t), g.cx.is_handle(t)) {
@@ -1092,11 +1148,11 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
             lent.push((tmp, g.cx.drops[&d]));
         }
     };
-    if in_memory {
+    if flat_params.len() > MAX_FLAT_PARAMS {
         let (offsets, _, _) = fields_layout(types, &param_types);
         for (&t, &offset) in param_types.iter().zip(&offsets) {
             g.lift_at(t, 0, offset);
-            keep_lent(&mut g, t);
+            keep_lent(g, t);
         }
     } else {
         let src: Vec<(u32, ValType)> = flat_params
@@ -1107,15 +1163,51 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
         let mut pos = 0;
         for &t in &param_types {
             g.lift_flat(t, &src, pos);
-            keep_lent(&mut g, t);
+            keep_lent(g, t);
             pos += flat(types, t).len();
         }
     }
-    if let Some(top) = g.cx.scratch_top {
-        // The arguments are on the heap now.
-        g.emit(I::I32Const(0));
-        g.emit(I::GlobalSet(top));
+    lent
+}
+
+/// Lowers the value of type `t` on the stack into new scratch memory, and leaves its
+/// address on the stack.
+fn lower_to_memory(g: &mut Gen, t: Type) {
+    let types = g.types;
+    let (size, align) = size_align(types, t);
+    let val = g.cx.val(t);
+    let (value, ptr) = (g.local(val), g.local(ValType::I32));
+    g.emit(I::LocalSet(value));
+    g.emit(I::I32Const(0));
+    g.emit(I::I32Const(0));
+    g.emit(I::I32Const(align as i32));
+    g.emit(I::I32Const(size as i32));
+    g.call(Boundary::Realloc);
+    g.emit(I::LocalSet(ptr));
+    g.lower_at(t, &getter(value, val), ptr, 0);
+    g.emit(I::LocalGet(ptr));
+}
+
+/// The instructions that push local `local`, of Wasm type `val`, as a non-null reference
+/// when its type is one.
+fn getter(local: u32, val: ValType) -> Vec<Instruction<'static>> {
+    if matches!(val, ValType::Ref(r) if !r.nullable) {
+        vec![I::LocalGet(local), I::RefAsNonNull]
+    } else {
+        vec![I::LocalGet(local)]
     }
+}
+
+/// The core export of an exported function (§ 13.8): lifts the arguments, frees the
+/// scratch buffer, calls the function, lowers the result.
+fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let types = cx.types;
+    let func = &cx.program.funcs[f];
+    let target = cx.func_index[f].expect("exported function");
+    let mut g = Gen::new(cx, adapter_params(types, func));
+    let lent = lift_args(&mut g, func);
+    // The arguments are on the heap now.
+    g.free_scratch();
     g.emit(I::Call(target));
     for (tmp, drop) in lent {
         g.emit(I::LocalGet(tmp));
@@ -1125,24 +1217,7 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
     let results = match func.ret {
         None => Vec::new(),
         Some(t) if result_in_memory(types, func) => {
-            let (size, align) = size_align(types, t);
-            let val = g.cx.val(t);
-            let (value, ptr) = (g.local(val), g.local(ValType::I32));
-            g.emit(I::LocalSet(value));
-            g.emit(I::I32Const(0));
-            g.emit(I::I32Const(0));
-            g.emit(I::I32Const(align as i32));
-            g.emit(I::I32Const(size as i32));
-            g.call(Boundary::Realloc);
-            g.emit(I::LocalSet(ptr));
-            let get = [I::LocalGet(value), I::RefAsNonNull];
-            let get: &[Instruction] = if matches!(val, ValType::Ref(r) if !r.nullable) {
-                &get
-            } else {
-                &get[..1]
-            };
-            g.lower_at(t, get, ptr, 0);
-            g.emit(I::LocalGet(ptr));
+            lower_to_memory(&mut g, t);
             vec![ValType::I32]
         }
         Some(t) => {
@@ -1151,6 +1226,44 @@ fn adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Functio
         }
     };
     g.finish(results)
+}
+
+/// The core export of an exported async function, lifted with a callback (§ 13.13).
+/// The whole body runs in this call, blocking where it waits (§ 12.12); its result goes
+/// to `task.return`, then the scratch buffer is freed and the code `EXIT` (`0`) returned.
+fn async_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let types = cx.types;
+    let func = &cx.program.funcs[f];
+    let target = cx.func_index[f].expect("exported function");
+    let task_return = cx.task_returns[&f];
+    let mut g = Gen::new(cx, adapter_params(types, func));
+    let lent = lift_args(&mut g, func);
+    // The arguments are on the heap now. No other task runs when an async task starts
+    // (§ 13.13): `$scratch_base` is 0.
+    g.free_scratch();
+    g.emit(I::Call(target));
+    // Lent handles are given back before the task delivers its result.
+    for (tmp, drop) in lent {
+        g.emit(I::LocalGet(tmp));
+        g.emit(I::Call(drop));
+    }
+    match func.ret {
+        None => {}
+        Some(t) if task_return_in_memory(types, func) => lower_to_memory(&mut g, t),
+        Some(t) => {
+            let val = g.cx.val(t);
+            let value = g.local(val);
+            g.emit(I::LocalSet(value));
+            g.lower_to_flat(t, &getter(value, val));
+        }
+    }
+    g.emit(I::Call(task_return));
+    for global in [g.cx.scratch_base, g.cx.scratch_top].into_iter().flatten() {
+        g.emit(I::I32Const(0));
+        g.emit(I::GlobalSet(global));
+    }
+    g.emit(I::I32Const(0));
+    g.finish(vec![ValType::I32])
 }
 
 /// The reverse adapter of an imported function (§ 13.10): lowers the arguments, calls the
@@ -1202,6 +1315,12 @@ fn import_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, 
         }
         _ => None,
     };
+    if let (true, Some(base), Some(top)) = (func.is_async, g.cx.scratch_base, g.cx.scratch_top) {
+        // The async task waits in this call: the sync tasks that run meanwhile keep its
+        // data, up to here (§ 13.13).
+        g.emit(I::GlobalGet(top));
+        g.emit(I::GlobalSet(base));
+    }
     g.emit(I::Call(target));
 
     let results = match (func.ret, ret_val) {

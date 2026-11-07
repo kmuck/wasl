@@ -213,6 +213,8 @@ pub struct Global {
 
 #[derive(Debug)]
 pub struct Func {
+    /// `async func` (§ 2.8).
+    pub is_async: bool,
     pub name: Ident,
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,

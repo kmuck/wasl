@@ -48,6 +48,7 @@ pub enum TokenKind {
     Flags,
     Match,
     Case,
+    Async,
 
     // Built-in type names other than primitive types
     KwChar,
@@ -162,6 +163,7 @@ impl TokenKind {
             TokenKind::Flags => "flags",
             TokenKind::Match => "match",
             TokenKind::Case => "case",
+            TokenKind::Async => "async",
             TokenKind::KwChar => "char",
             TokenKind::KwString => "string",
             TokenKind::KwList => "list",
@@ -221,8 +223,21 @@ pub struct Token {
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
-    "package", "use", "type", "map", "own", "stream", "future", "async", "await", "include",
-    "with", "as",
+    "package",
+    "use",
+    "type",
+    "map",
+    "own",
+    "stream",
+    "future",
+    "stream_writer",
+    "future_writer",
+    "task",
+    "await",
+    "subtask",
+    "include",
+    "with",
+    "as",
 ];
 
 fn keyword(word: &str) -> Option<TokenKind> {
@@ -240,6 +255,7 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "mut" => TokenKind::Mut,
         "local" => TokenKind::Local,
         "func" => TokenKind::Func,
+        "async" => TokenKind::Async,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "while" => TokenKind::While,
@@ -382,6 +398,13 @@ impl Lexer<'_> {
         }
         if let Some(kw) = keyword(word) {
             return Ok(kw);
+        }
+        if word == "await" {
+            return err(
+                Code::Await,
+                span,
+                "WaSL has no `await`: a call to an async function waits for its result by itself (§ 2.8); remove `await`",
+            );
         }
         if RESERVED.contains(&word) {
             return err(
@@ -774,6 +797,10 @@ mod tests {
         assert_eq!(error_code("a__b"), Code::InvalidIdent);
         assert_eq!(error_code("a_1"), Code::InvalidIdent);
         assert_eq!(error_code("use"), Code::ReservedKeyword);
+        assert_eq!(error_code("task"), Code::ReservedKeyword);
+        assert_eq!(error_code("subtask"), Code::ReservedKeyword);
+        assert_eq!(error_code("await"), Code::Await);
+        assert_eq!(kinds("async")[0], TokenKind::Async);
         assert_eq!(kinds("import")[0], TokenKind::Import);
         assert_eq!(kinds("record")[0], TokenKind::Record);
         assert_eq!(kinds("list")[0], TokenKind::KwList);
