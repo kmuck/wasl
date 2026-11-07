@@ -125,7 +125,7 @@ A conversion is written as a call to the name of the target type: `u64(n)`, `f32
 - A built-in function (§ 8.17) is called the same way, with the name of its type as path: `string::len(s)`.
 - A function of an imported interface is called like a function of the package, with the last part of the interface name as path: `stdout::get_stdout()` (§ 2.5).
 - Constructors, methods and static functions of resources are in § 8.20.
-- A call to an async function is only allowed in an async function (E0416, § 8.21). *Specified, not available yet.*
+- A call to an async function is only allowed in an async function (E0416, § 8.21).
 
 ## 8.7 Return
 
@@ -374,7 +374,7 @@ local d: carts::cart = carts::cart::single(150);   // static function
 
 ## 8.21 Async calls, streams, futures and `task::return`
 
-*Specified, not available yet.*
+Async calls are available. The built-in functions of streams and futures, and `task::return`, are *specified, not available yet*.
 
 ### Async calls
 

@@ -140,7 +140,7 @@ tuple_literal     = "tuple" "(" expression { "," expression } [ "," ] ")" ;
 
 ## 5.3 Syntactic rules
 
-These rules follow from the grammar; they are listed because they differ from many other languages. Breaking one of them is a syntax error (E0100). The rules of 0.4 for `async` and `task::return` are *specified, not available yet*.
+These rules follow from the grammar; they are listed because they differ from many other languages. Breaking one of them is a syntax error (E0100). The rules of 0.4 for `task::return` are *specified, not available yet*.
 
 **Blocks and conditions**
 

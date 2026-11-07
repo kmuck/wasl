@@ -34,6 +34,16 @@ pub struct Wit {
     imports: HashMap<String, Vec<String>>,
 }
 
+/// The names of an interface in the core module (§ 13.3).
+#[derive(Debug, Clone)]
+pub struct InterfaceName {
+    /// With the canonical version, for the standard names: `example:calc/math@0.1`.
+    pub canonical: String,
+    /// With the full version, for the names of async exports and of `task.return`
+    /// (§ 13.13): `example:calc/math@0.1.0`.
+    pub full: String,
+}
+
 impl Wit {
     pub fn world(&self, name: &str) -> Result<WorldId> {
         self.resolve
@@ -41,9 +51,9 @@ impl Wit {
             .map_err(internal)
     }
 
-    /// Canonical name of each exported interface (e.g. `example:calc/math@0.1`), indexed by
-    /// HIR interface id. It prefixes the exports of the core module (§ 13.3).
-    pub fn canonical_interface_names(&self, program: &Program) -> Vec<Option<String>> {
+    /// The names of each interface of the WIT, indexed by HIR interface id. They prefix
+    /// the imports and exports of the core module (§ 13.3).
+    pub fn interface_names(&self, program: &Program) -> Vec<Option<InterfaceName>> {
         let package = &self.resolve.packages[self.package];
         program
             .interfaces
@@ -57,7 +67,10 @@ impl Wit {
                     Some(f) => f.id,
                     None => *package.interfaces.get(&kebab(&iface.name))?,
                 };
-                self.resolve.canonicalized_id_of(id)
+                Some(InterfaceName {
+                    canonical: self.resolve.canonicalized_id_of(id)?,
+                    full: self.resolve.id_of(id)?,
+                })
             })
             .collect()
     }
@@ -220,18 +233,23 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                             .ret
                             .map(|t| format!(" -> {}", wit_type(types, t, &names)))
                             .unwrap_or_default();
+                        let func_kw = if func.is_async { "async func" } else { "func" };
                         match func.kind {
                             FuncKind::Constructor(_) => {
                                 writeln!(text, "    constructor({params});").unwrap()
                             }
                             FuncKind::Static(_) => writeln!(
                                 text,
-                                "    %{}: static func({params}){ret};",
+                                "    %{}: static {func_kw}({params}){ret};",
                                 kebab(&func.name)
                             )
                             .unwrap(),
-                            _ => writeln!(text, "    %{}: func({params}){ret};", kebab(&func.name))
-                                .unwrap(),
+                            _ => writeln!(
+                                text,
+                                "    %{}: {func_kw}({params}){ret};",
+                                kebab(&func.name)
+                            )
+                            .unwrap(),
                         }
                     }
                 }
@@ -256,7 +274,8 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                     .ret
                     .map(|t| format!(" -> {}", wit_type(types, t, &names)))
                     .unwrap_or_default();
-                writeln!(text, "  %{}: func({}){ret};", kebab(&func.name), params).unwrap();
+                let func_kw = if func.is_async { "async func" } else { "func" };
+                writeln!(text, "  %{}: {func_kw}({params}){ret};", kebab(&func.name)).unwrap();
             }
         }
         writeln!(text, "}}").unwrap();

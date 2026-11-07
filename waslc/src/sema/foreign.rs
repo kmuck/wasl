@@ -5,8 +5,8 @@
 //! functions are imported functions (§ 7.12).
 //!
 //! An item that WaSL cannot use (a name that is not a WaSL identifier, a type WaSL does
-//! not have yet, an `async` function) is not an error by itself: it is recorded with the
-//! reason, reported when the code names it (E0215).
+//! not have yet) is not an error by itself: it is recorded with the reason, reported when
+//! the code names it (E0215).
 
 use std::collections::HashMap;
 
@@ -119,18 +119,28 @@ impl<'r> Converter<'r> {
             let resource = match func.kind {
                 FunctionKind::Constructor(r)
                 | FunctionKind::Method(r)
-                | FunctionKind::Static(r) => match self.def(types, r) {
+                | FunctionKind::Static(r)
+                | FunctionKind::AsyncMethod(r)
+                | FunctionKind::AsyncStatic(r) => match self.def(types, r) {
                     Ok(t) => types.resource(t).map(|(d, _)| d),
                     Err(_) => continue,
                 },
                 _ => None,
             };
+            let is_async = matches!(
+                func.kind,
+                FunctionKind::AsyncFreestanding
+                    | FunctionKind::AsyncMethod(_)
+                    | FunctionKind::AsyncStatic(_)
+            );
             let converted = match func.kind {
                 FunctionKind::Freestanding
+                | FunctionKind::AsyncFreestanding
                 | FunctionKind::Constructor(_)
-                | FunctionKind::Static(_) => self.signature(types, &func.params, func.result),
+                | FunctionKind::Static(_)
+                | FunctionKind::AsyncStatic(_) => self.signature(types, &func.params, func.result),
                 // `self` is the first parameter, whose WIT name is not a WaSL name.
-                FunctionKind::Method(_) => self
+                FunctionKind::Method(_) | FunctionKind::AsyncMethod(_) => self
                     .signature(types, &func.params[1..], func.result)
                     .and_then(|(params, ret)| {
                         let this = self.ty(types, func.params[0].ty)?;
@@ -138,11 +148,7 @@ impl<'r> Converter<'r> {
                         all.extend(params);
                         Ok((all, ret))
                     }),
-                FunctionKind::AsyncFreestanding
-                | FunctionKind::AsyncMethod(_)
-                | FunctionKind::AsyncStatic(_) => Err(format!(
-                    "`{wit}` is an `async` function, and async functions are not available yet"
-                )),
+                #[allow(unreachable_patterns)]
                 _ => Err(format!(
                     "`{wit}` is a kind of function that WaSL does not support yet"
                 )),
@@ -150,8 +156,12 @@ impl<'r> Converter<'r> {
             let id = first_func + funcs.len();
             let kind = match (func.kind.clone(), resource) {
                 (FunctionKind::Constructor(_), Some(d)) => hir::FuncKind::Constructor(d),
-                (FunctionKind::Method(_), Some(d)) => hir::FuncKind::Method(d),
-                (FunctionKind::Static(_), Some(d)) => hir::FuncKind::Static(d),
+                (FunctionKind::Method(_) | FunctionKind::AsyncMethod(_), Some(d)) => {
+                    hir::FuncKind::Method(d)
+                }
+                (FunctionKind::Static(_) | FunctionKind::AsyncStatic(_), Some(d)) => {
+                    hir::FuncKind::Static(d)
+                }
                 _ => hir::FuncKind::Free,
             };
             match converted {
@@ -176,6 +186,7 @@ impl<'r> Converter<'r> {
                     funcs.push(hir::FuncDef {
                         name,
                         kind,
+                        is_async,
                         interface: hir_id,
                         params,
                         ret,

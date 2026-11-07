@@ -50,7 +50,7 @@ src/orders.wasl:19:12: error[E0400]: mismatched types: expected `u32`, found `u6
 
 ## 11.3 Error codes
 
-Codes never change meaning from one version to the next. E0101, E0222, E0223 and E0416 to E0419 belong to 0.4 and are *specified, not available yet*.
+Codes never change meaning from one version to the next. E0101, E0222, E0223 and E0416 to E0419 belong to 0.4; E0222, E0223 and E0417 to E0419 are *specified, not available yet*.
 
 | Code | Error | Example |
 |---|---|---|

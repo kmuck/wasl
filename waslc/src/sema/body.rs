@@ -94,6 +94,8 @@ pub(super) struct FnCx<'a> {
     /// Nested scopes: visible names and their variable.
     pub(super) scopes: Vec<Vec<(String, LocalId)>>,
     loop_depth: u32,
+    /// Whether the function is async: only an async function makes async calls (E0416).
+    pub(super) in_async: bool,
     /// The calls to functions of other packages, with their location (E0221).
     pub(super) foreign_calls: Vec<(hir::FuncId, Span)>,
 }
@@ -117,6 +119,7 @@ impl<'a> FnCx<'a> {
             locals: Vec::new(),
             scopes: Vec::new(),
             loop_depth: 0,
+            in_async: false,
             foreign_calls: Vec::new(),
         }
     }
@@ -124,6 +127,21 @@ impl<'a> FnCx<'a> {
     /// A type, as written in messages.
     fn show(&self, ty: Type) -> String {
         self.types.display(ty)
+    }
+
+    /// E0416: a call to an async function outside an async function (§ 2.8). The
+    /// Component Model traps when a task that is not async would block.
+    fn check_color(&self, func: FuncId, written: &str, span: Span) -> Result<()> {
+        if self.program.funcs[func].is_async && !self.in_async {
+            return err(
+                Code::AsyncCall,
+                span,
+                format!(
+                    "`{written}` is async, and only an async function can call it: declare this function `async func`"
+                ),
+            );
+        }
+        Ok(())
     }
 
     fn mismatch<T>(&self, span: Span, expected: Type, found: Type) -> Result<T> {
@@ -839,6 +857,7 @@ impl<'a> FnCx<'a> {
                 format!("resource `{resource}` has no method `{}`{hint}", name.name),
             );
         };
+        self.check_color(func_id, &format!(".{}(…)", name.name), name.span)?;
         let func = &self.program.funcs[func_id];
         if func.params.len() - 1 != args.len() {
             return err(
@@ -1441,9 +1460,14 @@ impl<'a> FnCx<'a> {
             PathTarget::Builtin(b) => return self.builtin(b, call, span, expected),
             other => return self.construct(other, &call.name, Some(&call.args), span, expected),
         };
+        let start = call.path.first().unwrap_or(&call.name).span;
+        self.check_color(
+            func_id,
+            &format!("{}(…)", call_path(call)),
+            start.to(call.name.span),
+        )?;
         let func = &self.program.funcs[func_id];
         if self.program.interfaces[func.interface].foreign.is_some() {
-            let start = call.path.first().unwrap_or(&call.name).span;
             self.foreign_calls.push((func_id, start.to(call.name.span)));
         }
         if func.params.len() != call.args.len() {

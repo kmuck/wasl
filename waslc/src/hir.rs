@@ -227,6 +227,8 @@ pub enum FuncKind {
 pub struct FuncDef {
     pub name: String,
     pub kind: FuncKind,
+    /// `async func` (§ 2.8): its calls may wait, and only an async function calls it.
+    pub is_async: bool,
     pub interface: InterfaceId,
     pub params: Vec<(String, Type)>,
     pub ret: Option<Type>,

@@ -26,7 +26,7 @@ world calculator {
 }
 ```
 
-- A function `func f(p: T, …) -> R` becomes `f: func(p: T, …) -> R;`; without a return type, `f: func(p: T, …);`. An `async func` becomes `f: async func(…)`, and an async static function `s: static async func(…)` (§ 2.8; *specified, not available yet*).
+- A function `func f(p: T, …) -> R` becomes `f: func(p: T, …) -> R;`; without a return type, `f: func(p: T, …);`. An `async func` becomes `f: async func(…)`, and an async static function `s: static async func(…)` (§ 2.8).
 - A world `world w { export i; }` becomes `world w { export i; }`. An import or an export of an interface of another package is written with its WIT name and the version of the dependency (§ 3.5): `import wasi:cli/stdout@0.2.6;`, `export wasi:cli/run@0.2.6;`. The foreign interfaces themselves are not written in the WIT of the package: they belong to their packages, and the component embeds them (below).
 - A resource becomes `resource r { … }` with its constructor (`constructor(p: T, …);`), its methods (`m: func(…) -> R;`) and its static functions (`s: static func(…) -> R;`), in declaration order; its fields never appear (§ 7.12). A parameter `c: r` is written `c: r` (an `own`), `c: borrow<r>` as is.
 - `weasel wit` prints the WIT of the package (§ 14.2). The layout of the printed text (indentation, blank lines) is not specified; its content is.
@@ -153,7 +153,7 @@ An exported function is lifted with these canonical options **only when its sign
 | `string-encoding` | `utf8`, the encoding of WaSL strings |
 | `post-return` | the function that releases the result (§ 13.7), exported as `cm32p2|<interface>|<function>_post`, only for a function whose result goes through memory |
 
-A function whose result is returned as flat values (a scalar, or no result) has no post-return, even if its parameters go through memory: `func f(s: string) -> u32` needs the memory and `realloc`, but leaves nothing to release. The module has a memory and a `realloc` only if at least one of its exported functions needs them: a world whose exported functions only use scalars has no memory (§ 13.4).
+A function whose result is returned as flat values (a scalar, or no result) has no post-return, even if its parameters go through memory: `func f(s: string) -> u32` needs the memory and `realloc`, but leaves nothing to release. An exported async function gives its result to `task.return` (§ 13.13): it needs the memory when its parameters do, or when its result contains a string or a list or flattens to more than 16 values, and never has a post-return. The module has a memory and a `realloc` only if at least one of its exported functions needs them: a world whose exported functions only use scalars has no memory (§ 13.4).
 
 Because parameters beyond 16 flat values go through memory, exported functions have **no parameter limit** (§ 6.5).
 
@@ -218,7 +218,7 @@ module: cm32p2|<interface>         name: <function>
 
 **Handles.** An own handle passed as an argument is given to the callee: the Component Model removes it from the handle table, which is why WaSL sets the local to `0` (§ 9.9). A borrowed handle is passed as is and stays in the table. A handle received in a result is a new entry of the table, owned by the place that receives it.
 
-**Async functions.** A function of an imported interface whose WIT is `async func` is lowered without `async`, under the same names (*specified, not available yet*): the call returns when the callee has delivered its result, as a call to an async function does in WaSL (§ 2.8). Starting a call without waiting for it, `canon lower async`, is for a later version (§ 16).
+**Async functions.** A function of an imported interface whose WIT is `async func` is lowered without `async`, under the same names: the call returns when the callee has delivered its result, as a call to an async function does in WaSL (§ 2.8). In a module with async exports, every call to an async import goes through its reverse adapter, which keeps the data of the waiting task in memory (§ 13.13). Starting a call without waiting for it, `canon lower async`, is for a later version (§ 16).
 
 **Same package.** For `import accounts;` the component imports the functions of `accounts` that it calls, under the name of the package; the functions of `accounts` are not compiled into it (§ 2.5). The component of the world that exports `accounts` provides them when the two are composed (§ 14.2).
 
@@ -246,11 +246,11 @@ The constructor, the methods and the static functions are exported like function
 
 The functions of the block `export wasi:cli/run { … }` (§ 2.4.2) are exported like the functions of an interface of the package: with the canonical name of the foreign interface, `cm32p2|wasi:cli/run@0.2|run`, their adapters (§ 13.8) and their canonical options (§ 13.6).
 
-The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, the same color (`async func` or `func`), and no other function. The types are compared after the conversion of names of § 13.2. An `async func` of the block is lifted as in § 13.13, which makes `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 exportable (*specified, not available yet*). A foreign interface that declares resources cannot be exported yet: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).
+The compiler reads the WIT of the foreign interface from the dependency (§ 3.5) and checks the block against it (E0218): every function of the interface, with the same parameter names and types, the same result, the same color (`async func` or `func`), and no other function. The types are compared after the conversion of names of § 13.2. An `async func` of the block is lifted as in § 13.13, which makes `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 exportable (`wasi:http/handler` once streams and futures are available: *specified, not available yet*). A foreign interface that declares resources cannot be exported yet: the block would have to implement them, which needs a syntax for resources in foreign exports (§ 16).
 
 ## 13.13 Async at the boundary
 
-*Specified, not available yet.*
+Async functions are available. Streams, futures and `task::return` are *specified, not available yet*.
 
 **Exported async functions.** An exported `async func`, of an interface of the package or of a foreign export block, is lifted with `canon lift async` and a `callback`, the mode of the Component Model that every runtime of WASI 0.3 supports. In 0.4 the callback is never called: the adapter runs the whole body of the function, which blocks wherever it waits (§ 12.12), then returns the code `EXIT` (`0`). The adapter:
 
@@ -267,7 +267,7 @@ The result is never returned as flat values and there is no post-return function
 |---|---|---|---|
 | the adapter (export) | | `[async-lift]<interface>#<function>`: `[async-lift]wasi:http/handler@0.3.0#handle` | the lifted parameters, `(result i32)` |
 | the callback (export) | | `[callback][async-lift]<interface>#<function>` | `(param i32 i32 i32) (result i32)`, its body is `unreachable` |
-| `task.return` | `[export]<interface>` | `[task-return]<function>` | the flat result as parameters: `(param i32)` for `run` |
+| `task.return` | `[export]<interface>` | `[task-return]<function>` | the flat result as parameters: `(param i32)` for `run`; its address beyond 16 flat values, as for parameters |
 | `stream.new`, `future.new` | the interface of `f`, `[export]<interface>` if `f` is exported | `[stream-new-N]f`, `[future-new-N]f` | `(result i64)` |
 | `stream.write`, `stream.read` | same | `[async-lower][stream-write-N]f`, `[async-lower][stream-read-N]f` | `(param i32 i32 i32) (result i32)`: the end, an address, a count |
 | `future.write`, `future.read` | same | `[async-lower][future-write-N]f`, `[async-lower][future-read-N]f` | `(param i32 i32) (result i32)`: the end, an address |
@@ -279,6 +279,14 @@ The result is never returned as flat values and there is no post-return function
 
 **Async imports** are lowered without `async` (§ 13.10): `canon lower` of an `async func` suspends the caller until the callee delivers its result. In a task that is not async, the Component Model would trap; E0416 rules it out.
 
-**Regions of linear memory.** With async functions, a task can wait while some of its data is in linear memory, such as the elements of a write that the reader has not taken yet or the room of a read, and another task may run meanwhile (§ 10.12). So the allocator of § 13.7 gives each task its own **region**, whose address the task keeps with `context.set 0`, the storage of the current task in the Component Model. The region also holds the waitable set of the task (§ 12.12). It is given back when the task ends; within a region, everything else in § 13.7 holds. How regions are placed in memory is not specified.
+**Regions of linear memory.** With async functions, a task can wait while some of its data is in linear memory, such as the arguments and the return area of an async import, or the elements of a write that the reader has not taken yet, and another task may run meanwhile (§ 10.12). So each task allocates from its own **region** of the scratch buffer, given back when the task ends; within a region, everything else in § 13.7 holds.
+
+In 0.4, an instance runs at most one async task at a time (below), and only sync tasks run while it waits. A sync task never waits (E0416): it ends before the async task resumes. The regions are therefore a stack, kept with one more global, `$scratch_base`, starting at 0:
+
+- the region of the async task starts at 0: its adapter starts with an empty buffer, and empties it when the task ends, setting `$scratch_base` and `$scratch_top` back to 0;
+- before each call to an async import, the reverse adapter sets `$scratch_base` to `$scratch_top`: the data of the waiting task, below it, stays in place;
+- the region of a sync task starts at `$scratch_base`: where § 13.7 sets `$scratch_top` back to 0, after the arguments are lifted and in the post-return function, a module with async exports sets it back to `$scratch_base`.
+
+A module without async exports has no `$scratch_base`, and its code is that of § 13.7. The waitable set of the async task (§ 12.12) is a global of the module, for the same reason. When an instance runs several async tasks at once (§ 16), the regions stop being a stack: each task will keep the address of its region, and its waitable set, with `context.set 0`, the storage of the current task in the Component Model.
 
 **One async task at a time per instance.** A task lifted with a callback holds its instance until it returns `EXIT`, including while it blocks: the other async calls to the same instance wait for it (§ 10.12). A host that serves several requests at once must therefore give each concurrent request its own instance, which `weasel serve` does (§ 14.2); with `wasmtime serve`, it is `--max-instance-concurrent-reuse-count 1`. Later versions can lift the same body as a *stackful* task of the Component Model, or run it on a thread of the Component Model, so that one instance interleaves many tasks: the WaSL code does not change, only the adapter and the regions (§ 16).
