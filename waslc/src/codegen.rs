@@ -1087,6 +1087,36 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 self.emit(Instruction::LocalSet(*local));
                 self.own(*local);
             }
+            Stmt::Destructure { locals, init } => {
+                let ty = init.value_ty();
+                let TypeKind::Tuple(elems) = self.types().kind(ty) else {
+                    unreachable!("checked: a tuple")
+                };
+                let tuple = self.cx.heap(ty);
+                let val = self.cx.val(ty);
+                let tmp = self.scratch(val);
+                self.expr(init);
+                self.emit(Instruction::LocalSet(tmp));
+                // In order: each element goes to its local, and an element written `_` is
+                // released at once (§ 9.4, § 9.9).
+                for (k, (local, &elem)) in locals.iter().zip(elems).enumerate() {
+                    if local.is_none() && !self.cx.has_handles(elem) {
+                        continue;
+                    }
+                    self.get_scratch(tmp, val);
+                    self.emit(Instruction::StructGet {
+                        struct_type_index: tuple,
+                        field_index: k as u32,
+                    });
+                    match local {
+                        Some(l) => {
+                            self.emit(Instruction::LocalSet(*l));
+                            self.own(*l);
+                        }
+                        None => self.release_value(elem),
+                    }
+                }
+            }
             Stmt::Assign { place, value } => match place {
                 Place::Local(l)
                     if self

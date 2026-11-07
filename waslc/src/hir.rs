@@ -79,6 +79,7 @@ pub fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
     for stmt in stmts {
         match stmt {
             Stmt::Local { init, .. } => init.iter().for_each(|e| visit_expr(e, f)),
+            Stmt::Destructure { init, .. } => visit_expr(init, f),
             Stmt::Assign { place, value } => {
                 match place {
                     Place::Local(_) | Place::Global(_) => {}
@@ -240,6 +241,12 @@ pub enum Stmt {
     Local {
         local: LocalId,
         init: Option<Expr>,
+    },
+    /// `local (a: A, _) = e;` (§ 9.4): the tuple `init`, whose elements go to their
+    /// locals; the elements written `_` (`None`) are released at once.
+    Destructure {
+        locals: Vec<Option<LocalId>>,
+        init: Expr,
     },
     Assign {
         place: Place,

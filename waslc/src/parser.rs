@@ -527,6 +527,31 @@ impl Parser {
     fn stmt(&mut self) -> Result<Stmt> {
         let start = self.span();
         let kind = match self.peek() {
+            TokenKind::Local if *self.peek_at(1) == TokenKind::LParen => {
+                self.bump();
+                self.bump();
+                let mut bindings = Vec::new();
+                loop {
+                    if self.eat(&TokenKind::Underscore) {
+                        bindings.push(None);
+                    } else {
+                        let name = self.ident("a local name or `_`")?;
+                        self.expect(&TokenKind::Colon, "`:` (the type of a local is required)")?;
+                        bindings.push(Some((name, self.ty()?)));
+                    }
+                    if !self.eat(&TokenKind::Comma) || *self.peek() == TokenKind::RParen {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RParen, "`,` or `)`")?;
+                self.expect(
+                    &TokenKind::Eq,
+                    "`=` (a destructuring takes the elements of a tuple: `local (a: A, b: B) = e;`)",
+                )?;
+                let init = self.expr()?;
+                self.expect(&TokenKind::Semi, "`;`")?;
+                StmtKind::Destructure { bindings, init }
+            }
             TokenKind::Local => {
                 self.bump();
                 let name = self.ident("a local name")?;

@@ -243,6 +243,12 @@ pub enum StmtKind {
         ty: TypeExpr,
         init: Option<Expr>,
     },
+    /// `local (a: A, _) = e;` (§ 9.4): one local per element of a tuple, or `None` for
+    /// an element written `_`.
+    Destructure {
+        bindings: Vec<Option<(Ident, TypeExpr)>>,
+        init: Expr,
+    },
     Assign {
         target: Place,
         value: Expr,
