@@ -1389,9 +1389,9 @@ fn dtor(cx: &mut ModuleCx, d: DeclId) -> (Vec<ValType>, Vec<ValType>, Function) 
     g.finish(Vec::new())
 }
 
-/// `(T')`: releases the handles of a value (§ 9.9): a handle itself, or the payload of
-/// the case of an `option`, a `result` or a variant. Records, tuples and lists hold
-/// no handles (E0220). Locals: value = 0.
+/// `(T')`: releases the handles of a value (§ 9.9): a handle itself, the elements of a
+/// tuple, or the payload of the case of an `option`, a `result` or a variant. Records
+/// and lists hold no handles (E0220). Locals: value = 0.
 fn release(cx: &mut ModuleCx, ty: Type) -> (Vec<ValType>, Vec<ValType>, Function) {
     let types = cx.types;
     let val = cx.val(ty);
@@ -1423,6 +1423,21 @@ fn release(cx: &mut ModuleCx, ty: Type) -> (Vec<ValType>, Vec<ValType>, Function
         }
         g.call(Boundary::Release(inner));
         g.emit(I::End);
+    } else if let TypeKind::Tuple(elems) = types.kind(ty) {
+        let tuple = g.cx.heap(ty);
+        for (k, &elem) in elems.iter().enumerate() {
+            if !g.cx.has_handles(elem) {
+                continue;
+            }
+            g.code.extend([
+                I::LocalGet(0),
+                I::StructGet {
+                    struct_type_index: tuple,
+                    field_index: k as u32,
+                },
+            ]);
+            g.call(Boundary::Release(elem));
+        }
     } else if let Some(payloads) = cases(types, ty) {
         let base = g.cx.heap(ty);
         for (k, payload) in payloads.iter().enumerate() {

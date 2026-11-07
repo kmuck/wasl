@@ -62,12 +62,12 @@ With these, every WIT type except resources (`own`, `borrow`) and async types (`
 
 With these, every WIT type except async types (`stream`, `future`) has its WaSL equivalent, and a WaSL component can run as a WASI 0.2 command (§ 15.6).
 
-**Added in 0.4** (*specified, not available yet*):
+**Added in 0.4**, each item *specified, not available yet* unless marked otherwise:
 
 - async functions: their declaration, calls that wait without a marker, and the rule that only an async function calls one (§ 2.8, § 8.21);
 - `stream<T>` and `future<T>`, their writable ends `stream_writer<T>` and `future_writer<T>`, and their built-in functions (§ 7.13, § 8.21);
 - `task::return`, which delivers the result of an exported async function before its end (§ 8.21);
-- tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12);
+- tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12), available;
 - WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2);
 - the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12);
 - `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2).
@@ -170,4 +170,4 @@ Version 0.4 accepts every valid v0.3 program with the same behavior. `async`, `s
 | a foreign interface with `async` functions can be exported (§ 13.12) | `export wasi:cli/run { … }` for WASI 0.3 is no longer E0218 |
 | a WIT name with uppercase letters is written in lowercase (§ 13.2) | `error_code::dns_timeout` names `DNS-timeout`, which was E0215 |
 
-All of these are *specified, not available yet*.
+The two rows on tuples are available; the others are *specified, not available yet*.

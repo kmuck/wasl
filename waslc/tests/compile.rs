@@ -202,6 +202,101 @@ fn invalid_programs() {
 }
 
 /// Errors of `?` (§ 8.19): E0414, E0415, and the value rules of § 9.6.
+/// Destructuring (§ 9.4): its syntax, its types and its names.
+#[test]
+fn destructuring_errors() {
+    let cases: &[(&str, Code, &str)] = &[
+        (
+            "local (a: u32, b: u64) = t::pair();",
+            Code::TypeMismatch,
+            "`b` is declared `u64`",
+        ),
+        (
+            "local (a: u32) = t::pair();",
+            Code::TypeMismatch,
+            "has 2 element(s), and the destructuring has 1",
+        ),
+        (
+            "local (a: u32, b: u32, _) = t::pair();",
+            Code::TypeMismatch,
+            "has 2 element(s)",
+        ),
+        (
+            "local (a: u32, b: u32) = n;",
+            Code::TypeMismatch,
+            "takes the elements of a tuple",
+        ),
+        (
+            "local (a: u32, b: u32) = tuple(1, 2, 3);",
+            Code::TypeMismatch,
+            "a tuple of 3 element(s)",
+        ),
+        (
+            "local (a: u32, _) = tuple(1, 2);",
+            Code::CannotInfer,
+            "cannot infer",
+        ),
+        (
+            "local (a: u32, a: u32) = t::pair();",
+            Code::DuplicateLocal,
+            "already declared",
+        ),
+        (
+            "local (n: u32, b: u32) = t::pair();",
+            Code::DuplicateLocal,
+            "already declared",
+        ),
+        (
+            "local (pi: u32, _) = t::pair();",
+            Code::ShadowsGlobal,
+            "name of a global",
+        ),
+        (
+            "local (a: u32, b: u32) = tuple(a, 1);",
+            Code::UnknownName,
+            "`a`",
+        ),
+        ("local (a: u32, b: u32);", Code::Syntax, "`=`"),
+        (
+            "local ((a: u32, b: u32), c: u32) = t::pair();",
+            Code::Syntax,
+            "a local name or `_`",
+        ),
+        ("local (a, b) = t::pair();", Code::Syntax, "`:`"),
+        ("local () = t::pair();", Code::Syntax, "a local name or `_`"),
+    ];
+    for (body, code, message) in cases {
+        let program = format!(
+            "global pi: f64 = 3.14;
+             interface t {{
+               func pair() -> tuple<u32, u32> {{ return tuple(1, 2); }}
+               func f(n: u32) {{ {body} }}
+             }}"
+        );
+        let sources = sources(&[("src/t.wasl", &program)]);
+        match analyze(&package(), &sources, &Default::default()) {
+            Ok(_) => panic!("accepted: {body}"),
+            Err(e) => {
+                assert_eq!(e.code, *code, "{body}: {}", e.display(&sources));
+                assert!(e.message.contains(message), "{body}: {}", e.message);
+            }
+        }
+    }
+    // The locals are visible after the declaration, and a tuple of literals takes the
+    // written types.
+    analyze_files(&[(
+        "src/t.wasl",
+        "interface t {
+           func f() -> u64 {
+             local (a: u32, b: u64,) = tuple(1, 2);
+             local (_, c: u64) = tuple(a, b + 1);
+             return c;
+           }
+         }",
+    )])
+    .unwrap();
+}
+
 #[test]
 fn error_propagation_errors() {
     let cases: &[(&str, &str, Code)] = &[
@@ -661,8 +756,14 @@ fn several_errors() {
     assert_eq!(
         all_errors(&[
             ("src/a.wasl", "interface i {\n  func f( {\n}\n"),
-            ("src/b.wasl", "interface j {\n  func g() -> u32 { return @; }\n}\n"),
-            ("src/c.wasl", "interface k {\n  func h() -> u32 { return z; }\n}\n"),
+            (
+                "src/b.wasl",
+                "interface j {\n  func g() -> u32 { return @; }\n}\n"
+            ),
+            (
+                "src/c.wasl",
+                "interface k {\n  func h() -> u32 { return z; }\n}\n"
+            ),
         ])
         .len(),
         2

@@ -278,6 +278,23 @@ interface h {
     return 0;
   }
 
+  // A destructuring declares one local per element; `_` keeps nothing (§ 9.4).
+  func destructure(n: u32) -> u32 {
+    local (name: string, len: u32) = names::measured("abc");
+    local (x: u32, _, ok: bool,) = tuple(n, names::measured("z"), len == 3);
+    local total: u32;
+    local i: u32;
+    while (i < 2) {
+      local (s: string, k: u32) = names::measured(name + name);
+      total = total + k + string::len(s);
+      i = i + 1;
+    }
+    if (ok) {
+      return x + len + total;
+    }
+    return 0;
+  }
+
   // ---- Enums, flags ----
 
   func color_index(c: color) -> u32 {
@@ -565,6 +582,12 @@ interface h {
     }
   }
 }
+
+interface names {
+  func measured(s: string) -> tuple<string, u32> {
+    return tuple(s, string::len(s));
+  }
+}
 "#;
 
 /// Length of the long literal: above the 1,000 bytes of `array.new_fixed` (§ 12.8).
@@ -684,6 +707,7 @@ fn records_and_tuples() {
     assert_eq!(runner.call("bump-origin", &[]), S32(3));
     assert_eq!(runner.call("bump-origin", &[]), S32(4));
     assert_eq!(call("tuple-sum", &[]), U32(8));
+    assert_eq!(call("destructure", &[U32(10)]), U32(10 + 3 + 2 * (6 + 6)));
 }
 
 #[test]

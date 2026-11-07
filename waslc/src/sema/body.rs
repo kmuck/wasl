@@ -235,6 +235,7 @@ impl<'a> FnCx<'a> {
                 let local = self.declare(name, ty)?;
                 hir::Stmt::Local { local, init }
             }
+            StmtKind::Destructure { bindings, init } => self.destructure(bindings, init)?,
             StmtKind::Assign { target, value } if !target.selectors.is_empty() => {
                 let (place, ty) = self.place(target)?;
                 let value = self.expr(value, Some(ty))?;
@@ -441,6 +442,117 @@ impl<'a> FnCx<'a> {
             StmtKind::Call(_) | StmtKind::Discard(_) => {
                 unreachable!("the parser only builds calls and `?` in call statements")
             }
+        })
+    }
+
+    /// `local (a: A, _) = e;` (§ 9.4): `e` is a tuple with one element per position, and
+    /// each written type is the type of its element.
+    fn destructure(
+        &mut self,
+        bindings: &[Option<(Ident, ast::TypeExpr)>],
+        init: &ast::Expr,
+    ) -> Result<hir::Stmt> {
+        let mut written = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            written.push(match binding {
+                Some((_, ty)) => {
+                    let t = self.resolver.resolve(self.types, ty, self.iface)?;
+                    super::no_borrow(self.types, t, ty.span)?;
+                    Some(t)
+                }
+                None => None,
+            });
+        }
+        // The expected type of `e` is the tuple of the written types; a `_` gives no
+        // expected type for its position (§ 8.2).
+        let mut literal = init;
+        while let ExprKind::Paren(inner) = &literal.kind {
+            literal = inner;
+        }
+        let value = match &literal.kind {
+            ExprKind::Tuple(elems) => {
+                if elems.len() != bindings.len() {
+                    return err(
+                        Code::TypeMismatch,
+                        init.span,
+                        format!(
+                            "this is a tuple of {} element(s), and the destructuring has {} position(s): write `_` for an element you do not keep",
+                            elems.len(),
+                            bindings.len()
+                        ),
+                    );
+                }
+                let mut values = Vec::with_capacity(elems.len());
+                for (e, ty) in elems.iter().zip(&written) {
+                    if ty.is_none() && !self_typed(e) {
+                        return cannot_infer(e.span);
+                    }
+                    values.push(self.expr(e, *ty)?);
+                }
+                let ty = self.types.intern(TypeKind::Tuple(
+                    values.iter().map(|v| v.value_ty()).collect(),
+                ));
+                typed(hir::ExprKind::Tuple(values), ty)
+            }
+            _ if self_typed(init) => self.expr(init, None)?,
+            _ => match written.iter().copied().collect::<Option<Vec<Type>>>() {
+                Some(elems) => {
+                    let ty = self.types.intern(TypeKind::Tuple(elems));
+                    self.expr(init, Some(ty))?
+                }
+                None => return cannot_infer(init.span),
+            },
+        };
+        let ty = value.value_ty();
+        let TypeKind::Tuple(elems) = self.types.kind(ty).clone() else {
+            return err(
+                Code::TypeMismatch,
+                init.span,
+                format!(
+                    "a destructuring takes the elements of a tuple, and this value is a `{}`",
+                    self.show(ty)
+                ),
+            );
+        };
+        if elems.len() != bindings.len() {
+            return err(
+                Code::TypeMismatch,
+                init.span,
+                format!(
+                    "`{}` has {} element(s), and the destructuring has {} position(s): write `_` for an element you do not keep",
+                    self.show(ty),
+                    elems.len(),
+                    bindings.len()
+                ),
+            );
+        }
+        for ((binding, written), &elem) in bindings.iter().zip(&written).zip(&elems) {
+            if let (Some((name, ty)), Some(written)) = (binding, *written)
+                && written != elem
+            {
+                return err(
+                    Code::TypeMismatch,
+                    ty.span,
+                    format!(
+                        "mismatched types: `{}` is declared `{}`, and its element of the tuple is a `{}`",
+                        name.name,
+                        self.show(written),
+                        self.show(elem)
+                    ),
+                );
+            }
+        }
+        // The locals are visible from the end of the declaration (§ 9.4).
+        let mut locals = Vec::with_capacity(bindings.len());
+        for (binding, &elem) in bindings.iter().zip(&elems) {
+            locals.push(match binding {
+                Some((name, _)) => Some(self.declare(name, elem)?),
+                None => None,
+            });
+        }
+        Ok(hir::Stmt::Destructure {
+            locals,
+            init: value,
         })
     }
 
@@ -2047,6 +2159,19 @@ impl<'a> FnCx<'a> {
 
     fn elem_of(&mut self, base: hir::Expr, index: u128, span: Span) -> Result<hir::Expr> {
         let ty = base.value_ty();
+        // Reading one element of a tuple that holds handles would lose the others: such a
+        // tuple is a temporary, taken apart by a destructuring (§ 7.12, § 9.4).
+        if let Some(h) = super::handle_in(self.types, &self.program.handles, ty, self.iface) {
+            return err(
+                Code::HandlePosition,
+                span,
+                format!(
+                    "`{}` holds `{}`, a handle to a resource of another component: take its elements with a destructuring, `local (a: A, b: B) = e;`",
+                    self.show(ty),
+                    self.show(h)
+                ),
+            );
+        }
         match self.types.kind(ty) {
             TypeKind::Tuple(elems) if index < elems.len() as u128 => {
                 let elem_ty = elems[index as usize];

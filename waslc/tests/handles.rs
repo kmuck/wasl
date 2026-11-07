@@ -23,6 +23,8 @@ interface carts {
 
   find: func(id: u32) -> option<cart>;
   merge: func(a: cart, b: borrow<cart>) -> cart;
+  pair: func(total: u64) -> tuple<cart, u32, cart>;
+  maybe-pair: func(total: u64) -> option<tuple<cart, cart>>;
 }
 "#;
 
@@ -138,6 +140,26 @@ fn linker(engine: &Engine) -> Linker<Shop> {
             Ok(())
         })
         .unwrap();
+    carts
+        .func_new("pair", |mut store, _, args, out| {
+            let Val::U64(total) = args[0] else { panic!() };
+            let a = new_cart(&mut store, total);
+            let b = new_cart(&mut store, total + 1);
+            out[0] = Val::Tuple(vec![a, Val::U32(7), b]);
+            Ok(())
+        })
+        .unwrap();
+    carts
+        .func_new("maybe-pair", |mut store, _, args, out| {
+            let Val::U64(total) = args[0] else { panic!() };
+            out[0] = Val::Option((total > 0).then(|| {
+                let a = new_cart(&mut store, total);
+                let b = new_cart(&mut store, total);
+                Box::new(Val::Tuple(vec![a, b]))
+            }));
+            Ok(())
+        })
+        .unwrap();
     linker
 }
 
@@ -246,6 +268,7 @@ interface t {
   func temporaries() -> u64 {
     _ = carts::cart::of("pen", 1);
     _ = carts::find(3);
+    _ = carts::pair(5);
     return carts::cart().total() + carts::merge(carts::cart(), carts::cart()).total();
   }
 
@@ -298,6 +321,46 @@ interface t {
     return a.total();
   }
 
+  func both(n: u64) -> u64 {
+    local (a: carts::cart, k: u32, b: carts::cart) = carts::pair(n);
+    return a.total() + u64(k) + b.total();
+  }
+
+  // `_` releases its element at once (§ 9.4).
+  func first(n: u64) -> u64 {
+    local (a: carts::cart, _, _) = carts::pair(n);
+    return a.total();
+  }
+
+  func neither(n: u64) {
+    local (_, _, _) = carts::pair(n);
+  }
+
+  func paired(n: u64) -> option<u64> {
+    local (a: carts::cart, b: carts::cart) = carts::maybe_pair(n)?;
+    local m: carts::cart = carts::merge(a, b);
+    return option::some(m.total());
+  }
+
+  // Each `c` replaces the cart of `a`, which is released; each `d` is released at the
+  // end of the loop body.
+  func repaired(n: u64) -> u64 {
+    local (a: carts::cart, _, b: carts::cart) = carts::pair(n);
+    local i: u32;
+    while (i < 3) {
+      local (c: carts::cart, _, d: carts::cart) = carts::pair(u64(i));
+      a = c;
+      i = i + 1;
+    }
+    return a.total() + b.total();
+  }
+
+  func give_pair(n: u64) -> tuple<carts::cart, u32> {
+    local c: carts::cart = carts::cart();
+    _ = c.add("pen", 1);
+    return tuple(c, 7);
+  }
+
   func give(n: u32) -> option<carts::cart> {
     if (n == 0) {
       return option::none;
@@ -340,6 +403,37 @@ fn handles_are_released() {
     );
     assert_eq!(r.released("loops", &[Val::U32(5)]), Some(Val::U32(2)));
     assert_eq!(r.released("loops", &[Val::U32(0)]), Some(Val::U32(0)));
+}
+
+#[test]
+fn tuples_of_handles() {
+    let mut r = Runner::new(PROGRAM);
+    assert_eq!(
+        r.released("both", &[Val::U64(10)]),
+        Some(Val::U64(10 + 7 + 11))
+    );
+    assert_eq!(r.released("first", &[Val::U64(10)]), Some(Val::U64(10)));
+    assert_eq!(r.released("neither", &[Val::U64(10)]), None);
+    assert_eq!(
+        r.released("paired", &[Val::U64(4)]),
+        Some(Val::Option(Some(Box::new(Val::U64(8)))))
+    );
+    assert_eq!(
+        r.released("paired", &[Val::U64(0)]),
+        Some(Val::Option(None))
+    );
+    // The last `c` is pair(2), and `b` is the second cart of pair(10).
+    assert_eq!(
+        r.released("repaired", &[Val::U64(10)]),
+        Some(Val::U64(2 + 11))
+    );
+
+    // A tuple that holds a handle is returned to the caller, who owns the handle.
+    let Some(Val::Tuple(t)) = r.call("give-pair", &[Val::U64(0)]) else {
+        panic!("no tuple")
+    };
+    assert!(matches!(t[..], [Val::Resource(_), Val::U32(7)]));
+    assert_eq!(r.store.data().live(), 1);
 }
 
 #[test]
@@ -403,9 +497,35 @@ fn handle_positions() {
         "world a { export shop; }
          world b { import shop; export t; }
          interface shop { resource cart { constructor() { return cart {}; } } }
-         interface t { func f() -> tuple<shop::cart, u32> { return tuple(shop::cart(), 1); } }",
+         interface t { func f() -> list<shop::cart> { return [shop::cart()]; } }",
         Code::HandlePosition,
-        "a tuple cannot hold one",
+        "a list cannot hold one",
+    );
+    // A tuple that holds a handle is a temporary, taken apart by a destructuring.
+    fails(
+        &wrap("func f() { local p: tuple<carts::cart, u32, carts::cart> = carts::pair(1); }"),
+        Code::HandlePosition,
+        "a local can only hold a handle itself",
+    );
+    fails(
+        &wrap("func f() -> u32 { return carts::pair(1).1; }"),
+        Code::HandlePosition,
+        "take its elements with a destructuring",
+    );
+    fails(
+        &wrap("func f() -> u64 { return carts::pair(1).0.total(); }"),
+        Code::HandlePosition,
+        "take its elements with a destructuring",
+    );
+    fails(
+        &wrap("func f() { local (a: carts::cart, b: carts::cart) = carts::maybe_pair(1); }"),
+        Code::TypeMismatch,
+        "a destructuring takes the elements of a tuple",
+    );
+    fails(
+        &wrap("record r { p: tuple<carts::cart, u32> }"),
+        Code::HandlePosition,
+        "the field of a record cannot hold one",
     );
     // A lent handle cannot be given away.
     fails(

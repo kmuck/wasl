@@ -557,8 +557,8 @@ pub fn analyze(
     }
 
     // Handle types (§ 7.12): the resources of other packages and of the interfaces of the
-    // package that a world imports. They cannot be held by records, tuples, lists,
-    // fields and globals (E0220).
+    // package that a world imports. They cannot be held by records, lists, fields and
+    // globals (E0220).
     program.handles = types
         .decls
         .iter()
@@ -1443,8 +1443,9 @@ pub(super) fn handle_in(
     None
 }
 
-/// E0220 for a list or a tuple in `ty` that holds a handle: only `option`, `result` and
-/// variants can carry one, from a call to `return`, `?`, `match` or `_ =` (§ 7.12).
+/// E0220 for a list in `ty` that holds a handle: only `option`, `result`, variants and
+/// tuples can carry one, from a call to `return`, `?`, `match`, `_ =` or a destructuring
+/// (§ 7.12).
 fn no_handle_aggregate(types: &Types, handles: &[bool], ty: Type, span: Span) -> Result<()> {
     let mut stack = vec![ty];
     let mut seen = Vec::new();
@@ -1453,20 +1454,16 @@ fn no_handle_aggregate(types: &Types, handles: &[bool], ty: Type, span: Span) ->
             continue;
         }
         seen.push(t);
-        let aggregate = matches!(types.kind(t), TypeKind::List { .. } | TypeKind::Tuple(_));
-        if aggregate && let Some(h) = handle_in(types, handles, t, None) {
+        if matches!(types.kind(t), TypeKind::List { .. })
+            && let Some(h) = handle_in(types, handles, t, None)
+        {
             return err(
                 Code::HandlePosition,
                 span,
                 format!(
-                    "`{}` holds `{}`, a handle to a resource of another component, and a {} cannot hold one: only `option`, `result` and variants can carry a handle",
+                    "`{}` holds `{}`, a handle to a resource of another component, and a list cannot hold one: only `option`, `result`, variants and tuples can carry a handle",
                     types.display(t),
                     types.display(h),
-                    if matches!(types.kind(t), TypeKind::List { .. }) {
-                        "list"
-                    } else {
-                        "tuple"
-                    }
                 ),
             );
         }

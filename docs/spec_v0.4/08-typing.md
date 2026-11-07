@@ -191,7 +191,7 @@ invoices::line { label: "pen", quantity: 3, unit_price: 150 }
 
 - `e.f`, where `e` has a record type and `f` is one of its fields, has the type of the field.
 - `e.f`, where `e` has a flags type and `f` is one of its flags, has type `bool`: `true` if the set contains `f`.
-- `e.k`, where `e` has a tuple type and `k` is an integer literal smaller than the number of its elements, has the type of element `k`, counting from 0: `t.0`, `t.1`.
+- `e.k`, where `e` has a tuple type and `k` is an integer literal smaller than the number of its elements, has the type of element `k`, counting from 0: `t.0`, `t.1`. When the tuple holds a handle, reading one element would lose the others: `types::response::new(…).0` is E0220, and the tuple is taken apart by a destructuring (§ 9.4, § 7.12).
 
 - `e.f`, where `e` has a resource type or `borrow<R>` and `f` is one of its fields, has the type of the field. It is only valid in the interface that declares the resource (E0309).
 

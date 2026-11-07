@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The [v0.4 specification](docs/spec_v0.4/README.md) specifies async and WASI 0.3, not implemented yet: `async func` with calls that wait without `await` (§ 2.8), `stream<T>`, `future<T>` and their writable ends with their built-in functions (§ 7.13, § 8.21), `task::return` (§ 8.21), tuple destructuring `local (a: A, b: B) = e;` (§ 9.4), WIT names with uppercase letters written in lowercase (§ 13.2), the async boundary of a component (§ 13.13), `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2), and the error codes E0101, E0222, E0223 and E0416 to E0419 (§ 11.3).
 - The target program [`examples/hello-http`](examples/hello-http), an HTTP service for WASI 0.3 (§ 15.8). The WASI 0.3 version of `examples/hello` is in § 15.7.
+- Tuple destructuring, `local (a: A, b: B) = e;`, with `_` for an element that is not kept (§ 9.4). A tuple can hold handles as a temporary, which a destructuring takes apart (§ 7.12): a function can return `tuple<carts::cart, u32>`, and the handles of an element written `_` are released at once (§ 9.9). Reading one element of such a tuple, `t.0`, is E0220.
 
 ### Changed
 

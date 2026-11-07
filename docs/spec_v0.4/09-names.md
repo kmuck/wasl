@@ -61,7 +61,7 @@ local d: option<discount>;  // option::none
 local t: string;            // E0410: a string needs an initial value
 ```
 
-- A **destructuring** `local (a: A, b: B, …) = e;` declares one local per element of the tuple `e` (*specified, not available yet*):
+- A **destructuring** `local (a: A, b: B, …) = e;` declares one local per element of the tuple `e`:
 
 ```wasl
 local (count: u32, total: u64) = stats(lines);
@@ -131,7 +131,7 @@ An unknown first name is E0300 (§ 9.1); a path that names a type that is not an
 
 A handle (§ 7.12) designates a resource that belongs to another component. The Component Model requires each handle to be given back to its owner, with `resource.drop`, exactly once; a handle that is never given back keeps the resource alive in the other component until the instance ends. WaSL gives handles back automatically, with rules that are checked locally, statement by statement.
 
-**One owner.** At any time, a handle is owned by one place: a local (including a parameter of type `T` and a match binding), or a temporary (§ 7.12). Records, lists, tuples, globals and fields cannot hold handles (E0220), so these places are all there is.
+**One owner.** At any time, a handle is owned by one place: a local (including a parameter of type `T` and a match binding), or a temporary (§ 7.12). Records, lists, globals and fields cannot hold handles, and a local cannot hold an `option`, a `result`, a variant or a tuple that holds one (E0220), so these places are all there is.
 
 **Moves.** Using a local `x` of a handle type as a value **moves** the handle out of it:
 
