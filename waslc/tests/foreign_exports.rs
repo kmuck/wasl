@@ -1,6 +1,6 @@
 //! Implementations of interfaces of other packages (specification, § 2.4.2, § 13.12):
-//! `examples/hello` against the interfaces of WASI 0.2 that it uses, reduced to what it
-//! needs and provided by the host.
+//! the WASI 0.2 command of § 15.6 against the interfaces of WASI 0.2 that it uses, reduced
+//! to what it needs and provided by the host.
 
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +9,7 @@ use wasmtime::{Engine, Store};
 
 use waslc::{Dependencies, Package, SourceMap, diag::Code};
 
-const HELLO: &str = include_str!("../../examples/hello/src/hello.wasl");
+const HELLO: &str = include_str!("fixtures/hello_wasi_0_2.wasl");
 
 const WASI_IO: &str = r#"
 package wasi:io@0.2.6;

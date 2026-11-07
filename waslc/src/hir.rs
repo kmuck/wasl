@@ -413,6 +413,43 @@ pub enum Builtin {
     Checked(Arith),
     /// `T::wrapping_from(x)`: the low-order bits of the integer `x`.
     WrappingFrom,
+    /// `stream::new()` or `future::new()` (§ 8.21): the tuple of the readable end and the
+    /// writable end of a new stream or future, given by the type of the expression.
+    EndNew,
+    /// `stream::write(tx, xs)`: borrows `tx`, writes every element, returns their count.
+    StreamWrite,
+    /// `stream::read(rx, n)`: borrows `rx`, reads 1 to `n` elements, or `none` at the end.
+    StreamRead,
+    /// `stream::close(tx)`: moves `tx` and releases it.
+    StreamClose,
+    /// `future::write(tx, v)`: moves `tx`, gives `v` to the reader.
+    FutureWrite,
+    /// `future::read(rx)`: moves `rx`, returns the value of the future.
+    FutureRead,
+}
+
+impl Builtin {
+    /// Whether a call to the function waits (§ 8.21): only an async function makes it
+    /// (E0416).
+    /// Whether this is a function of streams and futures (§ 8.21).
+    pub fn is_end(self) -> bool {
+        matches!(
+            self,
+            Builtin::EndNew
+                | Builtin::StreamWrite
+                | Builtin::StreamRead
+                | Builtin::StreamClose
+                | Builtin::FutureWrite
+                | Builtin::FutureRead
+        )
+    }
+
+    pub fn is_async(self) -> bool {
+        matches!(
+            self,
+            Builtin::StreamWrite | Builtin::StreamRead | Builtin::FutureWrite | Builtin::FutureRead
+        )
+    }
 }
 
 /// Integer arithmetic that can overflow (§ 10.2).
@@ -453,6 +490,12 @@ impl Builtin {
             ("list", "filled") => Builtin::ListFilled,
             ("list", "copy") => Builtin::ListCopy,
             ("list", "freeze") => Builtin::ListFreeze,
+            ("stream" | "future", "new") => Builtin::EndNew,
+            ("stream", "write") => Builtin::StreamWrite,
+            ("stream", "read") => Builtin::StreamRead,
+            ("stream", "close") => Builtin::StreamClose,
+            ("future", "write") => Builtin::FutureWrite,
+            ("future", "read") => Builtin::FutureRead,
             _ => return None,
         })
     }

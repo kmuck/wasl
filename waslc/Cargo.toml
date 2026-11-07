@@ -14,3 +14,4 @@ wit-parser = "0.261"
 [dev-dependencies]
 wasmparser = "0.261"
 wasmtime = "49"
+wasmtime-wasi = { version = "49", default-features = false, features = ["p2", "p3"] }

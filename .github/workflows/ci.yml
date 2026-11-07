@@ -56,7 +56,7 @@ jobs:
           test "$(weasel call checkout orders::quote '"pen"' 0)" = "err(zero-quantity)"
           test "$(weasel call checkout orders::last_sku '[{sku: "pen", quantity: 1}]')" = 'some("pen")'
           test "$(weasel call checkout orders::last_sku '[]')" = "none"
-      # The WASI target program of 0.3: built with the WIT of WASI 0.2 fetched from the
+      # The WASI target program of 0.4: built with the WIT of WASI 0.3 fetched from the
       # registry, and run as a command by the wasmtime CLI.
       - uses: bytecodealliance/actions/wasmtime/setup@v1
         if: matrix.crate == 'weasel'

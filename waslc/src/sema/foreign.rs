@@ -16,7 +16,7 @@ use super::InterfaceScope;
 use crate::hir::{self, Foreign};
 use crate::lexer::is_reserved;
 use crate::types::{
-    CaseDef, DeclKind, FieldDef, Prim, ResourceDef, Type, TypeDecl, TypeKind, Types,
+    CaseDef, DeclKind, EndKind, FieldDef, Prim, ResourceDef, Type, TypeDecl, TypeKind, Types,
 };
 
 /// The WaSL name of a WIT name: `output-stream` → `output_stream`, `%from` → `from`.
@@ -279,11 +279,19 @@ impl<'r> Converter<'r> {
             TypeDefKind::Handle(wit_parser::Handle::Borrow(r)) => {
                 TypeKind::Borrow(self.def(types, *r)?)
             }
-            TypeDefKind::Map(..)
-            | TypeDefKind::FixedLengthList(..)
-            | TypeDefKind::Future(_)
-            | TypeDefKind::Stream(_)
-            | TypeDefKind::Unknown => {
+            TypeDefKind::Stream(Some(elem)) => {
+                TypeKind::End(EndKind::Stream, self.ty(types, *elem)?)
+            }
+            TypeDefKind::Future(Some(value)) => {
+                TypeKind::End(EndKind::Future, self.ty(types, *value)?)
+            }
+            TypeDefKind::Stream(None) | TypeDefKind::Future(None) => {
+                return Err(format!(
+                    "it uses a `{}` without an element type, which WaSL does not support",
+                    def.kind.as_str()
+                ));
+            }
+            TypeDefKind::Map(..) | TypeDefKind::FixedLengthList(..) | TypeDefKind::Unknown => {
                 return Err(format!(
                     "it uses a `{}`, which WaSL does not support yet",
                     def.kind.as_str()

@@ -886,7 +886,7 @@ What the program shows:
 
 ## 15.6 A WASI command: `hello`
 
-The second target program of version 0.3 is a command-line program for WASI 0.2: its world exports `wasi:cli/run` and imports what it needs to write on its standard output. It runs with `wasmtime run`, like a program written in any other language.
+The second target program of version 0.3 is a command-line program for WASI 0.2: its world exports `wasi:cli/run` and imports what it needs to write on its standard output. It runs with `wasmtime run`, like a program written in any other language. It was `examples/hello` in 0.3; from 0.4 on, `examples/hello` is the WASI 0.3 program of § 15.7, and this one stays valid.
 
 `examples/hello/wasl.toml`:
 
@@ -958,7 +958,7 @@ What the program shows:
 
 ## 15.7 A WASI 0.3 command: `hello`
 
-*Specified, not available yet.* This is `examples/hello` for WASI 0.3, one of the two target programs of version 0.4. It replaces the program of § 15.6 in `examples/hello` once `waslc` implements async; until then, `examples/hello` stays the WASI 0.2 program, which CI runs.
+This is `examples/hello` for WASI 0.3, one of the two target programs of version 0.4. It replaces the WASI 0.2 program of § 15.6, and CI builds and runs it.
 
 `examples/hello/wasl.toml`:
 
@@ -1018,8 +1018,10 @@ world hello {
 
 ```sh
 cd examples/hello
-weasel run hello
+weasel build hello                 # fetches wasi:cli, writes wkg.lock
+wasmtime run -W gc=y -W function-references=y build/hello.wasm
 # Hello, world!
+weasel run hello                   # the same with weasel (§ 14.2; specified, not available yet)
 ```
 
 What the program shows:
@@ -1106,7 +1108,7 @@ What the program shows:
 
 ## 15.9 Invalid programs of 0.4
 
-*Specified, not available yet.* Each line is written in `run` of § 15.7 or in `handle` of § 15.8, unless it says otherwise.
+Each line is written in `run` of § 15.7 or in `handle` of § 15.8, unless it says otherwise. The lines on `task::return` (E0417 to E0419) are *specified, not available yet*.
 
 | Code | Error |
 |---|---|
@@ -1118,7 +1120,7 @@ What the program shows:
 | `local p: tuple<stream<u8>, stream_writer<u8>> = stream::new();` | E0220: a tuple that holds handles is destructured at once |
 | `local (rx: stream<u8>, tx: stream_writer<u8>) = future::new();` | E0400: `future::new()` returns a `tuple<future<T>, future_writer<T>>` |
 | `local (body: stream<u8>) = stream::new();` | E0400: the tuple has two elements |
-| `stream::new();` | E0413: the ends of the stream would be lost; destructure them |
+| `stream::new();` | E0408: nothing gives the type of the ends; destructure them, `local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();` |
 | `if (ready) { task::return(result::ok(response)); }` | E0417: `task::return` is a statement of the top level of the body |
 | `task::return(result::ok);` in `run`, written twice | E0417: the result is delivered once |
 | `task::return(result::ok(response));` in a function without `async` | E0417: only an async function delivers its result early |

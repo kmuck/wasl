@@ -14,6 +14,10 @@ use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
 
 use Instruction as I;
 
+mod ends;
+
+pub(super) use ends::{EndRt, WaitRt};
+
 /// Flat values beyond which the parameters go through memory.
 const MAX_FLAT_PARAMS: usize = 16;
 /// Flat values beyond which the result goes through memory.
@@ -57,6 +61,21 @@ pub(crate) enum Boundary {
     Dtor(DeclId),
     /// `(T')`: releases every handle that a value holds (§ 9.9).
     Release(Type),
+    /// `(end)`: releases an end of a stream or a future, unless it is `0` or `-1`
+    /// (§ 12.12).
+    ReleaseEnd(Type),
+    /// `(end) -> code`: the wait of a task for the event of an end (§ 12.12).
+    Wait,
+    /// `() -> tuple<R, W>`: `stream::new()` or `future::new()`, of the tuple type.
+    EndNew(Type),
+    /// `(tx, xs) -> (count, tx)`: `stream::write`, of the list type.
+    StreamWrite(Type),
+    /// `(rx, n) -> (option<list<T>>, rx)`: `stream::read`, of the option type.
+    StreamRead(Type),
+    /// `(tx, v) -> bool`: `future::write`, of the element type.
+    FutureWrite(Type),
+    /// `(rx) -> T`: `future::read`, of the element type.
+    FutureRead(Type),
 }
 
 // ---- Layout of the Canonical ABI ----
@@ -164,7 +183,7 @@ pub(super) fn size_align(types: &Types, ty: Type) -> (u32, u32) {
         },
         TypeKind::Char => 4,
         TypeKind::String | TypeKind::List { .. } => return (8, 4),
-        TypeKind::Borrow(_) => 4,
+        TypeKind::Borrow(_) | TypeKind::End(..) => 4,
         TypeKind::Decl(d) => match &types.decls[*d].kind {
             DeclKind::Enum(cases) => discriminant_size(cases.len()),
             DeclKind::Flags(flags) => flags_size(flags.len()),
@@ -213,8 +232,12 @@ pub(super) fn flat(types: &Types, ty: Type) -> Vec<ValType> {
 
 /// Whether a value of this type holds a string or a list.
 fn has_list(types: &Types, ty: Type) -> bool {
-    matches!(types.kind(ty), TypeKind::String | TypeKind::List { .. })
-        || types.children(ty).into_iter().any(|t| has_list(types, t))
+    match types.kind(ty) {
+        TypeKind::String | TypeKind::List { .. } => true,
+        // The elements of a stream or a future do not cross with the handle.
+        TypeKind::End(..) => false,
+        _ => types.children(ty).into_iter().any(|t| has_list(types, t)),
+    }
 }
 
 /// Whether an exported function needs an adapter: it takes or returns a heap value.
@@ -554,7 +577,7 @@ impl<'c, 'a> Gen<'c, 'a> {
     /// Whether a value of type `ty` is a single `i32` or number that crosses the
     /// boundary as is: a scalar, or a handle of another component.
     fn scalar(&self, ty: Type) -> bool {
-        self.types.is_scalar(ty) || self.cx.is_handle(ty).is_some()
+        self.types.is_scalar(ty) || self.cx.is_handle(ty).is_some() || self.cx.is_end(ty)
     }
 
     fn lift_at(&mut self, ty: Type, addr: u32, offset: u32) {
@@ -859,6 +882,13 @@ impl Boundary {
             Boundary::LowerOwn(d) => lower_own(cx, d),
             Boundary::Dtor(d) => dtor(cx, d),
             Boundary::Release(ty) => release(cx, ty),
+            Boundary::ReleaseEnd(ty) => ends::release_end(cx, ty),
+            Boundary::Wait => ends::wait(cx),
+            Boundary::EndNew(ty) => ends::end_new(cx, ty),
+            Boundary::StreamWrite(ty) => ends::stream_write(cx, ty),
+            Boundary::StreamRead(ty) => ends::stream_read(cx, ty),
+            Boundary::FutureWrite(ty) => ends::future_write(cx, ty),
+            Boundary::FutureRead(ty) => ends::future_read(cx, ty),
         }
     }
 }
@@ -1258,6 +1288,18 @@ fn async_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, F
         }
     }
     g.emit(I::Call(task_return));
+    // The waitable set of the task, if it has waited (§ 12.12).
+    if let Some(w) = g.cx.waitable {
+        g.code.extend([
+            I::GlobalGet(w.set),
+            I::If(BlockType::Empty),
+            I::GlobalGet(w.set),
+            I::Call(w.set_drop),
+            I::I32Const(0),
+            I::GlobalSet(w.set),
+            I::End,
+        ]);
+    }
     for global in [g.cx.scratch_base, g.cx.scratch_top].into_iter().flatten() {
         g.emit(I::I32Const(0));
         g.emit(I::GlobalSet(global));
@@ -1515,8 +1557,8 @@ fn release(cx: &mut ModuleCx, ty: Type) -> (Vec<ValType>, Vec<ValType>, Function
     let types = cx.types;
     let val = cx.val(ty);
     let mut g = Gen::new(cx, vec![val]);
-    if let Some(d) = g.cx.owned_handle(ty) {
-        let drop = g.cx.drops[&d];
+    if g.cx.owned_handle(ty) {
+        let drop = g.cx.release_func(ty);
         g.code.extend([
             I::LocalGet(0),
             I::If(BlockType::Empty),
