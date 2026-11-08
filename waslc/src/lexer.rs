@@ -55,6 +55,10 @@ pub enum TokenKind {
     KwString,
     KwList,
     KwTuple,
+    KwStream,
+    KwFuture,
+    KwStreamWriter,
+    KwFutureWriter,
     KwOption,
     KwResult,
 
@@ -168,6 +172,10 @@ impl TokenKind {
             TokenKind::KwString => "string",
             TokenKind::KwList => "list",
             TokenKind::KwTuple => "tuple",
+            TokenKind::KwStream => "stream",
+            TokenKind::KwFuture => "future",
+            TokenKind::KwStreamWriter => "stream_writer",
+            TokenKind::KwFutureWriter => "future_writer",
             TokenKind::KwOption => "option",
             TokenKind::KwResult => "result",
             TokenKind::LBrace => "{",
@@ -223,21 +231,7 @@ pub struct Token {
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
-    "package",
-    "use",
-    "type",
-    "map",
-    "own",
-    "stream",
-    "future",
-    "stream_writer",
-    "future_writer",
-    "task",
-    "await",
-    "subtask",
-    "include",
-    "with",
-    "as",
+    "package", "use", "type", "map", "own", "task", "await", "subtask", "include", "with", "as",
 ];
 
 fn keyword(word: &str) -> Option<TokenKind> {
@@ -274,6 +268,10 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "string" => TokenKind::KwString,
         "list" => TokenKind::KwList,
         "tuple" => TokenKind::KwTuple,
+        "stream" => TokenKind::KwStream,
+        "future" => TokenKind::KwFuture,
+        "stream_writer" => TokenKind::KwStreamWriter,
+        "future_writer" => TokenKind::KwFutureWriter,
         "option" => TokenKind::KwOption,
         "result" => TokenKind::KwResult,
         _ => return Prim::from_keyword(word).map(TokenKind::Type),
@@ -804,6 +802,7 @@ mod tests {
         assert_eq!(kinds("import")[0], TokenKind::Import);
         assert_eq!(kinds("record")[0], TokenKind::Record);
         assert_eq!(kinds("list")[0], TokenKind::KwList);
+        assert_eq!(kinds("stream_writer")[0], TokenKind::KwStreamWriter);
         assert_eq!(
             kinds("_ a_b")[..2],
             [TokenKind::Underscore, TokenKind::Ident("a_b".into())]

@@ -1,15 +1,19 @@
-// Target program of WaSL v0.3 (docs/spec_v0.3): a command-line program for WASI 0.2,
-// run with `wasmtime run`. Its entry point is `wasi:cli/run`, an interface defined by
-// WASI and implemented in the world (§ 2.4.2).
+// Target program of WaSL v0.4 (docs/spec_v0.4, § 15.7): a command-line program for
+// WASI 0.3, run with `wasmtime run`. Its entry point is `wasi:cli/run`, an async
+// function of WASI implemented in the world (§ 2.4.2, § 2.8). It writes on the standard
+// output through a stream, then waits until the standard output is done.
 
 world hello {
-  import wasi:io/streams;
+  import wasi:cli/types;
   import wasi:cli/stdout;
 
   export wasi:cli/run {
-    func run() -> result {
-      local out: streams::output_stream = stdout::get_stdout();
-      match (out.blocking_write_and_flush(string::bytes(greeting::text("world")))) {
+    async func run() -> result {
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
+      _ = stream::write(tx, string::bytes(greeting::text("world")));
+      stream::close(tx);
+      match (future::read(done)) {
         case ok {
           return result::ok;
         }
@@ -17,7 +21,6 @@ world hello {
           return result::err;
         }
       }
-      // `out` is given back to the host when `run` returns.
     }
   }
 }

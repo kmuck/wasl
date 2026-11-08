@@ -4,5 +4,4 @@ name = "hello"
 version = "0.1.0"
 
 [dependencies]
-"wasi:cli" = "0.2.6"
-"wasi:io" = "0.2.6"
+"wasi:cli" = "0.3.0"

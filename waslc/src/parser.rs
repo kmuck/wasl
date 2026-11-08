@@ -4,6 +4,7 @@ use crate::ast::*;
 use crate::diag::{Code, Diagnostic, Result, err};
 use crate::lexer::{Token, TokenKind};
 use crate::source::Span;
+use crate::types::EndKind;
 
 /// Builds the syntax tree of a file from its tokens.
 pub fn parse(tokens: Vec<Token>) -> Result<Vec<Item>> {
@@ -174,6 +175,24 @@ impl Parser {
                         err: None,
                     }
                 }
+            }
+            TokenKind::KwStream
+            | TokenKind::KwStreamWriter
+            | TokenKind::KwFuture
+            | TokenKind::KwFutureWriter => {
+                let kind = match self.bump().kind {
+                    TokenKind::KwStream => EndKind::Stream,
+                    TokenKind::KwStreamWriter => EndKind::StreamWriter,
+                    TokenKind::KwFuture => EndKind::Future,
+                    _ => EndKind::FutureWriter,
+                };
+                self.expect(
+                    &TokenKind::Lt,
+                    &format!("`<` (its type is written `{}<T>`)", kind.name()),
+                )?;
+                let elem = Box::new(self.ty()?);
+                self.close_angle()?;
+                TypeExprKind::End(kind, elem)
             }
             TokenKind::Ident(_) => TypeExprKind::Named(self.type_name()?),
             TokenKind::Borrow => {
@@ -643,6 +662,8 @@ impl Parser {
             | TokenKind::KwChar
             | TokenKind::KwOption
             | TokenKind::KwResult
+            | TokenKind::KwStream
+            | TokenKind::KwFuture
                 if *self.peek_at(1) == TokenKind::ColonColon =>
             {
                 self.call_stmt(start)?
@@ -841,6 +862,8 @@ impl Parser {
             TokenKind::KwList => "list".to_string(),
             TokenKind::KwOption => "option".to_string(),
             TokenKind::KwResult => "result".to_string(),
+            TokenKind::KwStream => "stream".to_string(),
+            TokenKind::KwFuture => "future".to_string(),
             TokenKind::Type(ty) if ty.is_int() => ty.name().to_string(),
             _ => return Err(self.unexpected("a name")),
         };
@@ -1118,6 +1141,11 @@ impl Parser {
             | TokenKind::KwList
             | TokenKind::KwOption
             | TokenKind::KwResult => self.name_expr()?,
+            TokenKind::KwStream | TokenKind::KwFuture
+                if *self.peek_at(1) == TokenKind::ColonColon =>
+            {
+                self.name_expr()?
+            }
             // `u32::wrapping_add(…)`: a built-in function of an integer type (§ 8.17).
             TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
                 self.name_expr()?

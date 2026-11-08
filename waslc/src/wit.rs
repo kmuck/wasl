@@ -465,6 +465,12 @@ fn wit_type(types: &Types, ty: Type, names: &HashMap<DeclId, String>) -> String 
         ),
         TypeKind::Option(inner) => format!("option<{}>", wit_type(types, *inner, names)),
         TypeKind::Borrow(inner) => format!("borrow<{}>", wit_type(types, *inner, names)),
+        // Writable ends never appear in the WIT (E0222).
+        TypeKind::End(kind, elem) => format!(
+            "{}<{}>",
+            kind.reader().name(),
+            wit_type(types, *elem, names)
+        ),
         TypeKind::Result { ok, err } => match (ok, err) {
             (None, None) => "result".into(),
             (Some(ok), None) => format!("result<{}>", wit_type(types, *ok, names)),

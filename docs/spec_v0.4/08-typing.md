@@ -374,7 +374,7 @@ local d: carts::cart = carts::cart::single(150);   // static function
 
 ## 8.21 Async calls, streams, futures and `task::return`
 
-Async calls are available. The built-in functions of streams and futures, and `task::return`, are *specified, not available yet*.
+Async calls and the built-in functions of streams and futures are available. `task::return` is *specified, not available yet*.
 
 ### Async calls
 

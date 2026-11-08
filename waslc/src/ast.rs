@@ -1,7 +1,7 @@
 //! Syntax tree produced by the parser.
 
 use crate::source::Span;
-use crate::types::Prim;
+use crate::types::{EndKind, Prim};
 
 #[derive(Debug, Clone)]
 pub struct Ident {
@@ -185,6 +185,8 @@ pub enum TypeExprKind {
     Named(TypeName),
     /// `borrow<cart>` (§ 7.12).
     Borrow(TypeName),
+    /// `stream<T>`, `stream_writer<T>`, `future<T>` or `future_writer<T>` (§ 7.13).
+    End(EndKind, Box<TypeExpr>),
 }
 
 /// Name of a declared type, with the interface that declares it if written.

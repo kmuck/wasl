@@ -239,6 +239,52 @@ pub enum TypeKind {
     Decl(DeclId),
     /// `borrow<r>`, where `r` is a resource (§ 7.12): only the type of a parameter.
     Borrow(Type),
+    /// An end of a stream or a future of elements of the type (§ 7.13): a handle.
+    End(EndKind, Type),
+}
+
+/// The four ends of streams and futures (§ 7.13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EndKind {
+    /// `stream<T>`, the readable end of a stream.
+    Stream,
+    /// `stream_writer<T>`, the writable end of a stream.
+    StreamWriter,
+    /// `future<T>`, the readable end of a future.
+    Future,
+    /// `future_writer<T>`, the writable end of a future.
+    FutureWriter,
+}
+
+impl EndKind {
+    /// The name of the type in WaSL.
+    pub fn name(self) -> &'static str {
+        match self {
+            EndKind::Stream => "stream",
+            EndKind::StreamWriter => "stream_writer",
+            EndKind::Future => "future",
+            EndKind::FutureWriter => "future_writer",
+        }
+    }
+
+    /// Whether the end is readable, the only kind that WIT names.
+    pub fn readable(self) -> bool {
+        matches!(self, EndKind::Stream | EndKind::Future)
+    }
+
+    /// Whether it is an end of a stream, rather than of a future.
+    pub fn is_stream(self) -> bool {
+        matches!(self, EndKind::Stream | EndKind::StreamWriter)
+    }
+
+    /// The readable end of the same stream or future.
+    pub fn reader(self) -> EndKind {
+        if self.is_stream() {
+            EndKind::Stream
+        } else {
+            EndKind::Future
+        }
+    }
 }
 
 /// A type declared in an interface (§ 7.7).
@@ -378,6 +424,7 @@ impl Types {
             TypeKind::Option(inner) => vec![*inner],
             TypeKind::Result { ok, err } => ok.iter().chain(err).copied().collect(),
             TypeKind::Borrow(inner) => vec![*inner],
+            TypeKind::End(_, elem) => vec![*elem],
             TypeKind::Decl(id) => match &self.decls[*id].kind {
                 DeclKind::Record(fields) => fields.iter().map(|f| f.ty).collect(),
                 DeclKind::Variant(cases) => cases.iter().filter_map(|c| c.payload).collect(),
@@ -471,6 +518,14 @@ impl Types {
         }
     }
 
+    /// The end of a stream or a future that `ty` is, with its element type (§ 7.13).
+    pub fn end(&self, ty: Type) -> Option<(EndKind, Type)> {
+        match self.kind(ty) {
+            TypeKind::End(kind, elem) => Some((*kind, *elem)),
+            _ => None,
+        }
+    }
+
     /// Whether the type is a scalar: a primitive type, `char`, an enum or a flags type
     /// (§ 7.5).
     pub fn is_scalar(&self, ty: Type) -> bool {
@@ -510,6 +565,9 @@ impl Types {
             ),
             TypeKind::Option(inner) => format!("option<{}>", self.display_in(*inner, iface)),
             TypeKind::Borrow(inner) => format!("borrow<{}>", self.display_in(*inner, iface)),
+            TypeKind::End(kind, elem) => {
+                format!("{}<{}>", kind.name(), self.display_in(*elem, iface))
+            }
             TypeKind::Result { ok, err } => match (ok, err) {
                 (None, None) => "result".into(),
                 (Some(ok), None) => format!("result<{}>", self.display_in(*ok, iface)),

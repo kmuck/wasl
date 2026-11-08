@@ -138,7 +138,7 @@ A handle (§ 7.12) designates a resource that belongs to another component. The 
 - `return x;`, `return result::ok(x);`, and every constructor that holds `x` (`option::some(x)`, `result::ok(x)`, a variant case);
 - an argument for a parameter of type `T` (not `borrow<T>`);
 - `local y: T = x;` and `y = x;`;
-- the end given to `stream::close`, `future::write` or `future::read`, and the value given to `task::return` (§ 8.21; *specified, not available yet*).
+- the end given to `stream::close`, `future::write` or `future::read`, and the value given to `task::return` (§ 8.21; `task::return` is *specified, not available yet*).
 
 After a move, `x` holds the empty handle, `0`, which is never a valid handle. Using `x` again as a handle traps (§ 10.7): the Component Model rejects the index `0`. Assigning `x` a new handle makes it usable again.
 
@@ -166,7 +166,7 @@ func checkout(items: list<item>) -> result<receipt, carts::cart_error> {
 }
 ```
 
-**Streams and futures.** Their ends follow the same rules (§ 7.13; *specified, not available yet*): releasing a `stream_writer<T>` closes its stream, releasing a readable end tells the writer that nobody reads any more, and releasing a `future_writer<T>` that has not written its value traps (§ 10.7).
+**Streams and futures.** Their ends follow the same rules (§ 7.13): releasing a `stream_writer<T>` closes its stream, releasing a readable end tells the writer that nobody reads any more, and releasing a `future_writer<T>` that has not written its value traps (§ 10.7).
 
 **Received from outside.** An exported function owns the handles it receives as `T` and releases them as above. The handles it receives as `borrow<T>` belong to its caller, and the Component Model requires them to be released before the call returns: the adapter of the function does it (§ 13.8).
 

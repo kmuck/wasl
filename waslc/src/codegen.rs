@@ -12,10 +12,10 @@ use wasm_encoder::{
 };
 
 use crate::ast::{BinOp, UnaryOp};
-use crate::diag::Result;
+use crate::diag::{Code, Diagnostic, Result};
 use crate::hir::{
     Arith, Builtin, Const, Expr, ExprKind, FuncDef, FuncId, FuncKind, GlobalId, MatchArm, Place,
-    Program, Stmt, visit_expr, visit_stmts,
+    Program, Stmt, WorldDef, visit_expr, visit_stmts,
 };
 use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
 use crate::wit::{InterfaceName, kebab};
@@ -23,7 +23,7 @@ use crate::wit::{InterfaceName, kebab};
 mod boundary;
 mod helpers;
 
-use boundary::Boundary;
+use boundary::{Boundary, EndRt, WaitRt};
 use helpers::Helper;
 
 /// String literals longer than this are built from a data segment rather than with
@@ -103,6 +103,40 @@ pub fn generate(
     }
     handles.sort();
 
+    // Streams and futures (§ 12.12): the stream and future types that the module uses,
+    // by element type. Each one needs the intrinsics of its type.
+    let mut ends: Vec<(bool, Type)> = Vec::new();
+    for (f, func) in program.funcs.iter().enumerate() {
+        if used_funcs[f] || imported.contains(&f) {
+            let mut tys: Vec<Type> = func
+                .locals
+                .iter()
+                .chain(func.params.iter().map(|(_, t)| t))
+                .chain(&func.ret)
+                .copied()
+                .collect();
+            visit_stmts(&func.body, &mut |e| tys.extend(e.ty));
+            // The types of the package can be recursive (§ 7.10): each one is seen once.
+            let mut seen = Vec::new();
+            while let Some(ty) = tys.pop() {
+                if seen.contains(&ty) {
+                    continue;
+                }
+                seen.push(ty);
+                if let Some((kind, elem)) = types.end(ty)
+                    && !ends.contains(&(kind.is_stream(), elem))
+                {
+                    ends.push((kind.is_stream(), elem));
+                }
+                tys.extend(types.children(ty));
+            }
+        }
+    }
+    let carriers = ends
+        .iter()
+        .map(|&key| carrier(program, world, interface_names, key))
+        .collect::<Result<Vec<_>>>()?;
+
     let exported: Vec<FuncId> = world
         .exports
         .iter()
@@ -116,9 +150,19 @@ pub fn generate(
 
     // Imported functions come first in the function index space (§ 13.10), then the
     // intrinsics of the resources: `new`, `rep` and `drop`, then the `drop` of the
-    // handles, then the `task.return` of the async exports (§ 13.13).
-    let import_count =
-        (imported.len() + 3 * resources.len() + handles.len() + async_exports.len()) as u32;
+    // handles, then the `task.return` of the async exports (§ 13.13), then the
+    // intrinsics of the streams and futures and those of the waitable set (§ 12.12).
+    let waitable_count = if ends.is_empty() {
+        0
+    } else {
+        WAITABLE_INTRINSICS.len()
+    };
+    let import_count = (imported.len()
+        + 3 * resources.len()
+        + handles.len()
+        + async_exports.len()
+        + END_INTRINSICS.len() * ends.len()
+        + waitable_count) as u32;
     let mut func_index = index_map(&used_funcs);
     for index in func_index.iter_mut().flatten() {
         *index += import_count;
@@ -139,9 +183,26 @@ pub fn generate(
     for (k, &f) in async_exports.iter().enumerate() {
         cx.task_returns.insert(f, first_task_return + k as u32);
     }
-    let memory = exported
-        .iter()
-        .any(|&f| boundary::export_needs_memory(types, &program.funcs[f]))
+    let first_end = first_task_return + async_exports.len() as u32;
+    for (k, &key) in ends.iter().enumerate() {
+        let first = first_end + (END_INTRINSICS.len() * k) as u32;
+        cx.ends.insert(
+            key,
+            EndRt {
+                new: first,
+                write: first + 1,
+                read: first + 2,
+                drop_readable: first + 3,
+                drop_writable: first + 4,
+            },
+        );
+    }
+    let first_waitable = first_end + (END_INTRINSICS.len() * ends.len()) as u32;
+    // The operations on streams and futures copy through linear memory.
+    let memory = !ends.is_empty()
+        || exported
+            .iter()
+            .any(|&f| boundary::export_needs_memory(types, &program.funcs[f]))
         || imported
             .iter()
             .any(|&f| boundary::import_needs_memory(types, &program.funcs[f]));
@@ -178,6 +239,17 @@ pub fn generate(
     }
     if memory && !async_exports.is_empty() {
         cx.scratch_base = Some(next);
+        next += 1;
+    }
+    // The waitable set of the async task (§ 12.12).
+    if !ends.is_empty() {
+        cx.waitable = Some(WaitRt {
+            set_new: first_waitable,
+            join: first_waitable + 1,
+            wait: first_waitable + 2,
+            set_drop: first_waitable + 3,
+            set: next,
+        });
         next += 1;
     }
     for (k, &decl) in resources.iter().enumerate() {
@@ -269,7 +341,11 @@ pub fn generate(
             &ConstExpr::extended(init),
         );
     }
-    for global in [cx.scratch_top, cx.scratch_base].into_iter().flatten() {
+    let wset = cx.waitable.map(|w| w.set);
+    for global in [cx.scratch_top, cx.scratch_base, wset]
+        .into_iter()
+        .flatten()
+    {
         debug_assert_eq!(global as usize, globals.len() as usize);
         globals.global(
             GlobalType {
@@ -324,6 +400,25 @@ pub fn generate(
             cx.signature(params, Vec::new())
         })
         .collect();
+    let end_sigs: Vec<[u32; 5]> = ends
+        .iter()
+        .map(|&(stream, _)| {
+            let copy = if stream { 3 } else { 2 };
+            [
+                cx.signature(vec![], vec![ValType::I64]),
+                cx.signature(vec![ValType::I32; copy], vec![ValType::I32]),
+                cx.signature(vec![ValType::I32; copy], vec![ValType::I32]),
+                drop_sig,
+                drop_sig,
+            ]
+        })
+        .collect();
+    let waitable_sigs = [
+        cx.signature(vec![], vec![ValType::I32]),
+        cx.signature(vec![ValType::I32; 2], vec![]),
+        cx.signature(vec![ValType::I32; 2], vec![ValType::I32]),
+        drop_sig,
+    ];
     let intrinsic_sigs: Vec<[u32; 3]> = resources
         .iter()
         .map(|_| {
@@ -450,6 +545,29 @@ pub fn generate(
             EntityType::Function(gc_types + sig),
         );
     }
+    // The intrinsics of streams and futures take the name of a function of the WIT that
+    // carries their type, with its index among the streams and futures of that function
+    // (§ 13.13).
+    for (((stream, _), carrier), sigs) in ends.iter().zip(&carriers).zip(end_sigs) {
+        let kind = if *stream { "stream" } else { "future" };
+        let Carrier {
+            module,
+            func,
+            index,
+        } = carrier;
+        for (name, sig) in END_INTRINSICS.iter().zip(sigs) {
+            import_section.import(
+                module,
+                &format!("{}{kind}-{name}-{index}]{func}", lowering(name)),
+                EntityType::Function(gc_types + sig),
+            );
+        }
+    }
+    if !ends.is_empty() {
+        for (name, sig) in WAITABLE_INTRINSICS.iter().zip(waitable_sigs) {
+            import_section.import("$root", name, EntityType::Function(gc_types + sig));
+        }
+    }
     let mut functions = FunctionSection::new();
     for sig in signatures {
         functions.function(gc_types + sig);
@@ -484,6 +602,92 @@ pub fn generate(
         module.section(&data);
     }
     Ok(module.finish())
+}
+
+/// The intrinsics of a stream or future type, in index order: `new`, `write`, `read`,
+/// `drop-readable`, `drop-writable` (§ 13.13).
+const END_INTRINSICS: [&str; 5] = ["new", "write", "read", "drop-readable", "drop-writable"];
+
+/// The intrinsics of the waitable set, in index order (§ 12.12).
+const WAITABLE_INTRINSICS: [&str; 4] = [
+    "[waitable-set-new]",
+    "[waitable-join]",
+    "[waitable-set-wait]",
+    "[waitable-set-drop]",
+];
+
+/// The start of the name of an intrinsic of streams and futures: the copies are lowered
+/// `async`, and wait in the waitable set of the task (§ 12.12).
+fn lowering(name: &str) -> &'static str {
+    match name {
+        "write" | "read" => "[async-lower][",
+        _ => "[",
+    }
+}
+
+/// The stream and future types in `ty`, a type of the WIT and therefore not recursive
+/// (E0208), as `(is a stream, element type)`, in the order of `wit-parser`: the elements
+/// of an end before the end itself.
+fn end_keys(types: &Types, ty: Type) -> Vec<(bool, Type)> {
+    let mut keys = Vec::new();
+    for child in types.children(ty) {
+        keys.extend(end_keys(types, child));
+    }
+    if let Some((kind, elem)) = types.end(ty) {
+        keys.push((kind.is_stream(), elem));
+    }
+    keys
+}
+
+/// A function of the WIT of the world whose signature holds a stream or future type: the
+/// module and name under which the core module imports the intrinsics of that type.
+struct Carrier {
+    module: String,
+    func: String,
+    index: usize,
+}
+
+/// The first function of the world that carries the stream or future type `key`: in an
+/// imported interface, then in an exported one. E0223 guarantees there is one.
+fn carrier(
+    program: &Program,
+    world: &WorldDef,
+    interface_names: &[Option<InterfaceName>],
+    key: (bool, Type),
+) -> Result<Carrier> {
+    let types = &program.types;
+    let imports = world.imports.iter().map(|&i| (i, ""));
+    let exports = world.exports.iter().map(|&i| (i, "[export]"));
+    for (iface, prefix) in imports.chain(exports) {
+        let Some(name) = &interface_names[iface] else {
+            continue;
+        };
+        for &f in &program.interfaces[iface].funcs {
+            let func = &program.funcs[f];
+            let keys: Vec<(bool, Type)> = func
+                .params
+                .iter()
+                .map(|(_, t)| *t)
+                .chain(func.ret)
+                .flat_map(|t| end_keys(types, t))
+                .collect();
+            if let Some(index) = keys.iter().position(|&k| k == key) {
+                return Ok(Carrier {
+                    module: format!("{prefix}{}", name.full),
+                    func: wit_func_name(types, func),
+                    index,
+                });
+            }
+        }
+    }
+    Err(Diagnostic::without_span(
+        Code::Internal,
+        format!(
+            "internal error: no function of world `{}` carries the stream or future type of `{}`",
+            world.name,
+            types.display(key.1)
+        ),
+    ))
 }
 
 /// The name of a function in the core module (§ 13.3): the WIT name of a free function,
@@ -617,6 +821,11 @@ struct ModuleCx<'a> {
     /// bottom of the scratch memory of the sync tasks, above the data of the async task
     /// that waits (§ 13.13).
     scratch_base: Option<u32>,
+    /// The intrinsics of each stream or future type the module uses, by `(is a stream,
+    /// element type)` (§ 12.12).
+    ends: HashMap<(bool, Type), EndRt>,
+    /// The waitable set of the async task, when the module uses streams or futures.
+    waitable: Option<WaitRt>,
 }
 
 /// The functions and globals behind the handles of an exported resource (§ 12.10): the
@@ -662,6 +871,8 @@ impl<'a> ModuleCx<'a> {
             drops: HashMap::new(),
             task_returns: HashMap::new(),
             scratch_base: None,
+            ends: HashMap::new(),
+            waitable: None,
         }
     }
 
@@ -684,7 +895,9 @@ impl<'a> ModuleCx<'a> {
         let types = self.types;
         match types.kind(ty) {
             TypeKind::Prim(p) => p.val_type(),
-            _ if types.is_scalar(ty) || self.is_handle(ty).is_some() => ValType::I32,
+            _ if types.is_scalar(ty) || self.is_handle(ty).is_some() || self.is_end(ty) => {
+                ValType::I32
+            }
             TypeKind::Option(inner) => {
                 let index = self.option_heap(*inner);
                 ref_type(index, true)
@@ -697,6 +910,7 @@ impl<'a> ModuleCx<'a> {
     fn boxed(&self, inner: Type) -> bool {
         self.types.is_scalar(inner)
             || self.is_handle(inner).is_some()
+            || self.is_end(inner)
             || matches!(self.types.kind(inner), TypeKind::Option(_))
     }
 
@@ -711,11 +925,27 @@ impl<'a> ModuleCx<'a> {
             .then_some(d)
     }
 
-    /// The resource of `ty` when it is an owned handle, which its owner releases.
-    fn owned_handle(&self, ty: Type) -> Option<DeclId> {
+    /// Whether `ty` is an end of a stream or a future (§ 7.13): an `i32` handle.
+    fn is_end(&self, ty: Type) -> bool {
+        self.types.end(ty).is_some()
+    }
+
+    /// Whether `ty` is an owned handle, which its owner releases: a resource of another
+    /// component, or an end of a stream or a future.
+    fn owned_handle(&self, ty: Type) -> bool {
         match self.types.kind(ty) {
-            TypeKind::Borrow(_) => None,
-            _ => self.is_handle(ty),
+            TypeKind::Borrow(_) => false,
+            TypeKind::End(..) => true,
+            _ => self.is_handle(ty).is_some(),
+        }
+    }
+
+    /// The function that releases a non-zero owned handle of type `ty` (§ 9.9): the
+    /// `resource.drop` of its resource, or the helper that releases an end.
+    fn release_func(&mut self, ty: Type) -> u32 {
+        match self.types.kind(ty) {
+            TypeKind::End(..) => self.helper(Helper::Boundary(Boundary::ReleaseEnd(ty))),
+            _ => self.drops[&self.is_handle(ty).expect("a handle")],
         }
     }
 
@@ -728,7 +958,7 @@ impl<'a> ModuleCx<'a> {
                 continue;
             }
             seen.push(t);
-            if self.owned_handle(t).is_some() {
+            if self.owned_handle(t) {
                 return true;
             }
             stack.extend(self.types.children(t));
@@ -826,7 +1056,7 @@ impl<'a> ModuleCx<'a> {
                 DeclKind::Enum(_) | DeclKind::Flags(_) => unreachable!("scalar type"),
             },
             TypeKind::Borrow(inner) => return self.heap(*inner),
-            TypeKind::Prim(_) | TypeKind::Char | TypeKind::Option(_) => {
+            TypeKind::Prim(_) | TypeKind::Char | TypeKind::Option(_) | TypeKind::End(..) => {
                 unreachable!("not a heap type")
             }
         };
@@ -1009,7 +1239,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             .params
             .iter()
             .enumerate()
-            .filter(|(_, (_, t))| cg.cx.owned_handle(*t).is_some())
+            .filter(|(_, (_, t))| cg.cx.owned_handle(*t))
             .map(|(i, _)| i as u32)
             .collect();
         cg.owners.push(params);
@@ -1101,11 +1331,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
 
     /// Releases the handle in local `l`, if any, and empties it.
     fn release_local(&mut self, l: u32) {
-        let d = self
-            .cx
-            .owned_handle(self.local_types[l as usize])
-            .expect("a handle");
-        let drop = self.cx.drops[&d];
+        let drop = self.cx.release_func(self.local_types[l as usize]);
         self.instrs.extend([
             Instruction::LocalGet(l),
             Instruction::If(BlockType::Empty),
@@ -1132,7 +1358,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
 
     /// Records that local `l`, just declared, owns its value if it is a handle.
     fn own(&mut self, l: u32) {
-        if self.cx.owned_handle(self.local_types[l as usize]).is_some() {
+        if self.cx.owned_handle(self.local_types[l as usize]) {
             self.owners.last_mut().expect("open block").push(l);
         }
     }
@@ -1193,12 +1419,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 }
             }
             Stmt::Assign { place, value } => match place {
-                Place::Local(l)
-                    if self
-                        .cx
-                        .owned_handle(self.local_types[*l as usize])
-                        .is_some() =>
-                {
+                Place::Local(l) if self.cx.owned_handle(self.local_types[*l as usize]) => {
                     // The old handle is released once the new value is computed.
                     let tmp = self.scratch(ValType::I32);
                     self.expr(value);
@@ -1516,11 +1737,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             ExprKind::Local(l) => self.emit(Instruction::LocalGet(*l)),
             ExprKind::Move(l) => {
                 self.emit(Instruction::LocalGet(*l));
-                if self
-                    .cx
-                    .owned_handle(self.local_types[*l as usize])
-                    .is_some()
-                {
+                if self.cx.owned_handle(self.local_types[*l as usize]) {
                     // The handle leaves the local (§ 9.9).
                     self.emit(Instruction::I32Const(0));
                     self.emit(Instruction::LocalSet(*l));
@@ -1652,6 +1869,9 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 self.expr(index);
                 self.array_get(list);
             }
+            ExprKind::Builtin { func, args } if func.is_end() => {
+                self.end_builtin(*func, args, e.ty)
+            }
             ExprKind::Builtin { func, args } => self.builtin(*func, args, e.value_ty()),
         }
     }
@@ -1737,8 +1957,49 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             | Builtin::Wrapping(_)
             | Builtin::Checked(_)
             | Builtin::WrappingFrom => unreachable!("generated above"),
+            Builtin::EndNew
+            | Builtin::StreamWrite
+            | Builtin::StreamRead
+            | Builtin::StreamClose
+            | Builtin::FutureWrite
+            | Builtin::FutureRead => unreachable!("functions of streams and futures"),
         };
         let index = self.cx.helper(helper);
+        self.emit(Instruction::Call(index));
+    }
+
+    /// The functions of streams and futures (§ 12.12), whose value has type `ty`.
+    fn end_builtin(&mut self, func: Builtin, args: &[Expr], ty: Option<Type>) {
+        let helper = match func {
+            Builtin::EndNew => Boundary::EndNew(ty.expect("a tuple of ends")),
+            // `stream::write` and `stream::read` borrow their end: the helper returns it
+            // after the value, `-1` once the other end has left (§ 12.12).
+            Builtin::StreamWrite | Builtin::StreamRead => {
+                for arg in args {
+                    self.expr(arg);
+                }
+                let helper = match func {
+                    Builtin::StreamWrite => Boundary::StreamWrite(args[1].value_ty()),
+                    _ => Boundary::StreamRead(ty.expect("an option of a list")),
+                };
+                let index = self.cx.helper(Helper::Boundary(helper));
+                self.emit(Instruction::Call(index));
+                match args[0].kind {
+                    ExprKind::Local(l) => self.emit(Instruction::LocalSet(l)),
+                    // An end created only for this call is released after it.
+                    _ => self.release_value(args[0].value_ty()),
+                }
+                return;
+            }
+            Builtin::StreamClose => Boundary::ReleaseEnd(args[0].value_ty()),
+            Builtin::FutureWrite => Boundary::FutureWrite(args[1].value_ty()),
+            Builtin::FutureRead => Boundary::FutureRead(ty.expect("the value of a future")),
+            _ => unreachable!("not a function of streams and futures"),
+        };
+        for arg in args {
+            self.expr(arg);
+        }
+        let index = self.cx.helper(Helper::Boundary(helper));
         self.emit(Instruction::Call(index));
     }
 

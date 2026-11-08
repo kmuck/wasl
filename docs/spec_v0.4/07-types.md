@@ -241,7 +241,7 @@ Any type can be used for parameters, return values, locals, globals, fields, lis
 - no recursive type (E0208, § 7.9);
 - every type they use must be declared in an interface that can appear in the WIT of the world (E0209, § 13.1);
 - nothing that can change: no `mut` field and no `list<mut T>`, at any depth (E0214);
-- no writable end of a stream or a future, `stream_writer<T>` or `future_writer<T>`, at any depth (E0222, § 7.13): WIT only names readable ends. *Specified, not available yet.*
+- no writable end of a stream or a future, `stream_writer<T>` or `future_writer<T>`, at any depth (E0222, § 7.13): WIT only names readable ends.
 
 **Mutability stays inside the component.** The WIT has no mutability, as it has no recursive types: what it cannot express stays internal. A record with a `mut` field, or a type that contains a `list<mut T>`, is declared in an interface that no world exports, and does not appear in an exported signature. An exported function that needs to change a list it receives takes a `list<T>` and works on `list::copy(xs)`; one that changes a record returns a new record.
 
@@ -341,8 +341,6 @@ A **handle type** is a resource type declared in an interface of another package
 - `self` is a `borrow<T>` of its resource, as in WIT, where a method takes `self: borrow<T>`.
 
 ## 7.13 Streams and futures
-
-*Specified, not available yet.*
 
 A **stream** carries a sequence of values from one component to another, and a **future** carries one value that will be available later. They are the `stream<T>` and `future<T>` of WIT, with which WASI 0.3 passes the body of an HTTP request or the standard output of a command. Each of them has two ends:
 

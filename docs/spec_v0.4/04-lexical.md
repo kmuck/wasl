@@ -68,7 +68,7 @@ include with as
 
 Any keyword, type name or reserved word written where an identifier is expected is an error (E0005): `local record: u32 = 1;`, `local while: u32 = 1;`, `func string() { }`.
 
-`async`, `task`, `stream`, `future`, `stream_writer` and `future_writer` are used from 0.4 (§ 2.8, § 7.13, § 8.21). `async` is a keyword; the others are reserved until streams, futures and `task::return` are available (*specified, not available yet*). `task` names the built-in functions of the current task, as `list` names those of lists: `task::return(v)`. `subtask` is reserved for concurrency inside a task (§ 16).
+`async`, `task`, `stream`, `future`, `stream_writer` and `future_writer` are used from 0.4 (§ 2.8, § 7.13, § 8.21). `async`, `stream`, `future`, `stream_writer` and `future_writer` are keywords; `task` stays reserved until `task::return` is available (*specified, not available yet*). `task` names the built-in functions of the current task, as `list` names those of lists: `task::return(v)`. `subtask` is reserved for concurrency inside a task (§ 16).
 
 **`await`.** WaSL has no `await`: a call to an async function waits by itself (§ 2.8). `await` written anywhere is an error of its own (E0101), whose message says to remove it, so that code written by habit from Rust or JavaScript is corrected at once: `client::send(req).await?` and `await client::send(req)` both report E0101.
 

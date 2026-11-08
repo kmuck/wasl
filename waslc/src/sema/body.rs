@@ -8,7 +8,7 @@ use crate::ast::{self, BinOp, ExprKind, Ident, StmtKind, UnaryOp};
 use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, Const, FuncId, InterfaceId, LocalId, Place};
 use crate::source::Span;
-use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
+use crate::types::{DeclId, DeclKind, EndKind, Prim, Type, TypeKind, Types};
 
 /// A block always returns if one of its statements always returns (§ 8.8, § 8.8).
 pub(super) fn always_returns(stmts: &[hir::Stmt]) -> bool {
@@ -40,6 +40,8 @@ fn self_typed(e: &ast::Expr) -> bool {
             ([head], "some") if head.name == "option" => call.args.iter().all(self_typed),
             ([head], _) if head.name == "result" => false,
             ([head], "filled") if head.name == "list" => call.args.get(1).is_some_and(self_typed),
+            // `stream::new()` and `future::new()` take `T` from the context (§ 8.21).
+            _ if is_end_new(call) => false,
             _ => true,
         },
         _ => true,
@@ -98,6 +100,9 @@ pub(super) struct FnCx<'a> {
     pub(super) in_async: bool,
     /// The calls to functions of other packages, with their location (E0221).
     pub(super) foreign_calls: Vec<(hir::FuncId, Span)>,
+    /// The streams and futures the function uses, as readable types, with a location:
+    /// each must appear in a function of every world that reaches it (E0223).
+    pub(super) end_uses: Vec<(Type, Span)>,
 }
 
 impl<'a> FnCx<'a> {
@@ -121,12 +126,21 @@ impl<'a> FnCx<'a> {
             loop_depth: 0,
             in_async: false,
             foreign_calls: Vec::new(),
+            end_uses: Vec::new(),
         }
     }
 
     /// A type, as written in messages.
     fn show(&self, ty: Type) -> String {
         self.types.display(ty)
+    }
+
+    /// Records the streams and futures of `ty` for E0223, as readable types.
+    pub(super) fn note_ends(&mut self, ty: Type, span: Span) {
+        for (kind, elem) in super::ends_in(self.types, ty) {
+            let readable = self.types.intern(TypeKind::End(kind.reader(), elem));
+            self.end_uses.push((readable, span));
+        }
     }
 
     /// E0416: a call to an async function outside an async function (§ 2.8). The
@@ -186,19 +200,35 @@ impl<'a> FnCx<'a> {
             );
         }
         if let Some(h) = super::handle_in(self.types, &self.program.handles, ty, self.iface)
-            && self.types.resource(ty).is_none()
+            && !super::is_handle_type(self.types, ty)
         {
+            // A tuple is destructured, the other values are used at once (§ 9.4, § 9.9).
+            let advice = match self.types.kind(ty) {
+                TypeKind::Tuple(elems) => format!(
+                    "destructure the tuple at once, one local per handle: `local ({}) = …;`",
+                    elems
+                        .iter()
+                        .enumerate()
+                        .map(|(k, &t)| format!("v{k}: {}", self.show(t)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                _ => "use the value at once with `match`, `?`, `return` or `_ =`".to_string(),
+            };
             return err(
                 Code::HandlePosition,
                 name.span,
                 format!(
-                    "`{}` is of type `{}`, which holds `{}`, a handle to a resource of another component: a local can only hold a handle itself; use the value at once with `match`, `?`, `return` or `_ =`",
+                    "`{}` is of type `{}`, which holds `{}`, {}: a local can only hold a handle itself; {advice}",
                     name.name,
                     self.show(ty),
-                    self.show(h)
+                    self.show(h),
+                    super::handle_noun(self.types, h)
                 ),
             );
         }
+        super::no_handle_aggregate(self.types, &self.program.handles, ty, name.span)?;
+        self.note_ends(ty, name.span);
         let id = self.locals.len() as LocalId;
         self.locals.push(ty);
         self.scopes
@@ -513,6 +543,35 @@ impl<'a> FnCx<'a> {
                 typed(hir::ExprKind::Tuple(values), ty)
             }
             _ if self_typed(init) => self.expr(init, None)?,
+            // `stream::new()` and `future::new()` take `T` from either position (§ 8.21).
+            ExprKind::Call(call) if is_end_new(call) && bindings.len() == 2 => {
+                let ends: Vec<(EndKind, Type)> = written
+                    .iter()
+                    .flatten()
+                    .filter_map(|&t| self.types.end(t))
+                    .collect();
+                match ends.first() {
+                    Some(&(kind, elem)) => {
+                        let reader = self.types.intern(TypeKind::End(kind.reader(), elem));
+                        let writer_kind = if kind.is_stream() {
+                            EndKind::StreamWriter
+                        } else {
+                            EndKind::FutureWriter
+                        };
+                        let writer = self.types.intern(TypeKind::End(writer_kind, elem));
+                        let pair = [written[0].unwrap_or(reader), written[1].unwrap_or(writer)];
+                        let ty = self.types.intern(TypeKind::Tuple(pair.to_vec()));
+                        self.expr(init, Some(ty))?
+                    }
+                    None => match written.iter().copied().collect::<Option<Vec<Type>>>() {
+                        Some(elems) => {
+                            let ty = self.types.intern(TypeKind::Tuple(elems));
+                            self.expr(init, Some(ty))?
+                        }
+                        None => return cannot_infer(init.span),
+                    },
+                }
+            }
             _ => match written.iter().copied().collect::<Option<Vec<Type>>>() {
                 Some(elems) => {
                     let ty = self.types.intern(TypeKind::Tuple(elems));
@@ -713,9 +772,11 @@ impl<'a> FnCx<'a> {
             ExprKind::Name(name) => {
                 if let Some(id) = self.lookup_local(name) {
                     let ty = self.locals[id as usize];
-                    // A resource leaves its local, unless the context only borrows it.
-                    if matches!(self.types.kind(ty), TypeKind::Decl(_))
-                        && self.types.resource(ty).is_some()
+                    // A resource or an end leaves its local, unless the context only
+                    // borrows it.
+                    if (matches!(self.types.kind(ty), TypeKind::Decl(_))
+                        && self.types.resource(ty).is_some())
+                        || self.types.end(ty).is_some()
                     {
                         typed(hir::ExprKind::Move(id), ty)
                     } else {
@@ -1329,8 +1390,8 @@ impl<'a> FnCx<'a> {
         let scopes = self.resolver.scopes;
         if path.len() == 1 {
             match head.name.as_str() {
-                "string" | "list" | "char" | "s8" | "s16" | "s32" | "s64" | "u8" | "u16"
-                | "u32" | "u64" => {
+                "string" | "list" | "char" | "stream" | "future" | "s8" | "s16" | "s32" | "s64"
+                | "u8" | "u16" | "u32" | "u64" => {
                     return match hir::Builtin::from_path(&head.name, &name.name) {
                         Some(b) => Ok(PathTarget::Builtin(b)),
                         None if name.name == "wrapping_neg" => err(
@@ -1669,6 +1730,9 @@ impl<'a> FnCx<'a> {
         if let Some(prim) = Prim::from_keyword(&call.path[0].name) {
             return self.int_builtin(func, prim, call, span, expected);
         }
+        if func.is_end() {
+            return self.end_builtin(func, call, span, expected);
+        }
         let arity = if func == B::ListFilled { 2 } else { 1 };
         if call.args.len() != arity {
             return err(
@@ -1760,12 +1824,163 @@ impl<'a> FnCx<'a> {
             B::Wrapping(_) | B::Checked(_) | B::WrappingFrom => {
                 unreachable!("functions of integer types")
             }
+            B::EndNew
+            | B::StreamWrite
+            | B::StreamRead
+            | B::StreamClose
+            | B::FutureWrite
+            | B::FutureRead => unreachable!("functions of streams and futures"),
         };
         self.expect_type(
             typed(hir::ExprKind::Builtin { func, args }, ty),
             expected,
             span,
         )
+    }
+
+    /// A built-in function of streams and futures (§ 8.21).
+    fn end_builtin(
+        &mut self,
+        func: hir::Builtin,
+        call: &ast::Call,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Result<hir::Expr> {
+        use hir::Builtin as B;
+        let head = call.path[0].name.as_str();
+        let name = format!("{head}::{}", call.name.name);
+        let call_span = call.path[0].span.to(call.name.span);
+        if func.is_async() && !self.in_async {
+            return err(
+                Code::AsyncCall,
+                call_span,
+                format!(
+                    "`{name}(…)` is async, and only an async function can call it: declare this function `async func`"
+                ),
+            );
+        }
+        let arity = match func {
+            B::EndNew => 0,
+            B::StreamWrite | B::StreamRead | B::FutureWrite => 2,
+            _ => 1,
+        };
+        if call.args.len() != arity {
+            return err(
+                Code::ArgCount,
+                call.name.span,
+                format!(
+                    "`{name}` expects {arity} argument(s), {} given",
+                    call.args.len()
+                ),
+            );
+        }
+        let (reader, writer) = if head == "stream" {
+            (EndKind::Stream, EndKind::StreamWriter)
+        } else {
+            (EndKind::Future, EndKind::FutureWriter)
+        };
+        if func == B::EndNew {
+            let wanted = format!("`tuple<{}<T>, {}<T>>`", reader.name(), writer.name());
+            let Some(exp) = expected else {
+                return err(
+                    Code::CannotInfer,
+                    span,
+                    format!(
+                        "cannot infer the type of `{name}()`: it returns a {wanted}, and nothing in the context gives `T`; destructure it with the types of the ends, `local (rx: {}<u8>, tx: {}<u8>) = {name}();`",
+                        reader.name(),
+                        writer.name()
+                    ),
+                );
+            };
+            let elem = match self.types.kind(exp) {
+                TypeKind::Tuple(elems) if elems.len() == 2 => {
+                    match (self.types.end(elems[0]), self.types.end(elems[1])) {
+                        (Some((r, a)), Some((w, b))) if r == reader && w == writer && a == b => {
+                            Some(a)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            let Some(elem) = elem else {
+                return err(
+                    Code::TypeMismatch,
+                    span,
+                    format!(
+                        "mismatched types: expected `{}`, but `{name}()` returns a {wanted}",
+                        self.show(exp)
+                    ),
+                );
+            };
+            let readable = self.types.intern(TypeKind::End(reader, elem));
+            self.end_uses.push((readable, span));
+            return Ok(typed(
+                hir::ExprKind::Builtin {
+                    func,
+                    args: Vec::new(),
+                },
+                exp,
+            ));
+        }
+        // The end: the first argument.
+        let kind = match func {
+            B::StreamWrite | B::StreamClose | B::FutureWrite => writer,
+            _ => reader,
+        };
+        let arg = &call.args[0];
+        let end = self.expr(arg, None)?;
+        let elem = match self.types.end(end.value_ty()) {
+            Some((k, elem)) if k == kind => elem,
+            _ => {
+                return err(
+                    Code::TypeMismatch,
+                    arg.span,
+                    format!(
+                        "mismatched types: `{name}` takes a `{}<T>`, found `{}`",
+                        kind.name(),
+                        self.show(end.value_ty())
+                    ),
+                );
+            }
+        };
+        // `stream::write` and `stream::read` borrow their end; the others move it (§ 8.21).
+        let end = match func {
+            B::StreamWrite | B::StreamRead => borrowed(end),
+            _ => end,
+        };
+        let list = |types: &mut Types, elem| {
+            types.intern(TypeKind::List {
+                mutable: false,
+                elem,
+            })
+        };
+        let (args, ty) = match func {
+            B::StreamWrite => {
+                let (xs, _) = self.list_arg(&call.args[1], Some(elem))?;
+                (vec![end, xs], Some(Type::U32))
+            }
+            B::StreamRead => {
+                let n = self.expr(&call.args[1], Some(Type::U32))?;
+                let xs = list(self.types, elem);
+                (vec![end, n], Some(self.types.intern(TypeKind::Option(xs))))
+            }
+            B::StreamClose => (vec![end], None),
+            B::FutureWrite => {
+                let v = self.expr(&call.args[1], Some(elem))?;
+                (vec![end, v], Some(Type::BOOL))
+            }
+            B::FutureRead => (vec![end], Some(elem)),
+            _ => unreachable!("handled above"),
+        };
+        let e = hir::Expr {
+            kind: hir::ExprKind::Builtin { func, args },
+            ty,
+        };
+        match ty {
+            Some(_) => self.expect_type(e, expected, span),
+            None => Ok(e),
+        }
     }
 
     /// A built-in function of an integer type `prim`: `u32::wrapping_add(a, b)`… (§ 8.17).
@@ -2190,9 +2405,10 @@ impl<'a> FnCx<'a> {
                 Code::HandlePosition,
                 span,
                 format!(
-                    "`{}` holds `{}`, a handle to a resource of another component: take its elements with a destructuring, `local (a: A, b: B) = e;`",
+                    "`{}` holds `{}`, {}: take its elements with a destructuring, `local (a: A, b: B) = e;`",
                     self.show(ty),
-                    self.show(h)
+                    self.show(h),
+                    super::handle_noun(self.types, h)
                 ),
             );
         }
@@ -2535,6 +2751,13 @@ fn untyped_literal<T>(span: Span) -> Result<T> {
 }
 
 /// The path of a call as written, without its arguments: `save`, `store::save`.
+/// Whether the call is `stream::new()` or `future::new()`.
+fn is_end_new(call: &ast::Call) -> bool {
+    call.path.len() == 1
+        && matches!(call.path[0].name.as_str(), "stream" | "future")
+        && call.name.name == "new"
+}
+
 fn call_path(call: &ast::Call) -> String {
     call.path
         .iter()

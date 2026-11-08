@@ -10,7 +10,8 @@ use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
 use crate::source::Span;
 use crate::types::{
-    CaseDef, DeclId, DeclKind, FieldDef, Mutable, ResourceDef, Type, TypeDecl, TypeKind, Types,
+    CaseDef, DeclId, DeclKind, EndKind, FieldDef, Mutable, ResourceDef, Type, TypeDecl, TypeKind,
+    Types,
 };
 use crate::wit::kebab;
 
@@ -617,8 +618,9 @@ pub fn analyze(
                         Code::HandlePosition,
                         span,
                         format!(
-                            "`{}` is a handle to a resource of another component, and the field of {what} cannot hold one: keep it in a local",
-                            types.display(h)
+                            "`{}` is {}, and the field of {what} cannot hold one: keep it in a local",
+                            types.display(h),
+                            handle_noun(&types, h)
                         ),
                     );
                 }
@@ -710,8 +712,9 @@ pub fn analyze(
                 Code::HandlePosition,
                 global.ty.span,
                 format!(
-                    "`{}` is a handle to a resource of another component, and a global cannot hold one",
-                    types.display(h)
+                    "`{}` is {}, and a global cannot hold one",
+                    types.display(h),
+                    handle_noun(&types, h)
                 ),
             );
         }
@@ -742,6 +745,7 @@ pub fn analyze(
 
     // 8. Function bodies, one error at most per function (§ 11.2).
     let mut foreign_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
+    let mut end_uses: Vec<Vec<(Type, Span)>> = Vec::new();
     for (id, func) in funcs.iter().enumerate() {
         let iface = program.funcs[id].interface;
         let ret = program.funcs[id].ret;
@@ -755,6 +759,9 @@ pub fn analyze(
                 ret,
             );
             cx.in_async = program.funcs[id].is_async;
+            if let (Some(ret), Some(span)) = (ret, func.ret.as_ref().map(|r| r.span)) {
+                cx.note_ends(ret, span);
+            }
             cx.scopes.push(Vec::new());
             let mut params = program.funcs[id].params.iter();
             if let hir::FuncKind::Method(_) = program.funcs[id].kind {
@@ -784,11 +791,12 @@ pub fn analyze(
                     ),
                 );
             }
-            Ok((cx.locals, body, cx.foreign_calls))
+            Ok((cx.locals, body, cx.foreign_calls, cx.end_uses))
         })();
         match checked {
-            Ok((locals, body, calls)) => {
+            Ok((locals, body, calls, ends)) => {
                 foreign_calls.push(calls);
+                end_uses.push(ends);
                 let def = &mut program.funcs[id];
                 def.locals = locals;
                 def.body = body;
@@ -796,6 +804,7 @@ pub fn analyze(
             Err(d) => {
                 errors.push(d);
                 foreign_calls.push(Vec::new());
+                end_uses.push(Vec::new());
             }
         }
     }
@@ -843,8 +852,60 @@ pub fn analyze(
         }
     }
 
+    // 10. Streams and futures, world by world: each type that the code uses appears in a
+    //     function of the world (E0223, § 7.13).
+    let mut reported: Vec<Span> = Vec::new();
+    for (w, world) in program.worlds.iter().enumerate() {
+        let (used, _) = program.reach(w);
+        let carried = carried_ends(&mut types, &program, world);
+        for (f, uses) in end_uses.iter().enumerate() {
+            if !used[f] {
+                continue;
+            }
+            for &(ty, span) in uses {
+                if carried.contains(&ty) || reported.contains(&span) {
+                    continue;
+                }
+                reported.push(span);
+                let func = &program.funcs[f];
+                errors.push(Diagnostic::new(
+                    Code::UncarriedEnd,
+                    span,
+                    format!(
+                        "`{}::{}` uses `{}`, but no function of world `{}` takes or returns a `{}`: a stream or a future connects two components, and the Component Model only creates the types that the WIT of the world names",
+                        program.interfaces[func.interface].name,
+                        func.name,
+                        types.display(ty),
+                        world.name,
+                        types.display(ty),
+                    ),
+                ));
+            }
+        }
+    }
+
     program.types = types;
     Ok(program)
+}
+
+/// The stream and future types that the functions of the world carry: those of its
+/// imported and exported interfaces (E0223).
+fn carried_ends(types: &mut Types, program: &hir::Program, world: &hir::WorldDef) -> Vec<Type> {
+    let mut carried = Vec::new();
+    for &iface in world.imports.iter().chain(&world.exports) {
+        for &f in &program.interfaces[iface].funcs {
+            let func = &program.funcs[f];
+            for ty in func.params.iter().map(|(_, t)| *t).chain(func.ret) {
+                for (kind, elem) in ends_in(types, ty) {
+                    let readable = types.intern(TypeKind::End(kind.reader(), elem));
+                    if !carried.contains(&readable) {
+                        carried.push(readable);
+                    }
+                }
+            }
+        }
+    }
+    carried
 }
 
 /// Constant expression, the only initial value of a global (§ 8.18). Calls are
@@ -1119,7 +1180,8 @@ fn has_value(types: &Types, inhabited: &[bool], ty: Type) -> bool {
         | TypeKind::String
         | TypeKind::List { .. }
         | TypeKind::Option(_)
-        | TypeKind::Borrow(_) => true,
+        | TypeKind::Borrow(_)
+        | TypeKind::End(..) => true,
         TypeKind::Tuple(elems) => elems.iter().all(|&t| has_value(types, inhabited, t)),
         TypeKind::Result { ok, err } => {
             ok.is_none_or(|t| has_value(types, inhabited, t))
@@ -1157,7 +1219,7 @@ fn why_empty(types: &Types, inhabited: &[bool], id: DeclId) -> String {
 
 /// Types used at the boundary of a component by `world` (§ 7.11): no recursive type
 /// (E0208), only types of interfaces that the world exports or that have no function
-/// (E0209), and nothing that can change (E0214).
+/// (E0209), nothing that can change (E0214), and no writable end (E0222).
 fn check_boundary_types(
     types: &Types,
     program: &hir::Program,
@@ -1219,6 +1281,22 @@ fn check_boundary_types(
                     ),
                 );
             }
+        }
+    }
+    for &ty in used {
+        if let Some(writer) = writable_end(types, ty) {
+            let (kind, elem) = types.end(writer).expect("an end");
+            return err(
+                Code::WriterInWit,
+                at.span,
+                format!(
+                    "{what} `{}` uses `{}`, a writable end, but the WIT only names readable ends: give the other component a `{}<{}>` and keep the writer in this one (§ 7.13)",
+                    at.name,
+                    types.display(writer),
+                    kind.reader().name(),
+                    types.display(elem)
+                ),
+            );
         }
     }
     for &ty in used {
@@ -1317,6 +1395,7 @@ impl Resolver<'_> {
                 }
                 TypeKind::Borrow(types.decl_type(decl))
             }
+            K::End(kind, elem) => TypeKind::End(*kind, self.resolve(types, elem, iface)?),
         };
         Ok(types.intern(kind))
     }
@@ -1419,8 +1498,66 @@ impl Resolver<'_> {
     }
 }
 
+/// The ends of streams and futures in `ty`, at any depth, with their element types.
+pub(super) fn ends_in(types: &Types, ty: Type) -> Vec<(EndKind, Type)> {
+    let mut seen = Vec::new();
+    let mut ends = Vec::new();
+    let mut stack = vec![ty];
+    while let Some(t) = stack.pop() {
+        if seen.contains(&t) {
+            continue;
+        }
+        seen.push(t);
+        if let Some(end) = types.end(t) {
+            ends.push(end);
+        }
+        // The fields of a declared type are reached through its declaration, which
+        // never holds an end (E0220).
+        if !matches!(types.kind(t), TypeKind::Decl(_)) {
+            stack.extend(types.children(t));
+        }
+    }
+    ends
+}
+
+/// The first `stream_writer<T>` or `future_writer<T>` in `ty`, at any depth (E0222).
+fn writable_end(types: &Types, ty: Type) -> Option<Type> {
+    let mut seen = Vec::new();
+    let mut stack = vec![ty];
+    while let Some(t) = stack.pop() {
+        if seen.contains(&t) {
+            continue;
+        }
+        seen.push(t);
+        if types.end(t).is_some_and(|(kind, _)| !kind.readable()) {
+            return Some(t);
+        }
+        let mut children = types.children(t);
+        children.reverse();
+        stack.extend(children);
+    }
+    None
+}
+
+/// What a handle type is, for messages: a resource of another component, or an end of a
+/// stream or a future.
+pub(super) fn handle_noun(types: &Types, h: Type) -> &'static str {
+    match types.end(h) {
+        Some((kind, _)) if kind.is_stream() => "an end of a stream, which is a handle",
+        Some(_) => "an end of a future, which is a handle",
+        None => "a handle to a resource of another component",
+    }
+}
+
+/// Whether `ty` is a handle itself (§ 7.12): an `own` or `borrow` of a resource, or an end
+/// of a stream or a future.
+pub(super) fn is_handle_type(types: &Types, ty: Type) -> bool {
+    types.resource(ty).is_some() || types.end(ty).is_some()
+}
+
 /// The handle type that `ty` is or contains (§ 7.12), if any, through elements, fields and
-/// payloads; the resources of interface `except` do not count.
+/// payloads; the resources of interface `except` do not count. An end of a stream or a
+/// future is a handle.
 pub(super) fn handle_in(
     types: &Types,
     handles: &[bool],
@@ -1434,6 +1571,9 @@ pub(super) fn handle_in(
             continue;
         }
         seen.push(t);
+        if types.end(t).is_some() {
+            return Some(t);
+        }
         if let Some((d, _)) = types.resource(t)
             && handles[d]
             && Some(types.decls[d].interface) != except
@@ -1448,7 +1588,12 @@ pub(super) fn handle_in(
 /// E0220 for a list in `ty` that holds a handle: only `option`, `result`, variants and
 /// tuples can carry one, from a call to `return`, `?`, `match`, `_ =` or a destructuring
 /// (§ 7.12).
-fn no_handle_aggregate(types: &Types, handles: &[bool], ty: Type, span: Span) -> Result<()> {
+pub(super) fn no_handle_aggregate(
+    types: &Types,
+    handles: &[bool],
+    ty: Type,
+    span: Span,
+) -> Result<()> {
     let mut stack = vec![ty];
     let mut seen = Vec::new();
     while let Some(t) = stack.pop() {
@@ -1463,11 +1608,30 @@ fn no_handle_aggregate(types: &Types, handles: &[bool], ty: Type, span: Span) ->
                 Code::HandlePosition,
                 span,
                 format!(
-                    "`{}` holds `{}`, a handle to a resource of another component, and a list cannot hold one: only `option`, `result`, variants and tuples can carry a handle",
+                    "`{}` holds `{}`, {}, and a list cannot hold one: only `option`, `result`, variants and tuples can carry a handle",
                     types.display(t),
                     types.display(h),
+                    handle_noun(types, h),
                 ),
             );
+        }
+        if let Some((kind, elem)) = types.end(t) {
+            if kind.is_stream()
+                && let Some(h) = handle_in(types, handles, elem, None)
+            {
+                return err(
+                    Code::HandlePosition,
+                    span,
+                    format!(
+                        "`{}` carries `{}`, {}: the elements of a stream are written and read as lists, and a list cannot hold a handle",
+                        types.display(t),
+                        types.display(h),
+                        handle_noun(types, h),
+                    ),
+                );
+            }
+            // The value of a future can hold handles.
+            continue;
         }
         if !matches!(types.kind(t), TypeKind::Decl(_)) {
             stack.extend(types.children(t));

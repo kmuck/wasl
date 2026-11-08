@@ -40,6 +40,8 @@ pub enum Code {
     BorrowMisuse,
     ForeignExport,
     HandlePosition,
+    WriterInWit,
+    UncarriedEnd,
     // Names
     UnknownName,
     UnknownFunc,
@@ -117,6 +119,8 @@ impl Code {
             Code::BorrowMisuse => "E0219",
             Code::ForeignExport => "E0218",
             Code::HandlePosition => "E0220",
+            Code::WriterInWit => "E0222",
+            Code::UncarriedEnd => "E0223",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",
