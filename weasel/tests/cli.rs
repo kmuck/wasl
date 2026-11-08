@@ -687,3 +687,345 @@ fn several_errors() {
     );
     assert_eq!(lines[10], "error: 2 more errors not shown");
 }
+
+/// Async functions of the package (§ 14.2): `call` prints the result once the task has
+/// ended, and a trap after `task::return` is still an error.
+#[test]
+fn call_async() {
+    let dir = project(&[(
+        "src/work.wasl",
+        "
+world app {
+  export work;
+}
+
+interface work {
+  async func add(a: u32, b: u32) -> u32 {
+    return a + b;
+  }
+
+  async func twice(s: string) -> string {
+    return s + s;
+  }
+
+  async func early(n: u32) -> u32 {
+    task::return(n * 2);
+    local zero: u32 = 0;
+    if (n == 0) {
+      zero = 1 / zero;
+    }
+  }
+
+  async func nothing() { }
+}
+",
+    )]);
+    let dir = dir.path();
+    assert_eq!(ok(dir, &["call", "app", "work::add", "2", "3"]), "5\n");
+    assert_eq!(
+        ok(dir, &["call", "app", "work::twice", "\"ab\""]),
+        "\"abab\"\n"
+    );
+    assert_eq!(ok(dir, &["call", "app", "work::early", "4"]), "8\n");
+    assert_eq!(ok(dir, &["call", "app", "work::nothing"]), "");
+    let run = weasel(dir, &["call", "app", "work::early", "0"]);
+    assert_eq!(run.code, Some(1));
+    assert_eq!(run.stdout, "");
+    assert_eq!(
+        run.stderr,
+        "error: `work::early` trapped: integer divide by zero\n"
+    );
+}
+
+/// The interfaces of `wasi:cli@0.3.0` that the tests use, as WASI publishes them.
+const WASI_CLI: &str = "
+package wasi:cli@0.3.0;
+
+interface environment {
+  get-arguments: func() -> list<string>;
+}
+
+interface exit {
+  exit: func(status: result);
+}
+
+interface run {
+  run: async func() -> result;
+}
+
+interface types {
+  enum error-code {
+    io,
+    illegal-byte-sequence,
+    pipe,
+  }
+}
+
+interface stdout {
+  use types.{error-code};
+  write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+}
+";
+
+/// The interface of `wasi:clocks@0.3.0` that `wasi:http/types` uses.
+const WASI_CLOCKS: &str = "
+package wasi:clocks@0.3.0;
+
+interface types {
+  type duration = u64;
+}
+";
+
+const WASI_HTTP: &str = include_str!("../../waslc/tests/fixtures/wasi_http_0_3_0.wit");
+
+/// A project that depends on the WIT of WASI 0.3 (`wasi:cli` and `wasi:http`), through
+/// path dependencies, with the given source file.
+fn wasi_project(source: &str) -> TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        &root.join("wasl.toml"),
+        &manifest(
+            "app",
+            "\"wasi:cli\" = { path = \"wit/cli\" }\n\"wasi:http\" = { path = \"wit/http\" }\n",
+        ),
+    );
+    write(&root.join("wit/cli/cli.wit"), WASI_CLI);
+    write(&root.join("wit/http/http.wit"), WASI_HTTP);
+    write(&root.join("wit/http/deps/clocks.wit"), WASI_CLOCKS);
+    write(&root.join("src/app.wasl"), source);
+    dir
+}
+
+/// A command that prints its arguments, and ends as its first argument asks.
+const ARGS: &str = r#"
+world args {
+  import wasi:cli/types;
+  import wasi:cli/stdout;
+  import wasi:cli/environment;
+  import wasi:cli/exit;
+
+  export wasi:cli/run {
+    async func run() -> result {
+      local args: list<string> = environment::get_arguments();
+      local text: string = "";
+      local i: u32 = 0;
+      while (i < list::len(args)) {
+        text = text + "[" + args[i] + "]";
+        i = i + 1;
+      }
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
+      _ = stream::write(tx, string::bytes(text + "\n"));
+      stream::close(tx);
+      _ = future::read(done);
+      local first: string = "";
+      if (list::len(args) > 1) {
+        first = args[1];
+      }
+      if (first == "fail") {
+        return result::err;
+      }
+      if (first == "exit") {
+        exit::exit(result::err);
+      }
+      local zero: u32 = 0;
+      if (first == "trap") {
+        zero = 1 / zero;
+      }
+      return result::ok;
+    }
+  }
+}
+
+world lib {
+  export math;
+}
+
+interface math {
+  func one() -> u32 {
+    return 1;
+  }
+}
+"#;
+
+/// `weasel run` (§ 14.2): the arguments, the standard output and the exit code of a
+/// command of WASI 0.3.
+#[test]
+fn run() {
+    let dir = wasi_project(ARGS);
+    let dir = dir.path();
+    // The name of the world comes first; the other arguments are given unchanged.
+    assert_eq!(ok(dir, &["run", "args"]), "[args]\n");
+    assert_eq!(
+        ok(dir, &["run", "args", "a b", "--help", "--", "-x"]),
+        "[args][a b][--help][--][-x]\n"
+    );
+    // Nothing is written to `build/`.
+    assert!(!dir.join("build").exists());
+
+    // `result::err` and `wasi:cli/exit` give the exit code 1, without a message.
+    for arg in ["fail", "exit"] {
+        let run = weasel(dir, &["run", "args", arg]);
+        assert_eq!(run.code, Some(1), "{arg}: {}", run.stderr);
+        assert_eq!(run.stdout, format!("[args][{arg}]\n"));
+        assert_eq!(run.stderr, "");
+    }
+    let run = weasel(dir, &["run", "args", "trap"]);
+    assert_eq!(run.code, Some(1));
+    assert_eq!(run.stderr, "error: `run` trapped: integer divide by zero\n");
+
+    assert_eq!(
+        fails(dir, &["run", "lib"]),
+        "error: world `lib` does not export `wasi:cli/run`; its exports are `math`\n"
+    );
+    assert!(fails(dir, &["run"]).contains("<WORLD> [ARGUMENTS]..."));
+}
+
+/// A service that answers `Hello, <path>!`, traps on `/trap` before its response and
+/// on `/late` after it, and fails on `/err`.
+const SERVICE: &str = r#"
+world service {
+  import wasi:http/types;
+
+  export wasi:http/handler {
+    async func handle(request: types::request) -> result<types::response, types::error_code> {
+      local path: string = "/";
+      match (request.get_path_with_query()) {
+        case some(p) {
+          path = p;
+        }
+        case none {
+        }
+      }
+      local zero: u32 = 0;
+      if (path == "/trap") {
+        zero = 1 / zero;
+      }
+      if (path == "/err") {
+        return result::err(types::error_code::internal_error(option::some("boom")));
+      }
+      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+      local (trailers: future<result<option<types::trailers>, types::error_code>>,
+             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future::new();
+      local (response: types::response, _) =
+        types::response::new(types::fields(), option::some(body), trailers);
+      task::return(result::ok(response));
+      _ = stream::write(body_tx, string::bytes("Hello, "));
+      if (path == "/late") {
+        zero = 1 / zero;
+      }
+      _ = stream::write(body_tx, string::bytes(path + "!\n"));
+      stream::close(body_tx);
+      _ = future::write(trailers_tx, result::ok(option::none));
+    }
+  }
+}
+
+world lib {
+  export math;
+}
+
+interface math {
+  func one() -> u32 {
+    return 1;
+  }
+}
+"#;
+
+/// Sends `GET <path>` to `addr` and returns the status and the body of the response.
+fn get(addr: &str, path: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    // A body cut by a trap ends the connection without its last chunk.
+    _ = stream.read_to_string(&mut response);
+    let (head, mut rest) = response.split_once("\r\n\r\n").unwrap();
+    let status = head[9..12].parse().unwrap();
+    if !head.contains("transfer-encoding: chunked") {
+        return (status, rest.to_string());
+    }
+    let mut body = String::new();
+    while let Some((size, after)) = rest.split_once("\r\n") {
+        let size = usize::from_str_radix(size, 16).unwrap();
+        if size == 0 || after.len() < size {
+            break;
+        }
+        body.push_str(&after[..size]);
+        rest = after[size..].trim_start_matches("\r\n");
+    }
+    (status, body)
+}
+
+/// `weasel serve` (§ 14.2): one instance per request, traps and errors, and the end on
+/// `SIGTERM`.
+#[cfg(unix)]
+#[test]
+fn serve() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+
+    let dir = wasi_project(SERVICE);
+    let dir = dir.path();
+    assert_eq!(
+        fails(dir, &["serve", "lib"]),
+        "error: world `lib` does not export `wasi:http/handler`; its exports are `math`\n"
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_weasel"))
+        .args(["serve", "service", "--addr", "127.0.0.1:0"])
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut line = String::new();
+    stderr.read_line(&mut line).unwrap();
+    let addr = line
+        .strip_prefix("Serving `service` on http://")
+        .unwrap_or_else(|| panic!("{line}"))
+        .trim()
+        .to_string();
+
+    assert_eq!(get(&addr, "/karim"), (200, "Hello, /karim!\n".to_string()));
+    assert_eq!(get(&addr, "/trap"), (500, String::new()));
+    assert_eq!(get(&addr, "/err"), (500, String::new()));
+    // A trap after the response ends its body.
+    assert_eq!(get(&addr, "/late"), (200, "Hello, ".to_string()));
+    // Each request has its own instance: the service goes on after a trap.
+    assert_eq!(get(&addr, "/again"), (200, "Hello, /again!\n".to_string()));
+
+    // `SIGTERM` ends the service with the exit code 0.
+    let killed = Command::new("kill")
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0));
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).unwrap();
+    assert_eq!(
+        rest,
+        "error: request `GET /trap` trapped: integer divide by zero\n\
+         error: request `GET /err` failed: internal error: boom\n\
+         error: request `GET /late` trapped: integer divide by zero\n"
+    );
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    assert_eq!(stdout, "");
+}

@@ -948,6 +948,7 @@ cd examples/hello
 weasel build hello                 # fetches wasi:cli and wasi:io, writes wkg.lock
 wasmtime run -W gc=y -W function-references=y build/hello.wasm
 # Hello, world!
+weasel run hello                   # the same with weasel (§ 14.2), from 0.4 on
 ```
 
 What the program shows:
@@ -958,7 +959,7 @@ What the program shows:
 
 ## 15.7 A WASI 0.3 command: `hello`
 
-This is `examples/hello` for WASI 0.3, one of the two target programs of version 0.4. It replaces the WASI 0.2 program of § 15.6, and CI builds and runs it.
+This is `examples/hello` for WASI 0.3, one of the two target programs of version 0.4. It replaces the WASI 0.2 program of § 15.6, and CI runs it with `weasel run hello`.
 
 `examples/hello/wasl.toml`:
 
@@ -1018,10 +1019,11 @@ world hello {
 
 ```sh
 cd examples/hello
-weasel build hello                 # fetches wasi:cli, writes wkg.lock
+weasel run hello                   # fetches wasi:cli, writes wkg.lock (§ 14.2)
+# Hello, world!
+weasel build hello                 # build/hello.wasm, which wasmtime runs too:
 wasmtime run -W gc=y -W function-references=y build/hello.wasm
 # Hello, world!
-weasel run hello                   # the same with weasel (§ 14.2; specified, not available yet)
 ```
 
 What the program shows:
@@ -1034,7 +1036,7 @@ What the program shows:
 
 ## 15.8 An HTTP service: `hello-http`
 
-The second target program of version 0.4 is a small HTTP service for WASI 0.3, in `examples/hello-http`. `GET /karim` answers `Hello, /karim!`. `weasel serve` is *specified, not available yet*; until it is, CI serves the program with the wasmtime CLI: `wasmtime serve -W gc=y -W function-references=y build/hello_http.wasm`.
+The second target program of version 0.4 is a small HTTP service for WASI 0.3, in `examples/hello-http`. `GET /karim` answers `Hello, /karim!`. CI serves it with `weasel serve hello_http` and calls it with `curl`. The wasmtime CLI serves its component too: `wasmtime serve -W gc=y -W function-references=y build/hello_http.wasm`.
 
 `examples/hello-http/wasl.toml`:
 

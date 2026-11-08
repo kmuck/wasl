@@ -4,11 +4,15 @@ mod call;
 mod compose;
 mod deps;
 mod error;
+mod host;
 mod init;
 mod manifest;
 mod project;
+mod run;
+mod serve;
 
 use std::fs;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -73,13 +77,33 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Run a world as a command, through its export of `wasi:cli/run`
+    Run {
+        /// World to run, then the arguments of the program, given unchanged (even
+        /// `--help`)
+        #[arg(
+            value_names = ["WORLD", "ARGUMENTS"],
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        command: Vec<String>,
+    },
+    /// Serve a world over HTTP, through its export of `wasi:http/handler`
+    Serve {
+        /// World to serve
+        world: String,
+        /// Address to listen on
+        #[arg(long, value_name = "HOST:PORT", default_value = "127.0.0.1:8080")]
+        addr: SocketAddr,
+    },
     /// Remove the build directory
     Clean,
 }
 
 fn main() -> ExitCode {
     match run(Cli::parse().command) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(e) => {
             eprintln!("{e}");
             ExitCode::FAILURE
@@ -87,15 +111,16 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(command: Command) -> Result<()> {
+/// Runs a command, and returns the exit code of `weasel`: that of the program for
+/// `weasel run` (§ 14.2), success otherwise.
+fn run(command: Command) -> Result<ExitCode> {
     match command {
-        Command::Init { package } => init::init(&package),
-        Command::Build { world } => build(&world),
+        Command::Init { package } => init::init(&package)?,
+        Command::Build { world } => build(&world)?,
         Command::Check => {
             let project = Project::load()?;
             project.analyze()?;
             eprintln!("No errors in `{}`", project.package.name);
-            Ok(())
         }
         Command::Wit => {
             let project = Project::load()?;
@@ -104,7 +129,6 @@ fn run(command: Command) -> Result<()> {
                 .wit()
                 .map_err(|d| Error::diagnostic(&d, &project.sources))?;
             print!("{wit}");
-            Ok(())
         }
         Command::Call {
             world,
@@ -114,17 +138,21 @@ fn run(command: Command) -> Result<()> {
             if let Some(result) = call::call(&Project::load()?, &world, &function, &args)? {
                 println!("{result}");
             }
-            Ok(())
         }
+        Command::Run { command } => {
+            let (world, args) = command.split_first().expect("a world");
+            return run::run(&Project::load()?, world, args);
+        }
+        Command::Serve { world, addr } => serve::serve(&Project::load()?, &world, addr)?,
         Command::Clean => {
             if Path::new(BUILD_DIR).exists() {
                 fs::remove_dir_all(BUILD_DIR)
                     .map_err(|e| Error::new(format!("cannot remove `{BUILD_DIR}`: {e}")))?;
                 eprintln!("Removed `{BUILD_DIR}/`");
             }
-            Ok(())
         }
     }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn build(world: &str) -> Result<()> {

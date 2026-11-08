@@ -57,24 +57,24 @@ jobs:
           test "$(weasel call checkout orders::last_sku '[{sku: "pen", quantity: 1}]')" = 'some("pen")'
           test "$(weasel call checkout orders::last_sku '[]')" = "none"
       # The WASI target program of 0.4: built with the WIT of WASI 0.3 fetched from the
-      # registry, and run as a command by the wasmtime CLI.
-      - uses: bytecodealliance/actions/wasmtime/setup@v1
-        if: matrix.crate == 'weasel'
+      # registry, and run as a command by `weasel run`.
       - name: Run examples/hello
         if: matrix.crate == 'weasel'
         working-directory: examples/hello
         run: |
-          cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- build hello
-          test "$(wasmtime run -W gc=y -W function-references=y build/hello.wasm)" = "Hello, world!"
-      # The HTTP target program of 0.4: built with the WIT of WASI 0.3, served by the
-      # wasmtime CLI until `weasel serve` exists, and called with curl.
+          weasel() { cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- "$@"; }
+          test "$(weasel run hello)" = "Hello, world!"
+      # The HTTP target program of 0.4: built with the WIT of WASI 0.3, served by
+      # `weasel serve`, called with curl, then stopped with SIGTERM, which exits with 0.
       - name: Run examples/hello-http
         if: matrix.crate == 'weasel'
         working-directory: examples/hello-http
         run: |
-          cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- build hello_http
-          wasmtime serve -W gc=y -W function-references=y --addr 127.0.0.1:8080 build/hello_http.wasm &
+          weasel=../../weasel/target/debug/weasel
+          $weasel check
+          $weasel serve hello_http &
           server=$!
-          for i in $(seq 1 100); do curl -s -o /dev/null http://127.0.0.1:8080/ && break; sleep 0.1; done
+          for i in $(seq 1 300); do curl -s -o /dev/null http://127.0.0.1:8080/ && break; sleep 0.1; done
           test "$(curl -sS --max-time 10 http://127.0.0.1:8080/karim)" = "Hello, /karim!"
           kill $server
+          wait $server

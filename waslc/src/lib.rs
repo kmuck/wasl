@@ -44,6 +44,9 @@ pub struct World {
     /// Interfaces imported by the world, in declaration order, with their WIT name:
     /// `accounts`, `wasi:cli/stdout@0.2.6`.
     pub imports: Vec<String>,
+    /// Interfaces of other packages that the world exports with an implementation
+    /// (§ 2.8), in declaration order, with their WIT name: `wasi:cli/run@0.3.0`.
+    pub implements: Vec<String>,
 }
 
 /// An interface exported by a world, with WaSL names.
@@ -125,6 +128,13 @@ pub fn analyze(
                     Some(f) => f.wit_name(),
                     None => wit::kebab(&program.interfaces[iface].name),
                 })
+                .collect(),
+            implements: world
+                .exports
+                .iter()
+                .filter_map(|&iface| program.interfaces[iface].implements)
+                .filter_map(|foreign| program.interfaces[foreign].foreign.as_ref())
+                .map(|f| f.wit_name())
                 .collect(),
         })
         .collect();

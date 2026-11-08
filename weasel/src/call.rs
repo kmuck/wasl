@@ -3,11 +3,11 @@
 use std::fmt::Write;
 
 use wasmtime::component::types::ComponentItem;
-use wasmtime::component::{Component, Linker, ResourceTable, Type, Val, wasm_wave};
-use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime::component::{Component, Type, Val, wasm_wave};
+use wasmtime::{Engine, Store};
 
 use crate::error::{Error, Result};
+use crate::host::{self, Host};
 use crate::project::Project;
 
 /// A function exported by an interface of a loaded component.
@@ -37,14 +37,8 @@ pub fn call(
     let display = resolve(exports, function)?;
     // The imports of the world are provided by other components, composed with it, or
     // by the host (§ 14.2).
-    let bytes = crate::compose::component(project, &analysis, world)?;
-
-    let engine = engine()?;
-    let loaded = Component::new(&engine, &bytes).map_err(|e| {
-        Error::new(format!(
-            "cannot load the component of world `{world}`: {e:#}"
-        ))
-    })?;
+    let engine = host::engine()?;
+    let loaded = host::component(&engine, project, &analysis, world)?;
     let exports = exported_functions(&engine, &loaded);
     let export = exports
         .iter()
@@ -84,72 +78,42 @@ pub fn call(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut store = Store::new(&engine, Host::new());
-    let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
-        .map_err(|e| Error::new(format!("cannot provide WASI: {e:#}")))?;
-    let instance = linker
-        .instantiate(&mut store, &loaded)
-        .map_err(|e| Error::new(format!("cannot instantiate world `{world}`: {e:#}")))?;
-    let func = instance
-        .get_export_index(&mut store, None, &export.instance)
-        .and_then(|i| instance.get_export_index(&mut store, Some(&i), &export.function))
-        .and_then(|i| instance.get_func(&mut store, i))
-        .ok_or_else(|| Error::new(format!("cannot find `{}` in the component", export.display)))?;
+    let linker = host::linker(&engine)?;
+    host::block_on(async {
+        let mut store = Store::new(&engine, Host::quiet());
+        let instance = linker
+            .instantiate_async(&mut store, &loaded)
+            .await
+            .map_err(|e| Error::new(format!("cannot instantiate world `{world}`: {e:#}")))?;
+        let func = instance
+            .get_export_index(&mut store, None, &export.instance)
+            .and_then(|i| instance.get_export_index(&mut store, Some(&i), &export.function))
+            .and_then(|i| instance.get_func(&mut store, i))
+            .ok_or_else(|| {
+                Error::new(format!("cannot find `{}` in the component", export.display))
+            })?;
 
-    let mut results = vec![Val::Bool(false); func.ty(&store).results().len()];
-    if let Err(e) = func.call(&mut store, &params, &mut results) {
-        let reason = match e.downcast_ref::<wasmtime::Trap>() {
-            Some(trap) => trap
-                .to_string()
-                .trim_start_matches("wasm trap: ")
-                .to_string(),
-            None => format!("{e:#}"),
-        };
-        return Err(Error::new(format!(
-            "`{}` trapped: {reason}",
-            export.display
-        )));
-    }
-    Ok(results.first().map(format_value))
-}
-
-/// The state of the host: WASI 0.2, whose standard output goes to the standard error of
-/// `weasel`, so that its standard output only receives the result (§ 14.2).
-struct Host {
-    ctx: WasiCtx,
-    table: ResourceTable,
-}
-
-impl Host {
-    fn new() -> Self {
-        Host {
-            ctx: WasiCtx::builder()
-                .stdout(std::io::stderr())
-                .inherit_stderr()
-                .build(),
-            table: ResourceTable::new(),
+        let mut results = vec![Val::Bool(false); func.ty(&store).results().len()];
+        let called = store
+            .run_concurrent(async |accessor| {
+                func.call_concurrent(accessor, &params, &mut results)
+                    .await?;
+                // An async function may go on after it has delivered its result: wait
+                // until its task has ended (§ 14.2).
+                std::future::poll_fn(|cx| accessor.poll_no_interesting_tasks(cx)).await;
+                wasmtime::Result::Ok(())
+            })
+            .await
+            .and_then(|called| called);
+        if let Err(e) = called {
+            return Err(Error::new(format!(
+                "`{}` trapped: {}",
+                export.display,
+                host::trap_reason(&e)
+            )));
         }
-    }
-}
-
-impl WasiView for Host {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.ctx,
-            table: &mut self.table,
-        }
-    }
-}
-
-/// The wasmtime engine, with WasmGC and its prerequisites (§ 14.6).
-fn engine() -> Result<Engine> {
-    let mut config = Config::new();
-    config
-        .wasm_reference_types(true)
-        .wasm_function_references(true)
-        .wasm_gc(true);
-    Engine::new(&config).map_err(|e| Error::new(format!("cannot create the engine: {e:#}")))
+        Ok(results.first().map(format_value))
+    })?
 }
 
 /// Every function exported by an interface of a loaded component.

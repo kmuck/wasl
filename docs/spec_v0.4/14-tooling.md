@@ -15,7 +15,7 @@ WaSL comes with two programs: the build tool `weasel`, used by developers, and t
 - **Standard error** receives progress messages (`Built …`) and errors.
 - Compilation errors use the format of § 11.1, manifest errors the format of § 11.4, other errors `error: <message>` (§ 11.5).
 - A compilation shows its **first ten errors** (§ 11.2), one per line, as the Go compiler does; the others are counted on a last line: `error: 3 more errors not shown`.
-- **Exit code**: `0` on success, `1` on any error (including a trap during `call`), `2` for an invalid command line (unknown command, missing argument).
+- **Exit code**: `0` on success, `1` on any error (including a trap during `call`), `2` for an invalid command line (unknown command, missing argument). `weasel run` exits with the code of the program it runs.
 - Each option has a single spelling, its long name: `weasel --help` and `weasel <command> --help` describe the commands, `weasel --version` prints the version. There are no one-letter options (`-h`, `-V`) and no `help` command.
 
 ## 14.2 `weasel` commands
@@ -120,22 +120,21 @@ Each `call` runs on a fresh instance: globals start from their initial values.
 **Imports.** When the world imports interfaces, `call` composes its component in memory before running it, with `wac-graph`:
 
 - an interface of the package is provided by the component of the first world, in declaration order, that exports it; an interface of a path dependency that is a WaSL project, by the first world of that project that exports it. Their components are built in memory and composed in turn if they have imports of their own;
-- an interface of WASI 0.2 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`) is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1);
+- an interface of WASI 0.2 or 0.3 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`, `wasi:sockets`), or of `wasi:http` 0.3, is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1). The component has no environment variables and no access to the filesystem or the network: sockets are refused, and an outgoing request of `wasi:http` fails with `HTTP-request-denied`;
 - any other import is an error: ``error: no component provides `example:catalog/carts@0.1.0`: add it as a path dependency on a WaSL project``.
 
-Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export run with `weasel run` (`wasi:cli/run`) and `weasel serve` (`wasi:http/handler`), below. An async function is called like the others: `call` waits until it has delivered its result, and until its task has ended (*specified, not available yet*). The interfaces of WASI 0.3 that wasmtime provides are provided by the host, like those of WASI 0.2.
+Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export run with `weasel run` (`wasi:cli/run`) and `weasel serve` (`wasi:http/handler`), below. An async function is called like the others: `call` waits until it has delivered its result, and until its task has ended (§ 8.21), then prints the result. A trap after `task::return` is an error too, and the result is not printed.
 
 ### `weasel run <world> [<arguments>…]`
-
-*Specified, not available yet.*
 
 Compiles the world `<world>` in memory and runs it as a command: it calls the `run` function of its export of `wasi:cli/run`, of WASI 0.2 or 0.3. Nothing is written to `build/`.
 
 - The world must export `wasi:cli/run`: ``error: world `app` does not export `wasi:cli/run`; its exports are `math` ``.
-- Every argument after the world is given to the program, unchanged, even one that starts with `--`. The program receives the name of the world as its first argument, followed by `<arguments>`, as a command receives its own name first.
+- Every argument after the world is given to the program, unchanged, even `--help` or `--`. The program receives the name of the world as its first argument, followed by `<arguments>`, as a command receives its own name first: `weasel run args a --help` gives `["args", "a", "--help"]` to `get-arguments` of `wasi:cli/environment`.
 - The standard input, output and error of the program are those of `weasel`. The program has no environment variables and no access to the filesystem or the network.
 - Imports are composed as for `call`.
-- **Exit code**: `0` when `run` returns `result::ok`, `1` when it returns `result::err`, and `1` with an error message for a trap (``error: `run` trapped: integer divide by zero``).
+- **Exit code**: `0` when `run` returns `result::ok`, `1` when it returns `result::err`, the code of `wasi:cli/exit` when the program calls it (`exit::exit(result::err)` gives `1`), and `1` with an error message for a trap (``error: `run` trapped: integer divide by zero``). Only a trap prints a message.
+- With WASI 0.3, `run` ends once its task has ended, after its result.
 
 ```sh
 weasel run hello
@@ -144,15 +143,14 @@ weasel run hello
 
 ### `weasel serve <world> [--addr <host>:<port>]`
 
-*Specified, not available yet.*
-
 Compiles the world `<world>` in memory and serves it as an HTTP service: each request is given to the `handle` function of its export of `wasi:http/handler`, of WASI 0.3. Nothing is written to `build/`.
 
 - The world must export `wasi:http/handler`: ``error: world `app` does not export `wasi:http/handler`; its exports are `math` ``.
-- The service listens on `127.0.0.1:8080`, or on the address of `--addr`, and prints ``Serving `hello_http` on http://127.0.0.1:8080`` on standard error. It runs until it is interrupted, then exits with the code `0`.
-- **Each request gets a new instance**, which no other request uses: globals start from their initial values for every request, and a request never waits for another one (§ 13.13).
-- A trap ends the request, which receives the status 500 if no response was delivered yet, and is printed on standard error (``error: request `GET /` trapped: …``); the service goes on.
-- The standard output and error of the component go to the standard error of `weasel`. Imports are composed as for `call`.
+- The service listens on `127.0.0.1:8080`, or on the address of `--addr`, and prints ``Serving `hello_http` on http://127.0.0.1:8080`` on standard error, once it accepts connections. With the port `0`, the system chooses a free port, which this line shows. The service runs until it is interrupted (`SIGINT`, Ctrl-C) or asked to terminate (`SIGTERM`), then exits with the code `0`.
+- **Each request gets a new instance**, which no other request uses: globals start from their initial values for every request, and a request never waits for another one (§ 13.13). The instance lives until the task of `handle` has ended, after its response, while it writes the body.
+- A trap ends the request, which receives the status 500 without a body if no response was delivered yet; after the response, the body ends where the trap happened. The trap is printed on standard error (``error: request `GET /` trapped: integer divide by zero``), and the service goes on.
+- When `handle` returns `result::err(e)`, the request receives the status 500 without a body, and the error is printed on standard error (``error: request `GET /` failed: internal error: boom``).
+- The standard output and error of the component go to the standard error of `weasel`. Imports are composed as for `call`, and the component has no access to the network either.
 
 ```sh
 weasel serve hello_http &
@@ -190,8 +188,10 @@ deps.add_wit("example:catalog", "../catalog/wasl.toml", &wit)?;  // …then its 
 //    Vec<Diagnostic>: every error of the compilation, in the order of § 11.2.
 let analysis = waslc::analyze(&package, &sources, &deps)?;
 
-// Worlds of the package, with their exported interfaces and functions (WaSL names).
-for world in analysis.worlds() { /* world.name, world.exports */ }
+// Worlds of the package, with their exported interfaces and functions (WaSL names),
+// their imports and the interfaces of other packages they implement (WIT names:
+// `wasi:cli/run@0.3.0`).
+for world in analysis.worlds() { /* world.name, world.exports, world.imports, world.implements */ }
 let world = analysis.world("calculator")?;                        // one world; unknown world: E9001
 
 // WIT of the package (§ 13.1).
@@ -215,7 +215,7 @@ The following commands are planned ([ROADMAP.md](../../ROADMAP.md)):
 | `weasel test` | run the tests of the project |
 | `weasel publish` | publish a component or a WIT package with wasm-pkg-tools |
 
-`weasel run` and `weasel serve`, planned in 0.3, are specified in § 14.2 for 0.4. Like `build`, they always take the world explicitly.
+`weasel run` and `weasel serve`, planned in 0.3, are available in 0.4 (§ 14.2). Like `build`, they always take the world explicitly.
 
 ## 14.5 Values in `weasel call`
 

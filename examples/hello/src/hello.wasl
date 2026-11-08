@@ -1,5 +1,5 @@
 // Target program of WaSL v0.4 (docs/spec_v0.4, § 15.7): a command-line program for
-// WASI 0.3, run with `wasmtime run`. Its entry point is `wasi:cli/run`, an async
+// WASI 0.3, run with `weasel run hello`. Its entry point is `wasi:cli/run`, an async
 // function of WASI implemented in the world (§ 2.4.2, § 2.8). It writes on the standard
 // output through a stream, then waits until the standard output is done.
 
