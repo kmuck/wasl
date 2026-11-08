@@ -62,16 +62,16 @@ With these, every WIT type except resources (`own`, `borrow`) and async types (`
 
 With these, every WIT type except async types (`stream`, `future`) has its WaSL equivalent, and a WaSL component can run as a WASI 0.2 command (§ 15.6).
 
-**Added in 0.4**, each item *specified, not available yet* unless marked otherwise:
+**Added in 0.4**:
 
-- async functions: their declaration, calls that wait without a marker, and the rule that only an async function calls one (§ 2.8, § 8.21), available;
-- `stream<T>` and `future<T>`, their writable ends `stream_writer<T>` and `future_writer<T>`, and their built-in functions (§ 7.13, § 8.21), available;
-- `task::return`, which delivers the result of an exported async function before its end (§ 8.21), available;
-- tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12), available;
-- WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2), available;
-- the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12), available;
-- `weasel run` and `weasel serve`, which run a command and serve an HTTP service, and `weasel call` of async functions (§ 14.2), available;
-- `weasel init --template cli|http`, which starts a project from the command or the service of 0.4 (§ 14.2), available.
+- async functions: their declaration, calls that wait without a marker, and the rule that only an async function calls one (§ 2.8, § 8.21);
+- `stream<T>` and `future<T>`, their writable ends `stream_writer<T>` and `future_writer<T>`, and their built-in functions (§ 7.13, § 8.21);
+- `task::return`, which delivers the result of an exported async function before its end (§ 8.21);
+- tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12);
+- WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2);
+- the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12);
+- `weasel run` and `weasel serve`, which run a command and serve an HTTP service, and `weasel call` of async functions (§ 14.2);
+- `weasel init --template cli|http`, which starts a project from the command or the service of 0.4 (§ 14.2).
 
 With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and `future` without an element type has its WaSL equivalent, and a WaSL component can run as a WASI 0.3 command (§ 15.7) or HTTP service (§ 15.8).
 
