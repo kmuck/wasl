@@ -56,886 +56,1065 @@ pub fn analyze(
     deps: &Dependencies,
     errors: &mut Vec<Diagnostic>,
 ) -> Result<hir::Program> {
-    let mut worlds = Vec::new();
-    let mut interfaces = Vec::new();
-    let mut globals = Vec::new();
-    let mut names: HashMap<String, TopLevel> = HashMap::new();
+    let mut a = Analyzer::new(items, deps)?;
+    a.foreign_interfaces()?;
+    a.items()?;
+    a.foreign_items();
+    a.signatures()?;
+    a.worlds()?;
+    a.implementations()?;
+    a.handles()?;
+    a.boundaries()?;
+    let global_ids = a.globals()?;
+    let facts = a.bodies(&global_ids, errors);
+    a.unimported_calls(&facts, errors);
+    a.uncarried_ends(&facts, errors);
+    a.entry_calls(&facts, errors);
+    a.program.types = a.types;
+    Ok(a.program)
+}
 
-    // 1. Top-level names (§ 6.1).
-    for item in items {
-        let name = item.name();
-        if let Some(prev) = names.get(name.name.as_str()) {
-            return err(
-                Code::DuplicateItem,
-                name.span,
-                format!("`{}` is already declared as {}", name.name, prev.describe()),
-            );
-        }
-        let entry = match item {
-            Item::World(w) => {
-                worlds.push(w);
-                TopLevel::World
-            }
-            Item::Interface(i) => {
-                interfaces.push(i);
-                TopLevel::Interface(interfaces.len() - 1)
-            }
-            Item::Global(g) => {
-                globals.push(g);
-                TopLevel::Global
-            }
-        };
-        names.insert(name.name.clone(), entry);
-    }
-    // The implementations of interfaces of other packages in worlds (§ 2.4.2) are
-    // interfaces of the package without a top-level name.
-    let mut impls: HashMap<(usize, usize), InterfaceId> = HashMap::new();
-    for (w, world) in worlds.iter().enumerate() {
-        for (k, item) in world.items.iter().enumerate() {
-            if let Some(body) = &item.body {
-                impls.insert((w, k), interfaces.len());
-                interfaces.push(body);
-            }
-        }
-    }
+/// The state of the analysis, which each step of § 11.2 completes in turn.
+struct Analyzer<'a> {
+    deps: &'a Dependencies,
+    worlds: Vec<&'a ast::World>,
+    /// The interfaces of the package, then the implementations of interfaces of other
+    /// packages in worlds (§ 2.4.2), which have no top-level name.
+    interfaces: Vec<&'a ast::Interface>,
+    globals: Vec<&'a ast::Global>,
+    names: HashMap<String, TopLevel>,
+    /// The implementation of item `k` of world `w`, by `(w, k)`.
+    impls: HashMap<(usize, usize), InterfaceId>,
+    converter: foreign::Converter<'a>,
+    /// The interfaces of other packages that the worlds name, with the first place.
+    named_foreign: Vec<(wit_parser::InterfaceId, Span)>,
+    /// The name of each interface of another package in code.
+    foreign_names: Vec<(String, InterfaceId)>,
+    program: hir::Program,
+    types: Types,
+    /// The functions of the package, by id.
+    funcs: Vec<&'a ast::Func>,
+    /// The name of each declared type of the package, by id.
+    decls: Vec<&'a Ident>,
+    /// The kind of each function of the package, by id.
+    func_kinds: Vec<hir::FuncKind>,
+    /// The functions of the interfaces of other packages, whose ids come after those of
+    /// the package, until the signatures of the package are added (step 4).
+    foreign_funcs: Vec<hir::FuncDef>,
+    scopes: Vec<InterfaceScope>,
+    /// Each implementation of an interface of another package: the implementation, the
+    /// interface, and where the world exports it.
+    implementations: Vec<(InterfaceId, InterfaceId, Span)>,
+}
 
-    // 2. Interfaces of other packages named by the worlds (§ 2.5, § 3.5), then the names
-    //    code gives them (E0217).
-    let mut converter = foreign::Converter::new(deps.resolve(), interfaces.len());
-    let mut named_foreign: Vec<(wit_parser::InterfaceId, Span)> = Vec::new();
-    for world in &worlds {
-        for item in &world.items {
-            let InterfaceRef::Foreign(f) = &item.iface else {
-                continue;
-            };
-            let id = foreign_interface(deps, f)?;
-            if !named_foreign.iter().any(|(i, _)| *i == id) {
-                named_foreign.push((id, item.iface.span()));
-            }
-        }
-    }
-    let mut foreign_names: Vec<(String, InterfaceId)> = Vec::new();
-    for &(id, span) in &named_foreign {
-        let hir_id = converter.iface(id);
-        let short = converter.short_name(hir_id);
-        let full = converter.ifaces[hir_id - interfaces.len()].display();
-        if let Some(prev) = names.get(short.as_str()) {
-            let what = match prev {
-                TopLevel::Interface(other) if *other >= interfaces.len() => format!(
-                    "the interface `{}`",
-                    converter.ifaces[*other - interfaces.len()].display()
-                ),
-                TopLevel::Interface(_) => format!("the interface `{short}` of the package"),
-                other => format!("{} of the package", other.describe()),
-            };
-            return err(
-                Code::InterfaceNameClash,
-                span,
-                format!(
-                    "`{full}` is named `{short}` in code, like {what}: code could not tell them apart"
-                ),
-            );
-        }
-        names.insert(short.clone(), TopLevel::Interface(hir_id));
-        foreign_names.push((short, hir_id));
-    }
+/// What the bodies of the functions use, by function, for the checks of each world
+/// (steps 9 to 11).
+#[derive(Default)]
+struct BodyFacts {
+    /// Calls to functions of interfaces of other packages.
+    foreign_calls: Vec<Vec<(FuncId, Span)>>,
+    /// Stream and future types.
+    end_uses: Vec<Vec<(Type, Span)>>,
+    /// Calls to functions that contain `task::return`.
+    entry_calls: Vec<Vec<(FuncId, Span)>>,
+}
 
-    // 3. Items of the interfaces (§ 6.3, § 7.7).
-    let mut program = hir::Program::default();
-    let mut types = Types::default();
-    types.interface_names = interfaces.iter().map(|i| i.name.name.clone()).collect();
-    let mut funcs: Vec<&ast::Func> = Vec::new();
-    // The name of each declared type, by id, and the kind of each function.
-    let mut decls: Vec<&Ident> = Vec::new();
-    let mut func_kinds: Vec<hir::FuncKind> = Vec::new();
-    let mut scopes: Vec<InterfaceScope> = Vec::new();
-    for (iface_id, iface) in interfaces.iter().enumerate() {
-        let mut scope = InterfaceScope::default();
-        let mut func_ids = Vec::new();
-        let mut decl_ids = Vec::new();
-        for item in &iface.items {
-            let name = match item {
-                ast::InterfaceItem::Func(f) => &f.name,
-                ast::InterfaceItem::Type(t) => &t.name,
-                ast::InterfaceItem::Resource(r) => &r.name,
-            };
-            let previous = if scope.funcs.contains_key(name.name.as_str()) {
-                Some("a function")
-            } else if scope.types.contains_key(name.name.as_str()) {
-                Some("a type")
-            } else {
-                None
-            };
-            match (item, previous) {
-                (ast::InterfaceItem::Func(_), Some("a function")) => {
-                    return err(
-                        Code::DuplicateFunc,
-                        name.span,
-                        format!(
-                            "function `{}` is already declared in interface `{}`",
-                            name.name, iface.name.name
-                        ),
-                    );
-                }
-                (_, Some(previous)) => {
-                    return err(
-                        Code::DuplicateName,
-                        name.span,
-                        format!(
-                            "`{}` is already declared as {previous} in interface `{}`: types and functions of an interface share one namespace",
-                            name.name, iface.name.name
-                        ),
-                    );
-                }
-                (_, None) => {}
-            }
-            match item {
-                ast::InterfaceItem::Func(func) => {
-                    let id = funcs.len();
-                    funcs.push(func);
-                    func_kinds.push(hir::FuncKind::Free);
-                    scope.funcs.insert(func.name.name.clone(), id);
-                    func_ids.push(id);
-                }
-                ast::InterfaceItem::Resource(res) => {
-                    if let Some(top) = names.get(res.name.name.as_str()) {
-                        return err(
-                            Code::TypeNamedLikeTopLevel,
-                            res.name.span,
-                            format!(
-                                "resource `{}` has the name of {} of the package",
-                                res.name.name,
-                                top.describe()
-                            ),
-                        );
-                    }
-                    check_resource_members(res)?;
-                    let id = decls.len();
-                    decls.push(&res.name);
-                    scope.types.insert(res.name.name.clone(), id);
-                    decl_ids.push(id);
-                    let mut def = ResourceDef::default();
-                    for rf in &res.funcs {
-                        let f = funcs.len();
-                        funcs.push(&rf.func);
-                        func_ids.push(f);
-                        let name = rf.func.name.name.clone();
-                        func_kinds.push(match rf.kind {
-                            ast::ResourceFuncKind::Constructor => {
-                                def.constructor = Some(f);
-                                hir::FuncKind::Constructor(id)
-                            }
-                            ast::ResourceFuncKind::Method => {
-                                def.methods.push((name, f));
-                                hir::FuncKind::Method(id)
-                            }
-                            ast::ResourceFuncKind::Static => {
-                                def.statics.push((name, f));
-                                hir::FuncKind::Static(id)
-                            }
-                        });
-                    }
-                    types.decls.push(TypeDecl {
-                        name: res.name.name.clone(),
-                        wit: None,
-                        interface: iface_id,
-                        kind: DeclKind::Resource(def),
-                    });
-                    types.decl_type(id);
-                }
-                ast::InterfaceItem::Type(decl) => {
-                    if let Some(top) = names.get(decl.name.name.as_str()) {
-                        return err(
-                            Code::TypeNamedLikeTopLevel,
-                            decl.name.span,
-                            format!(
-                                "type `{}` has the name of {} of the package",
-                                decl.name.name,
-                                top.describe()
-                            ),
-                        );
-                    }
-                    check_members(decl)?;
-                    let id = decls.len();
-                    decls.push(&decl.name);
-                    scope.types.insert(decl.name.name.clone(), id);
-                    decl_ids.push(id);
-                    // The members are resolved in step 3; the names are known now.
-                    types.decls.push(TypeDecl {
-                        name: decl.name.name.clone(),
-                        wit: None,
-                        interface: iface_id,
-                        kind: match &decl.kind {
-                            ast::TypeDeclKind::Enum(cases) => {
-                                DeclKind::Enum(cases.iter().map(|c| c.name.clone()).collect())
-                            }
-                            ast::TypeDeclKind::Flags(flags) => {
-                                DeclKind::Flags(flags.iter().map(|c| c.name.clone()).collect())
-                            }
-                            ast::TypeDeclKind::Record(_) => DeclKind::Record(Vec::new()),
-                            ast::TypeDeclKind::Variant(_) => DeclKind::Variant(Vec::new()),
-                        },
-                    });
-                    types.decl_type(id);
-                }
-            }
-        }
-        scopes.push(scope);
-        program.interfaces.push(hir::InterfaceDef {
-            name: iface.name.name.clone(),
-            funcs: func_ids,
-            types: decl_ids,
-            foreign: None,
-            implements: None,
-        });
-    }
+impl<'a> Analyzer<'a> {
+    /// 1. Top-level names (§ 6.1).
+    fn new(items: &'a [Item], deps: &'a Dependencies) -> Result<Analyzer<'a>> {
+        let mut worlds = Vec::new();
+        let mut interfaces = Vec::new();
+        let mut globals = Vec::new();
+        let mut names: HashMap<String, TopLevel> = HashMap::new();
 
-    // The functions and types of the interfaces of other packages, after those of the
-    // package: their ids come after.
-    let mut foreign_funcs: Vec<hir::FuncDef> = Vec::new();
-    let mut foreign_scopes: Vec<(InterfaceId, InterfaceScope)> = Vec::new();
-    for &(id, _) in &named_foreign {
-        let (scope, defs) = converter.scope(&mut types, id, funcs.len() + foreign_funcs.len());
-        let hir_id = converter.iface(id);
-        foreign_scopes.push((hir_id, scope));
-        foreign_funcs.extend(defs);
-    }
-    for (i, f) in converter.ifaces.iter().enumerate() {
-        let id = interfaces.len() + i;
-        let mut scope = foreign_scopes
-            .iter_mut()
-            .find(|(h, _)| *h == id)
-            .map(|(_, s)| std::mem::take(s))
-            .unwrap_or_default();
-        scope.foreign = true;
-        let funcs: Vec<FuncId> = foreign_funcs
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| d.interface == id)
-            .map(|(k, _)| funcs.len() + k)
-            .collect();
-        let decls: Vec<DeclId> = (0..types.decls.len())
-            .filter(|&d| types.decls[d].interface == id)
-            .collect();
-        scopes.push(scope);
-        types.interface_names.push(converter.short_name(id));
-        program.interfaces.push(hir::InterfaceDef {
-            name: converter.short_name(id),
-            funcs,
-            types: decls,
-            foreign: Some(f.clone()),
-            implements: None,
-        });
-    }
-
-    // 4. Types: fields, payloads and signatures, interface by interface (§ 11.2).
-    let resolver = Resolver {
-        names: &names,
-        scopes: &scopes,
-    };
-    for (iface_id, iface) in interfaces.iter().enumerate() {
-        for item in &iface.items {
-            match item {
-                ast::InterfaceItem::Type(decl) => {
-                    let id = scopes[iface_id].types[decl.name.name.as_str()];
-                    match &decl.kind {
-                        ast::TypeDeclKind::Record(fields) => {
-                            let mut defs = Vec::new();
-                            for f in fields {
-                                let ty = resolver.resolve(&mut types, &f.ty, Some(iface_id))?;
-                                no_borrow(&types, ty, f.ty.span)?;
-                                defs.push(FieldDef {
-                                    name: f.name.name.clone(),
-                                    mutable: f.mutable,
-                                    ty,
-                                });
-                            }
-                            types.decls[id].kind = DeclKind::Record(defs);
-                        }
-                        ast::TypeDeclKind::Variant(cases) => {
-                            let mut defs = Vec::new();
-                            for c in cases {
-                                let payload = match &c.payload {
-                                    Some(ty) => {
-                                        let t = resolver.resolve(&mut types, ty, Some(iface_id))?;
-                                        no_borrow(&types, t, ty.span)?;
-                                        Some(t)
-                                    }
-                                    None => None,
-                                };
-                                defs.push(CaseDef {
-                                    name: c.name.name.clone(),
-                                    payload,
-                                });
-                            }
-                            types.decls[id].kind = DeclKind::Variant(defs);
-                        }
-                        ast::TypeDeclKind::Enum(_) | ast::TypeDeclKind::Flags(_) => {}
-                    }
-                }
-                ast::InterfaceItem::Func(func) => {
-                    let def =
-                        signature(&resolver, &mut types, func, hir::FuncKind::Free, iface_id)?;
-                    program.funcs.push(def);
-                }
-                ast::InterfaceItem::Resource(res) => {
-                    let id = scopes[iface_id].types[res.name.name.as_str()];
-                    let mut fields = Vec::new();
-                    for f in &res.fields {
-                        let ty = resolver.resolve(&mut types, &f.ty, Some(iface_id))?;
-                        no_borrow(&types, ty, f.ty.span)?;
-                        fields.push(FieldDef {
-                            name: f.name.name.clone(),
-                            mutable: f.mutable,
-                            ty,
-                        });
-                    }
-                    if let DeclKind::Resource(def) = &mut types.decls[id].kind {
-                        def.fields = fields;
-                    }
-                    for rf in &res.funcs {
-                        let kind = func_kinds[program.funcs.len()];
-                        let def = signature(&resolver, &mut types, &rf.func, kind, iface_id)?;
-                        program.funcs.push(def);
-                    }
-                }
-            }
-        }
-    }
-    // Functions were pushed in interface order, which is the order of `funcs`; those of
-    // other packages come after them.
-    program.funcs.extend(foreign_funcs);
-    let inhabited = inhabited_decls(&types);
-    for (id, name) in decls.iter().enumerate() {
-        if !inhabited[id] {
-            return err(
-                Code::EmptyType,
-                name.span,
-                format!(
-                    "type `{}` has no value: {}; add a case without payload, or go through an `option` or a `list`",
-                    name.name,
-                    why_empty(&types, &inhabited, id)
-                ),
-            );
-        }
-    }
-
-    let mut implementations: Vec<(InterfaceId, InterfaceId, Span)> = Vec::new();
-    // 5. Worlds (§ 6.2).
-    for (w, world) in worlds.iter().enumerate() {
-        let mut def = hir::WorldDef {
-            name: world.name.name.clone(),
-            exports: Vec::new(),
-            imports: Vec::new(),
-            items: Vec::new(),
-        };
-        for (k, item) in world.items.iter().enumerate() {
-            let span = item.iface.span();
-            let (id, written) = match &item.iface {
-                InterfaceRef::Local(name) => match names.get(name.name.as_str()) {
-                    Some(TopLevel::Interface(id)) if *id < interfaces.len() => {
-                        (*id, name.name.clone())
-                    }
-                    Some(TopLevel::Interface(id)) => {
-                        let full = program.interfaces[*id].foreign.as_ref().unwrap().display();
-                        return err(
-                            Code::UnknownExportedInterface,
-                            span,
-                            format!(
-                                "the package has no interface `{}`: `{}` is the interface `{full}` of another package, write `{full}`",
-                                name.name, name.name
-                            ),
-                        );
-                    }
-                    Some(other) => {
-                        return err(
-                            Code::UnknownExportedInterface,
-                            span,
-                            format!("`{}` is {}, not an interface", name.name, other.describe()),
-                        );
-                    }
-                    None => {
-                        return err(
-                            Code::UnknownExportedInterface,
-                            span,
-                            format!("unknown interface `{}`", name.name),
-                        );
-                    }
-                },
-                InterfaceRef::Foreign(f) => {
-                    let id = foreign_names
-                        .iter()
-                        .find(|(_, i)| {
-                            program.interfaces[*i].foreign.as_ref().unwrap().display()
-                                == f.display()
-                        })
-                        .map(|(_, i)| *i)
-                        .expect("foreign interface resolved");
-                    match impls.get(&(w, k)) {
-                        Some(&imp) => {
-                            let world_name = &world.name.name;
-                            let exported = def
-                                .exports
-                                .iter()
-                                .any(|&e| program.interfaces[e].implements == Some(id));
-                            if exported {
-                                return err(
-                                    Code::DuplicateExport,
-                                    span,
-                                    format!(
-                                        "interface `{}` is already exported by world `{world_name}`",
-                                        f.display()
-                                    ),
-                                );
-                            }
-                            if def.imports.contains(&id) {
-                                return err(
-                                    Code::DuplicateImport,
-                                    span,
-                                    format!(
-                                        "world `{world_name}` imports interface `{}`, so it cannot export it",
-                                        f.display()
-                                    ),
-                                );
-                            }
-                            program.interfaces[imp].implements = Some(id);
-                            implementations.push((imp, id, span));
-                            (imp, f.display())
-                        }
-                        None => (id, f.display()),
-                    }
-                }
-            };
-            let world_name = &world.name.name;
-            if item.import {
-                if def.imports.contains(&id) {
-                    return err(
-                        Code::DuplicateImport,
-                        span,
-                        format!(
-                            "interface `{written}` is already imported by world `{world_name}`"
-                        ),
-                    );
-                }
-                if def.exports.contains(&id) {
-                    return err(
-                        Code::DuplicateImport,
-                        span,
-                        format!(
-                            "world `{world_name}` exports interface `{written}`, so it cannot import it"
-                        ),
-                    );
-                }
-                def.imports.push(id);
-            } else {
-                if def.exports.contains(&id) {
-                    return err(
-                        Code::DuplicateExport,
-                        span,
-                        format!(
-                            "interface `{written}` is already exported by world `{world_name}`"
-                        ),
-                    );
-                }
-                if def.imports.contains(&id) {
-                    return err(
-                        Code::DuplicateImport,
-                        span,
-                        format!(
-                            "world `{world_name}` imports interface `{written}`, so it cannot export it"
-                        ),
-                    );
-                }
-                def.exports.push(id);
-            }
-            def.items.push((item.import, id));
-        }
-        program.worlds.push(def);
-    }
-
-    // The implementations of interfaces of other packages (§ 2.4.2, § 13.12): exactly
-    // the functions of the interface, with the same signatures (E0218).
-    for &(imp, foreign, span) in &implementations {
-        check_implementation(&types, &program, &scopes, &funcs, imp, foreign, span)?;
-        // Each function is exported with the spelling of the WIT (§ 13.2).
-        for k in 0..program.interfaces[imp].funcs.len() {
-            let f = program.interfaces[imp].funcs[k];
-            if let Some(&wit) = scopes[foreign].funcs.get(&program.funcs[f].name) {
-                program.funcs[f].wit = program.funcs[wit].wit.clone();
-            }
-        }
-    }
-
-    // Handle types (§ 7.12): the resources of other packages and of the interfaces of the
-    // package that a world imports. They cannot be held by records, lists, fields and
-    // globals (E0220).
-    program.handles = types
-        .decls
-        .iter()
-        .map(|d| {
-            matches!(d.kind, DeclKind::Resource(_))
-                && (program.interfaces[d.interface].foreign.is_some()
-                    || program
-                        .worlds
-                        .iter()
-                        .any(|w| w.imports.contains(&d.interface)))
-        })
-        .collect();
-    for (iface_id, iface) in interfaces.iter().enumerate() {
-        for item in &iface.items {
-            let (fields, what): (Vec<(Type, Span)>, &str) = match item {
-                ast::InterfaceItem::Type(decl) => {
-                    let id = scopes[iface_id].types[decl.name.name.as_str()];
-                    match (&decl.kind, &types.decls[id].kind) {
-                        (ast::TypeDeclKind::Record(fields), DeclKind::Record(defs)) => (
-                            defs.iter()
-                                .zip(fields)
-                                .map(|(d, f)| (d.ty, f.ty.span))
-                                .collect(),
-                            "a record",
-                        ),
-                        (ast::TypeDeclKind::Variant(cases), DeclKind::Variant(defs)) => {
-                            for (d, c) in defs.iter().zip(cases) {
-                                if let (Some(t), Some(ty)) = (d.payload, &c.payload) {
-                                    no_handle_aggregate(&types, &program.handles, t, ty.span)?;
-                                }
-                            }
-                            continue;
-                        }
-                        _ => continue,
-                    }
-                }
-                ast::InterfaceItem::Resource(res) => {
-                    let id = scopes[iface_id].types[res.name.name.as_str()];
-                    let DeclKind::Resource(def) = &types.decls[id].kind else {
-                        unreachable!("a resource")
-                    };
-                    (
-                        def.fields
-                            .iter()
-                            .zip(&res.fields)
-                            .map(|(d, f)| (d.ty, f.ty.span))
-                            .collect(),
-                        "a resource",
-                    )
-                }
-                ast::InterfaceItem::Func(_) => continue,
-            };
-            for (ty, span) in fields {
-                if let Some(h) = handle_in(&types, &program.handles, ty, None) {
-                    return err(
-                        Code::HandlePosition,
-                        span,
-                        format!(
-                            "`{}` is {}, and the field of {what} cannot hold one: keep it in a local",
-                            types.display(h),
-                            handle_noun(&types, h)
-                        ),
-                    );
-                }
-                no_handle_aggregate(&types, &program.handles, ty, span)?;
-            }
-        }
-    }
-    for (id, func) in funcs.iter().enumerate() {
-        if let (Some(ret), Some(span)) = (program.funcs[id].ret, func.ret.as_ref().map(|r| r.span))
-        {
-            no_handle_aggregate(&types, &program.handles, ret, span)?;
-        }
-    }
-
-    // 6. Exported functions, and functions of the imported interfaces of the package:
-    //    types that can cross the boundary (§ 7.11). They have no parameter limit
-    //    (§ 13.6).
-    for world in &program.worlds {
-        let crossing = world
-            .exports
-            .iter()
-            .chain(&world.imports)
-            .filter(|&&i| i < interfaces.len());
-        for &iface_id in crossing {
-            for &f in &program.interfaces[iface_id].funcs {
-                let def = &program.funcs[f];
-                let signature: Vec<Type> =
-                    def.params.iter().map(|(_, t)| *t).chain(def.ret).collect();
-                check_boundary_types(
-                    &types,
-                    &program,
-                    world,
-                    &signature,
-                    &funcs[f].name,
-                    if world.exports.contains(&iface_id) {
-                        "exported function"
-                    } else {
-                        "imported function"
-                    },
-                )?;
-            }
-            // The types of an exported interface all appear in the WIT (§ 13.1).
-            for &d in &program.interfaces[iface_id].types {
-                let ty = types.decl_type_of(d);
-                check_boundary_types(
-                    &types,
-                    &program,
-                    world,
-                    &[ty],
-                    decls[d],
-                    if world.exports.contains(&iface_id) {
-                        "type of an exported interface"
-                    } else {
-                        "type of an imported interface"
-                    },
-                )?;
-            }
-        }
-    }
-
-    // Interfaces that appear in the WIT cannot use each other's types in a cycle (§ 13.1).
-    if let Some(cycle) = crate::wit::use_cycle(&types, &program) {
-        let steps: Vec<String> = cycle
-            .iter()
-            .map(|&(i, d)| {
-                let decl = &types.decls[d];
-                format!(
-                    "`{}` uses `{}::{}`",
-                    program.interfaces[i].name, program.interfaces[decl.interface].name, decl.name
-                )
-            })
-            .collect();
-        return err(
-            Code::UseCycle,
-            interfaces[cycle[0].0].name.span,
-            format!(
-                "interfaces use each other's types in a cycle, which WIT forbids: {}; move the shared types to an interface of their own",
-                steps.join(", ")
-            ),
-        );
-    }
-
-    // 7. Globals (§ 6.4, § 8.18).
-    let mut global_ids = HashMap::new();
-    for global in &globals {
-        let ty = resolver.resolve(&mut types, &global.ty, None)?;
-        if let Some(h) = handle_in(&types, &program.handles, ty, None) {
-            return err(
-                Code::HandlePosition,
-                global.ty.span,
-                format!(
-                    "`{}` is {}, and a global cannot hold one",
-                    types.display(h),
-                    handle_noun(&types, h)
-                ),
-            );
-        }
-        if !is_constant(&global.init) {
-            return err(
-                Code::NonConstGlobal,
-                global.init.span,
-                "the initial value of a global must be a constant expression, such as a literal",
-            );
-        }
-        let mut cx = FnCx::new(&program, &mut types, &resolver, &global_ids, None, None);
-        let init = cx.expr(&global.init, Some(ty))?;
-        if !is_constant_hir(&init) {
-            return err(
-                Code::NonConstGlobal,
-                global.init.span,
-                "the initial value of a global must be a constant expression: a function call is not one",
-            );
-        }
-        global_ids.insert(global.name.name.as_str(), program.globals.len());
-        program.globals.push(hir::GlobalDef {
-            name: global.name.name.clone(),
-            ty,
-            mutable: global.mutable,
-            init,
-        });
-    }
-
-    // 8. Function bodies, one error at most per function (§ 11.2).
-    let mut foreign_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
-    let mut end_uses: Vec<Vec<(Type, Span)>> = Vec::new();
-    let mut entry_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
-    for (id, func) in funcs.iter().enumerate() {
-        let iface = program.funcs[id].interface;
-        let ret = program.funcs[id].ret;
-        let checked = (|| {
-            let mut cx = FnCx::new(
-                &program,
-                &mut types,
-                &resolver,
-                &global_ids,
-                Some(iface),
-                ret,
-            );
-            cx.in_async = program.funcs[id].is_async;
-            if let (Some(ret), Some(span)) = (ret, func.ret.as_ref().map(|r| r.span)) {
-                cx.note_ends(ret, span);
-            }
-            cx.scopes.push(Vec::new());
-            let mut params = program.funcs[id].params.iter();
-            if let hir::FuncKind::Method(_) = program.funcs[id].kind {
-                let (_, ty) = params.next().expect("self");
-                let this = Ident {
-                    name: "self".into(),
-                    span: func.name.span,
-                };
-                cx.declare(&this, *ty)?;
-            }
-            for (param, (_, ty)) in func.params.iter().zip(params) {
-                cx.declare(&param.name, *ty)?;
-            }
-            let body = cx.block(&func.body)?;
-            if ret.is_some() && !always_returns(&body) {
+        for item in items {
+            let name = item.name();
+            if let Some(prev) = names.get(name.name.as_str()) {
                 return err(
-                    Code::MissingReturn,
-                    func.name.span,
+                    Code::DuplicateItem,
+                    name.span,
+                    format!("`{}` is already declared as {}", name.name, prev.describe()),
+                );
+            }
+            let entry = match item {
+                Item::World(w) => {
+                    worlds.push(w);
+                    TopLevel::World
+                }
+                Item::Interface(i) => {
+                    interfaces.push(i);
+                    TopLevel::Interface(interfaces.len() - 1)
+                }
+                Item::Global(g) => {
+                    globals.push(g.as_ref());
+                    TopLevel::Global
+                }
+            };
+            names.insert(name.name.clone(), entry);
+        }
+        // The implementations of interfaces of other packages in worlds (§ 2.4.2) are
+        // interfaces of the package without a top-level name.
+        let mut impls: HashMap<(usize, usize), InterfaceId> = HashMap::new();
+        for (w, world) in worlds.iter().enumerate() {
+            for (k, item) in world.items.iter().enumerate() {
+                if let Some(body) = &item.body {
+                    impls.insert((w, k), interfaces.len());
+                    interfaces.push(body);
+                }
+            }
+        }
+        Ok(Analyzer {
+            deps,
+            converter: foreign::Converter::new(deps.resolve(), interfaces.len()),
+            worlds,
+            interfaces,
+            globals,
+            names,
+            impls,
+            named_foreign: Vec::new(),
+            foreign_names: Vec::new(),
+            program: hir::Program::default(),
+            types: Types::default(),
+            funcs: Vec::new(),
+            decls: Vec::new(),
+            func_kinds: Vec::new(),
+            foreign_funcs: Vec::new(),
+            scopes: Vec::new(),
+            implementations: Vec::new(),
+        })
+    }
+
+    /// 2. Interfaces of other packages named by the worlds (§ 2.5, § 3.5), then the names
+    ///    code gives them (E0217).
+    fn foreign_interfaces(&mut self) -> Result<()> {
+        for world in &self.worlds {
+            for item in &world.items {
+                let InterfaceRef::Foreign(f) = &item.iface else {
+                    continue;
+                };
+                let id = foreign_interface(self.deps, f)?;
+                if !self.named_foreign.iter().any(|(i, _)| *i == id) {
+                    self.named_foreign.push((id, item.iface.span()));
+                }
+            }
+        }
+        for &(id, span) in &self.named_foreign {
+            let hir_id = self.converter.iface(id);
+            let short = self.converter.short_name(hir_id);
+            let full = self.converter.ifaces[hir_id - self.interfaces.len()].display();
+            if let Some(prev) = self.names.get(short.as_str()) {
+                let what = match prev {
+                    TopLevel::Interface(other) if *other >= self.interfaces.len() => format!(
+                        "the interface `{}`",
+                        self.converter.ifaces[*other - self.interfaces.len()].display()
+                    ),
+                    TopLevel::Interface(_) => format!("the interface `{short}` of the package"),
+                    other => format!("{} of the package", other.describe()),
+                };
+                return err(
+                    Code::InterfaceNameClash,
+                    span,
                     format!(
-                        "{} `{}` does not end with a `return` on every path",
-                        if func.name.name == "constructor" {
-                            "the constructor of"
-                        } else {
-                            "function"
-                        },
-                        func.name.name
+                        "`{full}` is named `{short}` in code, like {what}: code could not tell them apart"
                     ),
                 );
             }
-            Ok((
-                cx.locals,
-                body,
-                cx.foreign_calls,
-                cx.end_uses,
-                cx.entry_calls,
-            ))
-        })();
-        match checked {
-            Ok((locals, body, calls, ends, entries)) => {
-                foreign_calls.push(calls);
-                end_uses.push(ends);
-                entry_calls.push(entries);
-                let def = &mut program.funcs[id];
-                def.locals = locals;
-                def.body = body;
+            self.names
+                .insert(short.clone(), TopLevel::Interface(hir_id));
+            self.foreign_names.push((short, hir_id));
+        }
+        Ok(())
+    }
+
+    /// 3. Items of the interfaces of the package (§ 6.3, § 7.7).
+    fn items(&mut self) -> Result<()> {
+        self.types.interface_names = self
+            .interfaces
+            .iter()
+            .map(|i| i.name.name.clone())
+            .collect();
+        for (iface_id, iface) in self.interfaces.iter().enumerate() {
+            let mut scope = InterfaceScope::default();
+            let mut func_ids = Vec::new();
+            let mut decl_ids = Vec::new();
+            for item in &iface.items {
+                let name = match item {
+                    ast::InterfaceItem::Func(f) => &f.name,
+                    ast::InterfaceItem::Type(t) => &t.name,
+                    ast::InterfaceItem::Resource(r) => &r.name,
+                };
+                let previous = if scope.funcs.contains_key(name.name.as_str()) {
+                    Some("a function")
+                } else if scope.types.contains_key(name.name.as_str()) {
+                    Some("a type")
+                } else {
+                    None
+                };
+                match (item, previous) {
+                    (ast::InterfaceItem::Func(_), Some("a function")) => {
+                        return err(
+                            Code::DuplicateFunc,
+                            name.span,
+                            format!(
+                                "function `{}` is already declared in interface `{}`",
+                                name.name, iface.name.name
+                            ),
+                        );
+                    }
+                    (_, Some(previous)) => {
+                        return err(
+                            Code::DuplicateName,
+                            name.span,
+                            format!(
+                                "`{}` is already declared as {previous} in interface `{}`: self.types and functions of an interface share one namespace",
+                                name.name, iface.name.name
+                            ),
+                        );
+                    }
+                    (_, None) => {}
+                }
+                match item {
+                    ast::InterfaceItem::Func(func) => {
+                        let id = self.funcs.len();
+                        self.funcs.push(func);
+                        self.func_kinds.push(hir::FuncKind::Free);
+                        scope.funcs.insert(func.name.name.clone(), id);
+                        func_ids.push(id);
+                    }
+                    ast::InterfaceItem::Resource(res) => {
+                        if let Some(top) = self.names.get(res.name.name.as_str()) {
+                            return err(
+                                Code::TypeNamedLikeTopLevel,
+                                res.name.span,
+                                format!(
+                                    "resource `{}` has the name of {} of the package",
+                                    res.name.name,
+                                    top.describe()
+                                ),
+                            );
+                        }
+                        check_resource_members(res)?;
+                        let id = self.decls.len();
+                        self.decls.push(&res.name);
+                        scope.types.insert(res.name.name.clone(), id);
+                        decl_ids.push(id);
+                        let mut def = ResourceDef::default();
+                        for rf in &res.funcs {
+                            let f = self.funcs.len();
+                            self.funcs.push(&rf.func);
+                            func_ids.push(f);
+                            let name = rf.func.name.name.clone();
+                            self.func_kinds.push(match rf.kind {
+                                ast::ResourceFuncKind::Constructor => {
+                                    def.constructor = Some(f);
+                                    hir::FuncKind::Constructor(id)
+                                }
+                                ast::ResourceFuncKind::Method => {
+                                    def.methods.push((name, f));
+                                    hir::FuncKind::Method(id)
+                                }
+                                ast::ResourceFuncKind::Static => {
+                                    def.statics.push((name, f));
+                                    hir::FuncKind::Static(id)
+                                }
+                            });
+                        }
+                        self.types.decls.push(TypeDecl {
+                            name: res.name.name.clone(),
+                            wit: None,
+                            interface: iface_id,
+                            kind: DeclKind::Resource(def),
+                        });
+                        self.types.decl_type(id);
+                    }
+                    ast::InterfaceItem::Type(decl) => {
+                        if let Some(top) = self.names.get(decl.name.name.as_str()) {
+                            return err(
+                                Code::TypeNamedLikeTopLevel,
+                                decl.name.span,
+                                format!(
+                                    "type `{}` has the name of {} of the package",
+                                    decl.name.name,
+                                    top.describe()
+                                ),
+                            );
+                        }
+                        check_members(decl)?;
+                        let id = self.decls.len();
+                        self.decls.push(&decl.name);
+                        scope.types.insert(decl.name.name.clone(), id);
+                        decl_ids.push(id);
+                        // The members are resolved in step 4; the names are known now.
+                        self.types.decls.push(TypeDecl {
+                            name: decl.name.name.clone(),
+                            wit: None,
+                            interface: iface_id,
+                            kind: match &decl.kind {
+                                ast::TypeDeclKind::Enum(cases) => {
+                                    DeclKind::Enum(cases.iter().map(|c| c.name.clone()).collect())
+                                }
+                                ast::TypeDeclKind::Flags(flags) => {
+                                    DeclKind::Flags(flags.iter().map(|c| c.name.clone()).collect())
+                                }
+                                ast::TypeDeclKind::Record(_) => DeclKind::Record(Vec::new()),
+                                ast::TypeDeclKind::Variant(_) => DeclKind::Variant(Vec::new()),
+                            },
+                        });
+                        self.types.decl_type(id);
+                    }
+                }
             }
-            Err(d) => {
-                errors.push(d);
-                foreign_calls.push(Vec::new());
-                end_uses.push(Vec::new());
-                entry_calls.push(Vec::new());
-            }
+            self.scopes.push(scope);
+            self.program.interfaces.push(hir::InterfaceDef {
+                name: iface.name.name.clone(),
+                funcs: func_ids,
+                types: decl_ids,
+                foreign: None,
+                implements: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// The functions and types of the interfaces of other packages, after those of the
+    /// package: their ids come after.
+    fn foreign_items(&mut self) {
+        let mut foreign_scopes: Vec<(InterfaceId, InterfaceScope)> = Vec::new();
+        for &(id, _) in &self.named_foreign {
+            let (scope, defs) = self.converter.scope(
+                &mut self.types,
+                id,
+                self.funcs.len() + self.foreign_funcs.len(),
+            );
+            let hir_id = self.converter.iface(id);
+            foreign_scopes.push((hir_id, scope));
+            self.foreign_funcs.extend(defs);
+        }
+        for (i, f) in self.converter.ifaces.iter().enumerate() {
+            let id = self.interfaces.len() + i;
+            let mut scope = foreign_scopes
+                .iter_mut()
+                .find(|(h, _)| *h == id)
+                .map(|(_, s)| std::mem::take(s))
+                .unwrap_or_default();
+            scope.foreign = true;
+            let func_ids: Vec<FuncId> = self
+                .foreign_funcs
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.interface == id)
+                .map(|(k, _)| self.funcs.len() + k)
+                .collect();
+            let decl_ids: Vec<DeclId> = (0..self.types.decls.len())
+                .filter(|&d| self.types.decls[d].interface == id)
+                .collect();
+            self.scopes.push(scope);
+            self.types
+                .interface_names
+                .push(self.converter.short_name(id));
+            self.program.interfaces.push(hir::InterfaceDef {
+                name: self.converter.short_name(id),
+                funcs: func_ids,
+                types: decl_ids,
+                foreign: Some(f.clone()),
+                implements: None,
+            });
         }
     }
 
-    // 9. Calls to interfaces of other packages, world by world (E0221).
-    let mut reported: Vec<Span> = Vec::new();
-    for (w, world) in program.worlds.iter().enumerate() {
-        let (used, _) = program.reach(w);
-        for (f, calls) in foreign_calls.iter().enumerate() {
-            if !used[f] {
-                continue;
+    /// 4. Types: fields, payloads and signatures, interface by interface (§ 11.2).
+    fn signatures(&mut self) -> Result<()> {
+        let resolver = Resolver {
+            names: &self.names,
+            scopes: &self.scopes,
+        };
+        for (iface_id, iface) in self.interfaces.iter().enumerate() {
+            for item in &iface.items {
+                match item {
+                    ast::InterfaceItem::Type(decl) => {
+                        let id = self.scopes[iface_id].types[decl.name.name.as_str()];
+                        match &decl.kind {
+                            ast::TypeDeclKind::Record(fields) => {
+                                let mut defs = Vec::new();
+                                for f in fields {
+                                    let ty =
+                                        resolver.resolve(&mut self.types, &f.ty, Some(iface_id))?;
+                                    no_borrow(&self.types, ty, f.ty.span)?;
+                                    defs.push(FieldDef {
+                                        name: f.name.name.clone(),
+                                        mutable: f.mutable,
+                                        ty,
+                                    });
+                                }
+                                self.types.decls[id].kind = DeclKind::Record(defs);
+                            }
+                            ast::TypeDeclKind::Variant(cases) => {
+                                let mut defs = Vec::new();
+                                for c in cases {
+                                    let payload = match &c.payload {
+                                        Some(ty) => {
+                                            let t = resolver.resolve(
+                                                &mut self.types,
+                                                ty,
+                                                Some(iface_id),
+                                            )?;
+                                            no_borrow(&self.types, t, ty.span)?;
+                                            Some(t)
+                                        }
+                                        None => None,
+                                    };
+                                    defs.push(CaseDef {
+                                        name: c.name.name.clone(),
+                                        payload,
+                                    });
+                                }
+                                self.types.decls[id].kind = DeclKind::Variant(defs);
+                            }
+                            ast::TypeDeclKind::Enum(_) | ast::TypeDeclKind::Flags(_) => {}
+                        }
+                    }
+                    ast::InterfaceItem::Func(func) => {
+                        let def = signature(
+                            &resolver,
+                            &mut self.types,
+                            func,
+                            hir::FuncKind::Free,
+                            iface_id,
+                        )?;
+                        self.program.funcs.push(def);
+                    }
+                    ast::InterfaceItem::Resource(res) => {
+                        let id = self.scopes[iface_id].types[res.name.name.as_str()];
+                        let mut fields = Vec::new();
+                        for f in &res.fields {
+                            let ty = resolver.resolve(&mut self.types, &f.ty, Some(iface_id))?;
+                            no_borrow(&self.types, ty, f.ty.span)?;
+                            fields.push(FieldDef {
+                                name: f.name.name.clone(),
+                                mutable: f.mutable,
+                                ty,
+                            });
+                        }
+                        if let DeclKind::Resource(def) = &mut self.types.decls[id].kind {
+                            def.fields = fields;
+                        }
+                        for rf in &res.funcs {
+                            let kind = self.func_kinds[self.program.funcs.len()];
+                            let def =
+                                signature(&resolver, &mut self.types, &rf.func, kind, iface_id)?;
+                            self.program.funcs.push(def);
+                        }
+                    }
+                }
             }
-            for &(callee, span) in calls {
-                let iface = program.funcs[callee].interface;
-                if world.imports.contains(&iface) {
-                    continue;
-                }
-                let caller = &program.funcs[f];
-                let full = program.interfaces[iface]
-                    .foreign
-                    .as_ref()
-                    .unwrap()
-                    .display();
-                // One error per call, even when several worlds reach it.
-                if reported.contains(&span) {
-                    continue;
-                }
-                reported.push(span);
-                errors.push(Diagnostic::new(
-                    Code::UnimportedCall,
-                    span,
+        }
+        // Functions were pushed in interface order, which is the order of `funcs`; those of
+        // other packages come after them.
+        let foreign_funcs = std::mem::take(&mut self.foreign_funcs);
+        self.program.funcs.extend(foreign_funcs);
+        let inhabited = inhabited_decls(&self.types);
+        for (id, name) in self.decls.iter().enumerate() {
+            if !inhabited[id] {
+                return err(
+                    Code::EmptyType,
+                    name.span,
                     format!(
-                        "`{}::{}` calls `{}::{}`, of the interface `{full}`, but world `{}` reaches `{}::{}` and does not import `{full}`: add `import {full};` to world `{}`",
-                        program.interfaces[caller.interface].name,
-                        caller.name,
-                        program.interfaces[iface].name,
-                        program.funcs[callee].name,
-                        world.name,
-                        program.interfaces[caller.interface].name,
-                        caller.name,
-                        world.name,
+                        "type `{}` has no value: {}; add a case without payload, or go through an `option` or a `list`",
+                        name.name,
+                        why_empty(&self.types, &inhabited, id)
                     ),
-                ));
+                );
             }
         }
+        Ok(())
     }
 
-    // 10. Streams and futures, world by world: each type that the code uses appears in a
-    //     function of the world (E0223, § 7.13).
-    let mut reported: Vec<Span> = Vec::new();
-    for (w, world) in program.worlds.iter().enumerate() {
-        let (used, _) = program.reach(w);
-        let carried = carried_ends(&mut types, &program, world);
-        for (f, uses) in end_uses.iter().enumerate() {
-            if !used[f] {
-                continue;
+    /// 5. Worlds (§ 6.2).
+    fn worlds(&mut self) -> Result<()> {
+        for (w, world) in self.worlds.iter().enumerate() {
+            let mut def = hir::WorldDef {
+                name: world.name.name.clone(),
+                exports: Vec::new(),
+                imports: Vec::new(),
+                items: Vec::new(),
+            };
+            for (k, item) in world.items.iter().enumerate() {
+                let span = item.iface.span();
+                let (id, written) = match &item.iface {
+                    InterfaceRef::Local(name) => match self.names.get(name.name.as_str()) {
+                        Some(TopLevel::Interface(id)) if *id < self.interfaces.len() => {
+                            (*id, name.name.clone())
+                        }
+                        Some(TopLevel::Interface(id)) => {
+                            let full = self.program.interfaces[*id]
+                                .foreign
+                                .as_ref()
+                                .unwrap()
+                                .display();
+                            return err(
+                                Code::UnknownExportedInterface,
+                                span,
+                                format!(
+                                    "the package has no interface `{}`: `{}` is the interface `{full}` of another package, write `{full}`",
+                                    name.name, name.name
+                                ),
+                            );
+                        }
+                        Some(other) => {
+                            return err(
+                                Code::UnknownExportedInterface,
+                                span,
+                                format!(
+                                    "`{}` is {}, not an interface",
+                                    name.name,
+                                    other.describe()
+                                ),
+                            );
+                        }
+                        None => {
+                            return err(
+                                Code::UnknownExportedInterface,
+                                span,
+                                format!("unknown interface `{}`", name.name),
+                            );
+                        }
+                    },
+                    InterfaceRef::Foreign(f) => {
+                        let id = self
+                            .foreign_names
+                            .iter()
+                            .find(|(_, i)| {
+                                self.program.interfaces[*i]
+                                    .foreign
+                                    .as_ref()
+                                    .unwrap()
+                                    .display()
+                                    == f.display()
+                            })
+                            .map(|(_, i)| *i)
+                            .expect("foreign interface resolved");
+                        match self.impls.get(&(w, k)) {
+                            Some(&imp) => {
+                                let world_name = &world.name.name;
+                                let exported = def
+                                    .exports
+                                    .iter()
+                                    .any(|&e| self.program.interfaces[e].implements == Some(id));
+                                if exported {
+                                    return err(
+                                        Code::DuplicateExport,
+                                        span,
+                                        format!(
+                                            "interface `{}` is already exported by world `{world_name}`",
+                                            f.display()
+                                        ),
+                                    );
+                                }
+                                if def.imports.contains(&id) {
+                                    return err(
+                                        Code::DuplicateImport,
+                                        span,
+                                        format!(
+                                            "world `{world_name}` imports interface `{}`, so it cannot export it",
+                                            f.display()
+                                        ),
+                                    );
+                                }
+                                self.program.interfaces[imp].implements = Some(id);
+                                self.implementations.push((imp, id, span));
+                                (imp, f.display())
+                            }
+                            None => (id, f.display()),
+                        }
+                    }
+                };
+                let world_name = &world.name.name;
+                if item.import {
+                    if def.imports.contains(&id) {
+                        return err(
+                            Code::DuplicateImport,
+                            span,
+                            format!(
+                                "interface `{written}` is already imported by world `{world_name}`"
+                            ),
+                        );
+                    }
+                    if def.exports.contains(&id) {
+                        return err(
+                            Code::DuplicateImport,
+                            span,
+                            format!(
+                                "world `{world_name}` exports interface `{written}`, so it cannot import it"
+                            ),
+                        );
+                    }
+                    def.imports.push(id);
+                } else {
+                    if def.exports.contains(&id) {
+                        return err(
+                            Code::DuplicateExport,
+                            span,
+                            format!(
+                                "interface `{written}` is already exported by world `{world_name}`"
+                            ),
+                        );
+                    }
+                    if def.imports.contains(&id) {
+                        return err(
+                            Code::DuplicateImport,
+                            span,
+                            format!(
+                                "world `{world_name}` imports interface `{written}`, so it cannot export it"
+                            ),
+                        );
+                    }
+                    def.exports.push(id);
+                }
+                def.items.push((item.import, id));
             }
-            for &(ty, span) in uses {
-                if carried.contains(&ty) || reported.contains(&span) {
+            self.program.worlds.push(def);
+        }
+        Ok(())
+    }
+
+    /// The implementations of interfaces of other packages (§ 2.4.2, § 13.12): exactly
+    /// the functions of the interface, with the same signatures (E0218).
+    fn implementations(&mut self) -> Result<()> {
+        for &(imp, foreign, span) in &self.implementations {
+            check_implementation(
+                &self.types,
+                &self.program,
+                &self.scopes,
+                &self.funcs,
+                imp,
+                foreign,
+                span,
+            )?;
+            // Each function is exported with the spelling of the WIT (§ 13.2).
+            for k in 0..self.program.interfaces[imp].funcs.len() {
+                let f = self.program.interfaces[imp].funcs[k];
+                if let Some(&wit) = self.scopes[foreign].funcs.get(&self.program.funcs[f].name) {
+                    self.program.funcs[f].wit = self.program.funcs[wit].wit.clone();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle types (§ 7.12): the resources of other packages and of the interfaces of the
+    /// package that a world imports. They cannot be held by records, lists, fields and
+    /// globals (E0220).
+    fn handles(&mut self) -> Result<()> {
+        self.program.handles = self
+            .types
+            .decls
+            .iter()
+            .map(|d| {
+                matches!(d.kind, DeclKind::Resource(_))
+                    && (self.program.interfaces[d.interface].foreign.is_some()
+                        || self
+                            .program
+                            .worlds
+                            .iter()
+                            .any(|w| w.imports.contains(&d.interface)))
+            })
+            .collect();
+        for (iface_id, iface) in self.interfaces.iter().enumerate() {
+            for item in &iface.items {
+                let (fields, what): (Vec<(Type, Span)>, &str) = match item {
+                    ast::InterfaceItem::Type(decl) => {
+                        let id = self.scopes[iface_id].types[decl.name.name.as_str()];
+                        match (&decl.kind, &self.types.decls[id].kind) {
+                            (ast::TypeDeclKind::Record(fields), DeclKind::Record(defs)) => (
+                                defs.iter()
+                                    .zip(fields)
+                                    .map(|(d, f)| (d.ty, f.ty.span))
+                                    .collect(),
+                                "a record",
+                            ),
+                            (ast::TypeDeclKind::Variant(cases), DeclKind::Variant(defs)) => {
+                                for (d, c) in defs.iter().zip(cases) {
+                                    if let (Some(t), Some(ty)) = (d.payload, &c.payload) {
+                                        no_handle_aggregate(
+                                            &self.types,
+                                            &self.program.handles,
+                                            t,
+                                            ty.span,
+                                        )?;
+                                    }
+                                }
+                                continue;
+                            }
+                            _ => continue,
+                        }
+                    }
+                    ast::InterfaceItem::Resource(res) => {
+                        let id = self.scopes[iface_id].types[res.name.name.as_str()];
+                        let DeclKind::Resource(def) = &self.types.decls[id].kind else {
+                            unreachable!("a resource")
+                        };
+                        (
+                            def.fields
+                                .iter()
+                                .zip(&res.fields)
+                                .map(|(d, f)| (d.ty, f.ty.span))
+                                .collect(),
+                            "a resource",
+                        )
+                    }
+                    ast::InterfaceItem::Func(_) => continue,
+                };
+                for (ty, span) in fields {
+                    if let Some(h) = handle_in(&self.types, &self.program.handles, ty, None) {
+                        return err(
+                            Code::HandlePosition,
+                            span,
+                            format!(
+                                "`{}` is {}, and the field of {what} cannot hold one: keep it in a local",
+                                self.types.display(h),
+                                handle_noun(&self.types, h)
+                            ),
+                        );
+                    }
+                    no_handle_aggregate(&self.types, &self.program.handles, ty, span)?;
+                }
+            }
+        }
+        for (id, func) in self.funcs.iter().enumerate() {
+            if let (Some(ret), Some(span)) = (
+                self.program.funcs[id].ret,
+                func.ret.as_ref().map(|r| r.span),
+            ) {
+                no_handle_aggregate(&self.types, &self.program.handles, ret, span)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 6. Exported functions, and functions of the imported interfaces of the package:
+    ///    types that can cross the boundary (§ 7.11). They have no parameter limit
+    ///    (§ 13.6). Interfaces that appear in the WIT cannot use each other's types in a
+    ///    cycle (§ 13.1).
+    fn boundaries(&self) -> Result<()> {
+        for world in &self.program.worlds {
+            let crossing = world
+                .exports
+                .iter()
+                .chain(&world.imports)
+                .filter(|&&i| i < self.interfaces.len());
+            for &iface_id in crossing {
+                for &f in &self.program.interfaces[iface_id].funcs {
+                    let def = &self.program.funcs[f];
+                    let signature: Vec<Type> =
+                        def.params.iter().map(|(_, t)| *t).chain(def.ret).collect();
+                    check_boundary_types(
+                        &self.types,
+                        &self.program,
+                        world,
+                        &signature,
+                        &self.funcs[f].name,
+                        if world.exports.contains(&iface_id) {
+                            "exported function"
+                        } else {
+                            "imported function"
+                        },
+                    )?;
+                }
+                // The types of an exported interface all appear in the WIT (§ 13.1).
+                for &d in &self.program.interfaces[iface_id].types {
+                    let ty = self.types.decl_type_of(d);
+                    check_boundary_types(
+                        &self.types,
+                        &self.program,
+                        world,
+                        &[ty],
+                        self.decls[d],
+                        if world.exports.contains(&iface_id) {
+                            "type of an exported interface"
+                        } else {
+                            "type of an imported interface"
+                        },
+                    )?;
+                }
+            }
+        }
+
+        // Interfaces that appear in the WIT cannot use each other's types in a cycle (§ 13.1).
+        if let Some(cycle) = crate::wit::use_cycle(&self.types, &self.program) {
+            let steps: Vec<String> = cycle
+                .iter()
+                .map(|&(i, d)| {
+                    let decl = &self.types.decls[d];
+                    format!(
+                        "`{}` uses `{}::{}`",
+                        self.program.interfaces[i].name,
+                        self.program.interfaces[decl.interface].name,
+                        decl.name
+                    )
+                })
+                .collect();
+            return err(
+                Code::UseCycle,
+                self.interfaces[cycle[0].0].name.span,
+                format!(
+                    "self.interfaces use each other's self.types in a cycle, which WIT forbids: {}; move the shared self.types to an interface of their own",
+                    steps.join(", ")
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    /// 7. Globals (§ 6.4, § 8.18): returns the id of each global by name.
+    fn globals(&mut self) -> Result<HashMap<&'a str, hir::GlobalId>> {
+        let resolver = Resolver {
+            names: &self.names,
+            scopes: &self.scopes,
+        };
+        let mut global_ids = HashMap::new();
+        for global in &self.globals {
+            let ty = resolver.resolve(&mut self.types, &global.ty, None)?;
+            if let Some(h) = handle_in(&self.types, &self.program.handles, ty, None) {
+                return err(
+                    Code::HandlePosition,
+                    global.ty.span,
+                    format!(
+                        "`{}` is {}, and a global cannot hold one",
+                        self.types.display(h),
+                        handle_noun(&self.types, h)
+                    ),
+                );
+            }
+            if !is_constant(&global.init) {
+                return err(
+                    Code::NonConstGlobal,
+                    global.init.span,
+                    "the initial value of a global must be a constant expression, such as a literal",
+                );
+            }
+            let mut cx = FnCx::new(
+                &self.program,
+                &mut self.types,
+                &resolver,
+                &global_ids,
+                None,
+                None,
+            );
+            let init = cx.expr(&global.init, Some(ty))?;
+            if !is_constant_hir(&init) {
+                return err(
+                    Code::NonConstGlobal,
+                    global.init.span,
+                    "the initial value of a global must be a constant expression: a function call is not one",
+                );
+            }
+            global_ids.insert(global.name.name.as_str(), self.program.globals.len());
+            self.program.globals.push(hir::GlobalDef {
+                name: global.name.name.clone(),
+                ty,
+                mutable: global.mutable,
+                init,
+            });
+        }
+        Ok(global_ids)
+    }
+
+    /// 8. Function bodies, one error at most per function (§ 11.2).
+    fn bodies(
+        &mut self,
+        global_ids: &HashMap<&'a str, hir::GlobalId>,
+        errors: &mut Vec<Diagnostic>,
+    ) -> BodyFacts {
+        let mut facts = BodyFacts::default();
+        let resolver = Resolver {
+            names: &self.names,
+            scopes: &self.scopes,
+        };
+        for (id, func) in self.funcs.iter().enumerate() {
+            let iface = self.program.funcs[id].interface;
+            let ret = self.program.funcs[id].ret;
+            let checked = (|| {
+                let mut cx = FnCx::new(
+                    &self.program,
+                    &mut self.types,
+                    &resolver,
+                    &global_ids,
+                    Some(iface),
+                    ret,
+                );
+                cx.in_async = self.program.funcs[id].is_async;
+                if let (Some(ret), Some(span)) = (ret, func.ret.as_ref().map(|r| r.span)) {
+                    cx.note_ends(ret, span);
+                }
+                cx.scopes.push(Vec::new());
+                let mut params = self.program.funcs[id].params.iter();
+                if let hir::FuncKind::Method(_) = self.program.funcs[id].kind {
+                    let (_, ty) = params.next().expect("self");
+                    let this = Ident {
+                        name: "self".into(),
+                        span: func.name.span,
+                    };
+                    cx.declare(&this, *ty)?;
+                }
+                for (param, (_, ty)) in func.params.iter().zip(params) {
+                    cx.declare(&param.name, *ty)?;
+                }
+                let body = cx.block(&func.body)?;
+                if ret.is_some() && !always_returns(&body) {
+                    return err(
+                        Code::MissingReturn,
+                        func.name.span,
+                        format!(
+                            "{} `{}` does not end with a `return` on every path",
+                            if func.name.name == "constructor" {
+                                "the constructor of"
+                            } else {
+                                "function"
+                            },
+                            func.name.name
+                        ),
+                    );
+                }
+                Ok((
+                    cx.locals,
+                    body,
+                    cx.foreign_calls,
+                    cx.end_uses,
+                    cx.entry_calls,
+                ))
+            })();
+            match checked {
+                Ok((locals, body, calls, ends, entries)) => {
+                    facts.foreign_calls.push(calls);
+                    facts.end_uses.push(ends);
+                    facts.entry_calls.push(entries);
+                    let def = &mut self.program.funcs[id];
+                    def.locals = locals;
+                    def.body = body;
+                }
+                Err(d) => {
+                    errors.push(d);
+                    facts.foreign_calls.push(Vec::new());
+                    facts.end_uses.push(Vec::new());
+                    facts.entry_calls.push(Vec::new());
+                }
+            }
+        }
+        facts
+    }
+
+    /// 9. Calls to interfaces of other packages, world by world (E0221).
+    fn unimported_calls(&self, facts: &BodyFacts, errors: &mut Vec<Diagnostic>) {
+        let mut reported: Vec<Span> = Vec::new();
+        for (w, world) in self.program.worlds.iter().enumerate() {
+            let (used, _) = self.program.reach(w);
+            for (f, calls) in facts.foreign_calls.iter().enumerate() {
+                if !used[f] {
                     continue;
                 }
-                reported.push(span);
-                let func = &program.funcs[f];
-                errors.push(Diagnostic::new(
-                    Code::UncarriedEnd,
-                    span,
-                    format!(
-                        "`{}::{}` uses `{}`, but no function of world `{}` takes or returns a `{}`: a stream or a future connects two components, and the Component Model only creates the types that the WIT of the world names",
-                        program.interfaces[func.interface].name,
-                        func.name,
-                        types.display(ty),
-                        world.name,
-                        types.display(ty),
-                    ),
-                ));
+                for &(callee, span) in calls {
+                    let iface = self.program.funcs[callee].interface;
+                    if world.imports.contains(&iface) {
+                        continue;
+                    }
+                    let caller = &self.program.funcs[f];
+                    let full = self.program.interfaces[iface]
+                        .foreign
+                        .as_ref()
+                        .unwrap()
+                        .display();
+                    // One error per call, even when several worlds reach it.
+                    if reported.contains(&span) {
+                        continue;
+                    }
+                    reported.push(span);
+                    errors.push(Diagnostic::new(
+                        Code::UnimportedCall,
+                        span,
+                        format!(
+                            "`{}::{}` calls `{}::{}`, of the interface `{full}`, but world `{}` reaches `{}::{}` and does not import `{full}`: add `import {full};` to world `{}`",
+                            self.program.interfaces[caller.interface].name,
+                            caller.name,
+                            self.program.interfaces[iface].name,
+                            self.program.funcs[callee].name,
+                            world.name,
+                            self.program.interfaces[caller.interface].name,
+                            caller.name,
+                            world.name,
+                        ),
+                    ));
+                }
             }
         }
     }
 
-    // 11. Calls to entry points, world by world: a function that contains `task::return`
-    //     is only called by the host and other components (E0419, § 8.21).
-    let mut reported: Vec<Span> = Vec::new();
-    for (w, world) in program.worlds.iter().enumerate() {
-        let (used, _) = program.reach(w);
-        for (f, calls) in entry_calls.iter().enumerate() {
-            if !used[f] {
-                continue;
-            }
-            for &(callee, span) in calls {
-                let iface = program.funcs[callee].interface;
-                if world.imports.contains(&iface) || reported.contains(&span) {
+    /// 10. Streams and futures, world by world: each type that the code uses appears in a
+    ///     function of the world (E0223, § 7.13).
+    fn uncarried_ends(&mut self, facts: &BodyFacts, errors: &mut Vec<Diagnostic>) {
+        let mut reported: Vec<Span> = Vec::new();
+        for (w, world) in self.program.worlds.iter().enumerate() {
+            let (used, _) = self.program.reach(w);
+            let carried = carried_ends(&mut self.types, &self.program, world);
+            for (f, uses) in facts.end_uses.iter().enumerate() {
+                if !used[f] {
                     continue;
                 }
-                reported.push(span);
-                let caller = &program.funcs[f];
-                errors.push(Diagnostic::new(
-                    Code::EntryCall,
-                    span,
-                    format!(
-                        "`{}::{}` calls `{}::{}`, which contains `task::return`, in the component of world `{}`: a function that delivers its result before its end is an entry point, called only by the host and other components; move the shared code into a function without `task::return`",
-                        program.interfaces[caller.interface].name,
-                        caller.name,
-                        program.interfaces[iface].name,
-                        program.funcs[callee].name,
-                        world.name,
-                    ),
-                ));
+                for &(ty, span) in uses {
+                    if carried.contains(&ty) || reported.contains(&span) {
+                        continue;
+                    }
+                    reported.push(span);
+                    let func = &self.program.funcs[f];
+                    errors.push(Diagnostic::new(
+                        Code::UncarriedEnd,
+                        span,
+                        format!(
+                            "`{}::{}` uses `{}`, but no function of world `{}` takes or returns a `{}`: a stream or a future connects two components, and the Component Model only creates the self.types that the WIT of the world self.names",
+                            self.program.interfaces[func.interface].name,
+                            func.name,
+                            self.types.display(ty),
+                            world.name,
+                            self.types.display(ty),
+                        ),
+                    ));
+                }
             }
         }
     }
 
-    program.types = types;
-    Ok(program)
+    /// 11. Calls to entry points, world by world: a function that contains `task::return`
+    ///     is only called by the host and other components (E0419, § 8.21).
+    fn entry_calls(&self, facts: &BodyFacts, errors: &mut Vec<Diagnostic>) {
+        let mut reported: Vec<Span> = Vec::new();
+        for (w, world) in self.program.worlds.iter().enumerate() {
+            let (used, _) = self.program.reach(w);
+            for (f, calls) in facts.entry_calls.iter().enumerate() {
+                if !used[f] {
+                    continue;
+                }
+                for &(callee, span) in calls {
+                    let iface = self.program.funcs[callee].interface;
+                    if world.imports.contains(&iface) || reported.contains(&span) {
+                        continue;
+                    }
+                    reported.push(span);
+                    let caller = &self.program.funcs[f];
+                    errors.push(Diagnostic::new(
+                        Code::EntryCall,
+                        span,
+                        format!(
+                            "`{}::{}` calls `{}::{}`, which contains `task::return`, in the component of world `{}`: a function that delivers its result before its end is an entry point, called only by the host and other components; move the shared code into a function without `task::return`",
+                            self.program.interfaces[caller.interface].name,
+                            caller.name,
+                            self.program.interfaces[iface].name,
+                            self.program.funcs[callee].name,
+                            world.name,
+                        ),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// The stream and future types that the functions of the world carry: those of its
