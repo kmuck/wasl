@@ -70,7 +70,8 @@ With these, every WIT type except async types (`stream`, `future`) has its WaSL 
 - tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12), available;
 - WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2), available;
 - the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12), available;
-- `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2).
+- `weasel run` and `weasel serve`, which run a command and serve an HTTP service, and `weasel call` of async functions (§ 14.2), available;
+- `weasel init --template` (§ 14.2).
 
 With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and `future` without an element type has its WaSL equivalent, and a WaSL component can run as a WASI 0.3 command (§ 15.7) or HTTP service (§ 15.8).
 

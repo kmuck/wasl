@@ -1,11 +1,13 @@
 //! Composition of a component with the components that provide its imports, for
-//! `weasel call` (specification § 14.2), with `wac-graph`.
+//! `weasel call`, `weasel run` and `weasel serve` (specification § 14.2), with
+//! `wac-graph`.
 //!
 //! - An interface of the package is provided by the first world, in declaration order,
 //!   that exports it.
 //! - An interface of a path dependency that is a WaSL project, by the first world of
 //!   that project that exports it.
-//! - The interfaces of WASI 0.2 that wasmtime implements are left to the host.
+//! - The interfaces of WASI 0.2 and 0.3 that wasmtime implements, and those of
+//!   `wasi:http` 0.3, are left to the host.
 //!
 //! Providers are composed in turn when they have imports of their own.
 
@@ -16,13 +18,15 @@ use crate::error::{Error, Result};
 use crate::manifest::{self, Source};
 use crate::project::Project;
 
-/// The packages of WASI 0.2 that the host provides (§ 14.2).
+/// The packages of WASI 0.2 and 0.3 that the host provides (§ 14.2).
 const HOST_PACKAGES: &[&str] = &[
     "wasi:cli",
     "wasi:io",
     "wasi:clocks",
     "wasi:random",
     "wasi:filesystem",
+    "wasi:sockets",
+    "wasi:http",
 ];
 
 /// Whether the host provides an imported interface, `wasi:cli/stdout@0.2.6`.

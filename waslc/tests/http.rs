@@ -1,6 +1,6 @@
 //! The HTTP target program of 0.4, `examples/hello-http` (specification, § 15.8), built
 //! against the WIT of `wasi:http@0.3.0`, and the WIT names with uppercase letters that
-//! this WIT has (§ 13.2). The program runs with `wasmtime serve` in CI.
+//! this WIT has (§ 13.2). The program runs with `weasel serve` in CI.
 
 use waslc::{Dependencies, Package, SourceMap, diag::Code};
 
@@ -54,6 +54,11 @@ fn validate(bytes: &[u8]) {
 #[test]
 fn hello_http() {
     validate(&build(HELLO_HTTP, "hello_http"));
+    // `weasel serve` finds the handler among the implementations of the world (§ 14.3).
+    let analysis = analyze(HELLO_HTTP).unwrap();
+    let world = analysis.world("hello_http").unwrap();
+    assert_eq!(world.implements, ["wasi:http/handler@0.3.0"]);
+    assert!(world.exports.is_empty());
 }
 
 #[test]
