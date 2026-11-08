@@ -13,9 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-08
+
+Async and WASI 0.3, implementing the [v0.4 specification](docs/spec_v0.4/README.md) (provisional until v0.5): async functions, streams and futures, `task::return`, tuple destructuring, and the commands `weasel run` and `weasel serve`. The target programs, [`examples/hello`](examples/hello), a WASI 0.3 command run with `weasel run`, and [`examples/hello-http`](examples/hello-http), an HTTP service served with `weasel serve` and called with `curl`, build and run in the continuous integration, with `weasel` alone.
+
 ### Added
 
-- The [v0.4 specification](docs/spec_v0.4/README.md) specifies async and WASI 0.3, not implemented yet: `async func` with calls that wait without `await` (§ 2.8), `stream<T>`, `future<T>` and their writable ends with their built-in functions (§ 7.13, § 8.21), `task::return` (§ 8.21), tuple destructuring `local (a: A, b: B) = e;` (§ 9.4), WIT names with uppercase letters written in lowercase (§ 13.2), the async boundary of a component (§ 13.13), `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2), and the error codes E0101, E0222, E0223 and E0416 to E0419 (§ 11.3).
+- The [v0.4 specification](docs/spec_v0.4/README.md) describes async and WASI 0.3: `async func` with calls that wait without `await` (§ 2.8), `stream<T>`, `future<T>` and their writable ends with their built-in functions (§ 7.13, § 8.21), `task::return` (§ 8.21), tuple destructuring `local (a: A, b: B) = e;` (§ 9.4), WIT names with uppercase letters written in lowercase (§ 13.2), the async boundary of a component (§ 13.13), `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2), and the error codes E0101, E0222, E0223 and E0416 to E0419 (§ 11.3).
 - The target program [`examples/hello-http`](examples/hello-http), an HTTP service for WASI 0.3 (§ 15.8). CI builds it with the WIT of `wasi:http@0.3.0`, serves it with `weasel serve`, and checks its answer with `curl`.
 - Tuple destructuring, `local (a: A, b: B) = e;`, with `_` for an element that is not kept (§ 9.4). A tuple can hold handles as a temporary, which a destructuring takes apart (§ 7.12): a function can return `tuple<carts::cart, u32>`, and the handles of an element written `_` are released at once (§ 9.9). Reading one element of such a tuple, `t.0`, is E0220.
 - Async functions (§ 2.8, § 8.21, § 13.13): `async func` in an interface, in a resource (`async func m()`, `static async func s()`) and in a foreign export block, written `async func` in the WIT. A call to an async function waits for its result, with no `await` (new error E0101), and only an async function can call one (new error E0416). The `async func`s of imported interfaces can be called, and a world can implement an async foreign interface such as `wasi:cli/run` of WASI 0.3; E0218 checks the color of each function. Exported async functions are lifted with a callback that is never called: the body runs to its end, blocking where it waits, and gives its result to `task.return`. The sync calls that run while an async task waits keep its data in linear memory. `async` is now a keyword; `task`, `stream_writer`, `future_writer` and `subtask` are reserved.
@@ -112,7 +116,8 @@ First version of the language, implementing the [v0.1 specification](docs/spec_v
 - The `calc` example project.
 - Continuous integration building and testing `waslc` and `weasel`.
 
-[Unreleased]: https://github.com/kmuck/wasl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kmuck/wasl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kmuck/wasl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kmuck/wasl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kmuck/wasl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kmuck/wasl/releases/tag/v0.1.0

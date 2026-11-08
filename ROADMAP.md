@@ -47,7 +47,7 @@ Targets:
 - two WaSL projects, `catalog` and `checkout`, composed into one component: `checkout` imports the `carts` interface of `catalog` and uses its `cart` resource;
 - `hello`, a command-line program for WASI 0.2 that implements `wasi:cli/run` and prints with `wasi:cli/stdout`, run with `wasmtime run`.
 
-### 0.4: async and WASI 0.3
+### 0.4: async and WASI 0.3 (done)
 
 - `async func`, with the async model of the Component Model: a call to an async function waits for its result, without `await`, and only an async function can call one (§ 2.8).
 - `stream<T>`, `future<T>`, their writable ends and their built-in functions (§ 7.13, § 8.21); `task::return` to deliver a result before the end of the function, such as an HTTP response before its body (§ 8.21).

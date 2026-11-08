@@ -39,75 +39,159 @@ pub fn generate(
     world: usize,
     interface_names: &[Option<InterfaceName>],
 ) -> Result<Vec<u8>> {
-    let (used_funcs, imported) = program.reach(world);
-    let world = &program.worlds[world];
-    let types = &program.types;
+    let usage = Usage::new(program, world, interface_names)?;
+    let mut cx = usage.index_functions();
+    usage.index_globals(&mut cx);
+    let code = usage.code(&mut cx);
+    let globals = usage.global_section(&mut cx);
+    let exports = usage.export_section(&code);
+    let gc_types = cx.rec.len() as u32;
+    let imports = usage.import_section(&mut cx, gc_types);
+    debug_assert_eq!(cx.rec.len() as u32, gc_types);
 
-    // Globals used by the functions reachable from the exports.
-    let mut used_globals = vec![false; program.globals.len()];
-    for (f, func) in program.funcs.iter().enumerate() {
-        if used_funcs[f] {
-            visit_stmts(&func.body, &mut |e| {
-                if let ExprKind::Global(g) = e.kind {
-                    used_globals[g] = true;
-                }
-            });
-            mark_assigned_globals(&func.body, &mut used_globals);
-        }
+    // Types: the GC types in one recursion group, then the function types (§ 12.1).
+    let mut types = TypeSection::new();
+    if gc_types > 0 {
+        types.ty().rec(cx.rec.iter().cloned());
+    }
+    for (params, results) in &cx.signatures {
+        types
+            .ty()
+            .function(params.iter().copied(), results.iter().copied());
+    }
+    let mut functions = FunctionSection::new();
+    for &sig in &code.signatures {
+        functions.function(gc_types + sig);
+    }
+    let mut bodies = CodeSection::new();
+    for body in &code.bodies {
+        bodies.function(body);
     }
 
-    // The resources of the exported interfaces, which other components reach through
-    // handles (§ 13.11).
-    let resources: Vec<DeclId> = world
-        .exports
-        .iter()
-        .flat_map(|&i| program.interfaces[i].types.iter().copied())
-        .filter(|&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
-        .collect();
+    let mut module = Module::new();
+    module.section(&types);
+    if !imports.is_empty() {
+        module.section(&imports);
+    }
+    module.section(&functions);
+    if code.realloc.is_some() {
+        let mut memories = MemorySection::new();
+        memories.memory(MemoryType {
+            minimum: 0,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        });
+        module.section(&memories);
+    }
+    module.section(&globals);
+    module.section(&exports);
+    if !cx.data.is_empty() {
+        module.section(&DataCountSection {
+            count: cx.data.len() as u32,
+        });
+    }
+    module.section(&bodies);
+    if !cx.data.is_empty() {
+        let mut data = DataSection::new();
+        for bytes in &cx.data {
+            data.passive(bytes.iter().copied());
+        }
+        module.section(&data);
+    }
+    Ok(module.finish())
+}
 
-    // Handles (§ 12.10): the resources of the interfaces of other packages and of the
-    // interfaces the world imports. Each one that the module uses needs its
-    // `resource.drop`.
-    let handle_ifaces: Vec<bool> = program
-        .interfaces
-        .iter()
-        .enumerate()
-        .map(|(i, iface)| iface.foreign.is_some() || world.imports.contains(&i))
-        .collect();
-    let mut handles: Vec<DeclId> = Vec::new();
-    {
-        let mut note = |ty: Type| {
-            for d in types.reachable_decls(ty) {
-                if matches!(types.decls[d].kind, DeclKind::Resource(_))
-                    && handle_ifaces[types.decls[d].interface]
-                    && !handles.contains(&d)
-                {
-                    handles.push(d);
-                }
-            }
-        };
+/// What the module of a world contains, found before any index is assigned.
+struct Usage<'a> {
+    program: &'a Program,
+    interface_names: &'a [Option<InterfaceName>],
+    /// The functions of the package that the module defines: those reachable from the
+    /// exports.
+    used_funcs: Vec<bool>,
+    /// The functions of other components that the module imports, in index order.
+    imported: Vec<FuncId>,
+    /// The globals that the defined functions use.
+    used_globals: Vec<bool>,
+    /// The resources of the exported interfaces, which other components reach through
+    /// handles (§ 13.11).
+    resources: Vec<DeclId>,
+    /// The interfaces whose resources are handles in this module: those of other
+    /// packages and those the world imports (§ 12.10).
+    handle_ifaces: Vec<bool>,
+    /// The handle types that the module uses; each one needs its `resource.drop`.
+    handles: Vec<DeclId>,
+    /// The stream and future types that the module uses, as `(is a stream, element
+    /// type)`; each one needs the intrinsics of its type (§ 12.12).
+    ends: Vec<(bool, Type)>,
+    /// The function of the WIT that carries each type of `ends`.
+    carriers: Vec<Carrier>,
+    /// The exported functions, and those of them that are async.
+    exported: Vec<FuncId>,
+    async_exports: Vec<FuncId>,
+    /// Whether the module has a linear memory: for the boundary (§ 13.7), and for the
+    /// copies of streams and futures.
+    memory: bool,
+}
+
+/// The defined functions of the module and its core exports.
+struct Defined {
+    /// The type and the body of each defined function, helpers included, in index order.
+    signatures: Vec<u32>,
+    bodies: Vec<Function>,
+    /// Each sync export: the function, its core function and its `post-return`.
+    exports: Vec<(FuncId, u32, Option<u32>)>,
+    /// Each async export: the function, its adapter and its callback.
+    async_exports: Vec<(FuncId, u32, u32)>,
+    /// `cabi_realloc`, when the module has a memory.
+    realloc: Option<u32>,
+    /// The destructor of each exported resource.
+    dtors: Vec<(DeclId, u32)>,
+}
+
+impl<'a> Usage<'a> {
+    fn new(
+        program: &'a Program,
+        world: usize,
+        interface_names: &'a [Option<InterfaceName>],
+    ) -> Result<Self> {
+        let (used_funcs, imported) = program.reach(world);
+        let world = &program.worlds[world];
+        let types = &program.types;
+        let in_module = |f: usize| used_funcs[f] || imported.contains(&f);
+
+        let mut used_globals = vec![false; program.globals.len()];
         for (f, func) in program.funcs.iter().enumerate() {
-            if used_funcs[f] || imported.contains(&f) {
-                func.locals
-                    .iter()
-                    .chain(func.params.iter().map(|(_, t)| t))
-                    .chain(&func.ret)
-                    .for_each(|&t| note(t));
+            if used_funcs[f] {
                 visit_stmts(&func.body, &mut |e| {
-                    if let Some(t) = e.ty {
-                        note(t)
+                    if let ExprKind::Global(g) = e.kind {
+                        used_globals[g] = true;
                     }
                 });
+                mark_assigned_globals(&func.body, &mut used_globals);
             }
         }
-    }
-    handles.sort();
 
-    // Streams and futures (§ 12.12): the stream and future types that the module uses,
-    // by element type. Each one needs the intrinsics of its type.
-    let mut ends: Vec<(bool, Type)> = Vec::new();
-    for (f, func) in program.funcs.iter().enumerate() {
-        if used_funcs[f] || imported.contains(&f) {
+        let resources: Vec<DeclId> = world
+            .exports
+            .iter()
+            .flat_map(|&i| program.interfaces[i].types.iter().copied())
+            .filter(|&d| matches!(types.decls[d].kind, DeclKind::Resource(_)))
+            .collect();
+
+        let handle_ifaces: Vec<bool> = program
+            .interfaces
+            .iter()
+            .enumerate()
+            .map(|(i, iface)| iface.foreign.is_some() || world.imports.contains(&i))
+            .collect();
+        let mut handles: Vec<DeclId> = Vec::new();
+        let mut ends: Vec<(bool, Type)> = Vec::new();
+        for (f, func) in program.funcs.iter().enumerate() {
+            if !in_module(f) {
+                continue;
+            }
             let mut tys: Vec<Type> = func
                 .locals
                 .iter()
@@ -116,6 +200,16 @@ pub fn generate(
                 .copied()
                 .collect();
             visit_stmts(&func.body, &mut |e| tys.extend(e.ty));
+            for &ty in &tys {
+                for d in types.reachable_decls(ty) {
+                    if matches!(types.decls[d].kind, DeclKind::Resource(_))
+                        && handle_ifaces[types.decls[d].interface]
+                        && !handles.contains(&d)
+                    {
+                        handles.push(d);
+                    }
+                }
+            }
             // The types of the package can be recursive (§ 7.10): each one is seen once.
             let mut seen = Vec::new();
             while let Some(ty) = tys.pop() {
@@ -131,481 +225,418 @@ pub fn generate(
                 tys.extend(types.children(ty));
             }
         }
-    }
-    let carriers = ends
-        .iter()
-        .map(|&key| carrier(program, world, interface_names, key))
-        .collect::<Result<Vec<_>>>()?;
-
-    let exported: Vec<FuncId> = world
-        .exports
-        .iter()
-        .flat_map(|&i| program.interfaces[i].funcs.iter().copied())
-        .collect();
-    let async_exports: Vec<FuncId> = exported
-        .iter()
-        .copied()
-        .filter(|&f| program.funcs[f].is_async)
-        .collect();
-
-    // Imported functions come first in the function index space (§ 13.10), then the
-    // intrinsics of the resources: `new`, `rep` and `drop`, then the `drop` of the
-    // handles, then the `task.return` of the async exports (§ 13.13), then the
-    // intrinsics of the streams and futures and those of the waitable set (§ 12.12).
-    let waitable_count = if ends.is_empty() {
-        0
-    } else {
-        WAITABLE_INTRINSICS.len()
-    };
-    let import_count = (imported.len()
-        + 3 * resources.len()
-        + handles.len()
-        + async_exports.len()
-        + END_INTRINSICS.len() * ends.len()
-        + waitable_count) as u32;
-    let mut func_index = index_map(&used_funcs);
-    for index in func_index.iter_mut().flatten() {
-        *index += import_count;
-    }
-    for (k, &f) in imported.iter().enumerate() {
-        func_index[f] = Some(k as u32);
-    }
-    let defined = used_funcs.iter().filter(|&&u| u).count() as u32;
-    let mut cx = ModuleCx::new(program, func_index);
-    cx.helper_base = import_count + defined;
-    cx.imports = imported.clone();
-    cx.handle_ifaces = handle_ifaces;
-    let first_drop = (imported.len() + 3 * resources.len()) as u32;
-    for (k, &d) in handles.iter().enumerate() {
-        cx.drops.insert(d, first_drop + k as u32);
-    }
-    let first_task_return = first_drop + handles.len() as u32;
-    for (k, &f) in async_exports.iter().enumerate() {
-        cx.task_returns.insert(f, first_task_return + k as u32);
-    }
-    let first_end = first_task_return + async_exports.len() as u32;
-    for (k, &key) in ends.iter().enumerate() {
-        let first = first_end + (END_INTRINSICS.len() * k) as u32;
-        cx.ends.insert(
-            key,
-            EndRt {
-                new: first,
-                write: first + 1,
-                read: first + 2,
-                drop_readable: first + 3,
-                drop_writable: first + 4,
-            },
-        );
-    }
-    let first_waitable = first_end + (END_INTRINSICS.len() * ends.len()) as u32;
-    // The operations on streams and futures copy through linear memory.
-    let memory = !ends.is_empty()
-        || exported
+        handles.sort();
+        let carriers = ends
             .iter()
-            .any(|&f| boundary::export_needs_memory(types, &program.funcs[f]))
-        || imported
-            .iter()
-            .any(|&f| boundary::import_needs_memory(types, &program.funcs[f]));
+            .map(|&key| carrier(program, world, interface_names, key))
+            .collect::<Result<Vec<_>>>()?;
 
-    // Shared immutable values (§ 12.8, § 12.6): string literals and cases without
-    // payload. Their globals come first, so that the initializers of the program's
-    // globals can read them.
-    for (id, func) in program.funcs.iter().enumerate() {
-        if used_funcs[id] {
-            visit_stmts(&func.body, &mut |e| cx.collect_shared(e, false));
-        }
-    }
-    for (id, global) in program.globals.iter().enumerate() {
-        if used_globals[id] {
-            visit_expr(&global.init, &mut |e| cx.collect_shared(e, true));
-        }
-    }
-    let mut next = cx.shared_globals.len() as u32;
-    cx.global_index = used_globals
-        .iter()
-        .map(|&u| {
-            u.then(|| {
-                next += 1;
-                next - 1
-            })
+        let exported: Vec<FuncId> = world
+            .exports
+            .iter()
+            .flat_map(|&i| program.interfaces[i].funcs.iter().copied())
+            .collect();
+        let async_exports: Vec<FuncId> = exported
+            .iter()
+            .copied()
+            .filter(|&f| program.funcs[f].is_async)
+            .collect();
+        let memory = !ends.is_empty()
+            || exported
+                .iter()
+                .any(|&f| boundary::export_needs_memory(types, &program.funcs[f]))
+            || imported
+                .iter()
+                .any(|&f| boundary::import_needs_memory(types, &program.funcs[f]));
+
+        Ok(Usage {
+            program,
+            interface_names,
+            used_funcs,
+            imported,
+            used_globals,
+            resources,
+            handle_ifaces,
+            handles,
+            ends,
+            carriers,
+            exported,
+            async_exports,
+            memory,
         })
-        .collect();
-    // The top of the scratch buffer (§ 13.7) comes after the program's globals, then the
-    // bottom of the scratch memory of the sync tasks (§ 13.13), then the rep tables of
-    // the resources.
-    cx.scratch_top = memory.then_some(next);
-    if memory {
-        next += 1;
-    }
-    if memory && !async_exports.is_empty() {
-        cx.scratch_base = Some(next);
-        next += 1;
-    }
-    // The waitable set of the async task (§ 12.12).
-    if !ends.is_empty() {
-        cx.waitable = Some(WaitRt {
-            set_new: first_waitable,
-            join: first_waitable + 1,
-            wait: first_waitable + 2,
-            set_drop: first_waitable + 3,
-            set: next,
-        });
-        next += 1;
-    }
-    for (k, &decl) in resources.iter().enumerate() {
-        let first = imported.len() as u32 + 3 * k as u32;
-        cx.resources.insert(
-            decl,
-            ResourceRt {
-                new: first,
-                rep: first + 1,
-                drop: first + 2,
-                reps: next,
-                frees: next + 1,
-                nfree: next + 2,
-                used: next + 3,
-            },
-        );
-        next += 4;
     }
 
-    let mut bodies = Vec::new();
-    let mut signatures = Vec::new();
-    for (id, func) in program.funcs.iter().enumerate() {
-        if !used_funcs[id] {
-            continue;
-        }
-        let params: Vec<ValType> = func.params.iter().map(|(_, t)| cx.val(*t)).collect();
-        // A function that delivers its result gives it to `task.return` (§ 8.21).
-        let results: Vec<ValType> = match func.ret {
-            Some(t) if !func.delivers => vec![cx.val(t)],
-            _ => Vec::new(),
-        };
-        signatures.push(cx.signature(params, results));
-        bodies.push(FuncGen::run(&mut cx, id, func));
+    /// The canonical path of the interface `iface` in the core names (§ 13.3).
+    fn canonical(&self, iface: usize) -> &'a str {
+        &self.interface_names[iface]
+            .as_ref()
+            .expect("interface present in the WIT")
+            .canonical
     }
-    // Core exports (§ 13.8): an adapter for each function that takes or returns a heap
-    // value, the function itself otherwise. An async function always has an adapter,
-    // with the callback of its lift (§ 13.13).
-    let mut core_exports: Vec<(FuncId, u32, Option<u32>)> = Vec::new();
-    let mut async_core_exports: Vec<(FuncId, u32, u32)> = Vec::new();
-    for &f in &exported {
-        let func = &program.funcs[f];
-        if func.is_async {
-            let adapter = cx.helper(Helper::Boundary(Boundary::AsyncAdapter(f)));
-            let callback = cx.helper(Helper::Boundary(Boundary::Callback));
-            async_core_exports.push((f, adapter, callback));
-        } else if boundary::needs_adapter(types, func) {
-            let adapter = cx.helper(Helper::Boundary(Boundary::Adapter(f)));
-            let post_return = boundary::result_in_memory(types, func)
-                .then(|| cx.helper(Helper::Boundary(Boundary::PostReturn)));
-            core_exports.push((f, adapter, post_return));
+
+    /// The full name of the interface `iface`, with its version, in the names that
+    /// `wit-component` reads (§ 13.13).
+    fn full(&self, iface: usize) -> &'a str {
+        &self.interface_names[iface]
+            .as_ref()
+            .expect("interface present in the WIT")
+            .full
+    }
+
+    /// The context of the module, with the function index space (§ 13.10): imported
+    /// functions first, then the intrinsics of the resources: `new`, `rep` and `drop`,
+    /// then the `drop` of the handles, then the `task.return` of the async exports
+    /// (§ 13.13), then the intrinsics of the streams and futures and those of the
+    /// waitable set (§ 12.12); then the defined functions, then the helpers.
+    fn index_functions(&self) -> ModuleCx<'a> {
+        let waitable_count = if self.ends.is_empty() {
+            0
         } else {
-            core_exports.push((f, cx.func_index[f].unwrap(), None));
+            WAITABLE_INTRINSICS.len()
+        };
+        let import_count = (self.imported.len()
+            + 3 * self.resources.len()
+            + self.handles.len()
+            + self.async_exports.len()
+            + END_INTRINSICS.len() * self.ends.len()
+            + waitable_count) as u32;
+        let mut func_index = index_map(&self.used_funcs);
+        for index in func_index.iter_mut().flatten() {
+            *index += import_count;
         }
-    }
-    let realloc = memory.then(|| cx.helper(Helper::Boundary(Boundary::Realloc)));
-    let dtors: Vec<(DeclId, u32)> = resources
-        .iter()
-        .map(|&d| (d, cx.helper(Helper::Boundary(Boundary::Dtor(d)))))
-        .collect();
-    // Helpers can request other helpers.
-    let mut done = 0;
-    while done < cx.helpers.len() {
-        let helper = cx.helpers[done];
-        let (params, results, body) = helper.generate(&mut cx);
-        signatures.push(cx.signature(params, results));
-        bodies.push(body);
-        done += 1;
+        for (k, &f) in self.imported.iter().enumerate() {
+            func_index[f] = Some(k as u32);
+        }
+        let defined = self.used_funcs.iter().filter(|&&u| u).count() as u32;
+        let mut cx = ModuleCx::new(self.program, func_index);
+        cx.helper_base = import_count + defined;
+        cx.imports = self.imported.clone();
+        cx.handle_ifaces = self.handle_ifaces.clone();
+        let first_drop = (self.imported.len() + 3 * self.resources.len()) as u32;
+        for (k, &d) in self.handles.iter().enumerate() {
+            cx.drops.insert(d, first_drop + k as u32);
+        }
+        let first_task_return = first_drop + self.handles.len() as u32;
+        for (k, &f) in self.async_exports.iter().enumerate() {
+            cx.task_returns.insert(f, first_task_return + k as u32);
+        }
+        let first_end = first_task_return + self.async_exports.len() as u32;
+        for (k, &key) in self.ends.iter().enumerate() {
+            let first = first_end + (END_INTRINSICS.len() * k) as u32;
+            cx.ends.insert(
+                key,
+                EndRt {
+                    new: first,
+                    write: first + 1,
+                    read: first + 2,
+                    drop_readable: first + 3,
+                    drop_writable: first + 4,
+                },
+            );
+        }
+        if !self.ends.is_empty() {
+            let first = first_end + (END_INTRINSICS.len() * self.ends.len()) as u32;
+            // The global of the set is placed by `index_globals`.
+            cx.waitable = Some(WaitRt {
+                set_new: first,
+                join: first + 1,
+                wait: first + 2,
+                set_drop: first + 3,
+                set: 0,
+            });
+        }
+        for (k, &decl) in self.resources.iter().enumerate() {
+            let first = self.imported.len() as u32 + 3 * k as u32;
+            // The globals of the resource are placed by `index_globals`.
+            cx.resources.insert(
+                decl,
+                ResourceRt {
+                    new: first,
+                    rep: first + 1,
+                    drop: first + 2,
+                    reps: 0,
+                    frees: 0,
+                    nfree: 0,
+                    used: 0,
+                },
+            );
+        }
+        cx
     }
 
-    let mut globals = GlobalSection::new();
-    for (val_type, init) in std::mem::take(&mut cx.shared_globals) {
-        globals.global(
-            GlobalType {
-                val_type,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::extended(init),
-        );
-    }
-    for (id, global) in program.globals.iter().enumerate() {
-        if !used_globals[id] {
-            continue;
+    /// The global index space: the shared immutable values (§ 12.8, § 12.6), string
+    /// literals and cases without payload, first, so that the initializers of the
+    /// program's globals can read them; then the program's globals; then the top of the
+    /// scratch buffer (§ 13.7), the bottom of the scratch memory of the sync tasks
+    /// (§ 13.13), the waitable set of the async task (§ 12.12), and the rep tables of
+    /// the resources.
+    fn index_globals(&self, cx: &mut ModuleCx<'a>) {
+        for (id, func) in self.program.funcs.iter().enumerate() {
+            if self.used_funcs[id] {
+                visit_stmts(&func.body, &mut |e| cx.collect_shared(e, false));
+            }
         }
-        let val_type = cx.val(global.ty);
-        let init = FuncGen::constant(&mut cx, &global.init);
-        globals.global(
-            GlobalType {
-                val_type,
-                mutable: global.mutable,
-                shared: false,
-            },
-            &ConstExpr::extended(init),
-        );
+        for (id, global) in self.program.globals.iter().enumerate() {
+            if self.used_globals[id] {
+                visit_expr(&global.init, &mut |e| cx.collect_shared(e, true));
+            }
+        }
+        let mut next = cx.shared_globals.len() as u32;
+        let mut take = |n: u32| {
+            next += n;
+            next - n
+        };
+        cx.global_index = self
+            .used_globals
+            .iter()
+            .map(|&u| u.then(|| take(1)))
+            .collect();
+        if self.memory {
+            cx.scratch_top = Some(take(1));
+            if !self.async_exports.is_empty() {
+                cx.scratch_base = Some(take(1));
+            }
+        }
+        if let Some(waitable) = &mut cx.waitable {
+            waitable.set = take(1);
+        }
+        for &decl in &self.resources {
+            let first = take(4);
+            let rt = cx.resources.get_mut(&decl).expect("resource indexed");
+            rt.reps = first;
+            rt.frees = first + 1;
+            rt.nfree = first + 2;
+            rt.used = first + 3;
+        }
     }
-    let wset = cx.waitable.map(|w| w.set);
-    for global in [cx.scratch_top, cx.scratch_base, wset]
-        .into_iter()
-        .flatten()
-    {
-        debug_assert_eq!(global as usize, globals.len() as usize);
-        globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(0),
-        );
+
+    /// Generates the defined functions, then the helpers they need, which can request
+    /// other helpers.
+    fn code(&self, cx: &mut ModuleCx<'a>) -> Defined {
+        let types = &self.program.types;
+        let mut bodies = Vec::new();
+        let mut signatures = Vec::new();
+        for (id, func) in self.program.funcs.iter().enumerate() {
+            if !self.used_funcs[id] {
+                continue;
+            }
+            let params: Vec<ValType> = func.params.iter().map(|(_, t)| cx.val(*t)).collect();
+            // A function that delivers its result gives it to `task.return` (§ 8.21).
+            let results: Vec<ValType> = match func.ret {
+                Some(t) if !func.delivers => vec![cx.val(t)],
+                _ => Vec::new(),
+            };
+            signatures.push(cx.signature(params, results));
+            bodies.push(FuncGen::run(cx, id, func));
+        }
+        // Core exports (§ 13.8): an adapter for each function that takes or returns a
+        // heap value, the function itself otherwise. An async function always has an
+        // adapter, with the callback of its lift (§ 13.13).
+        let mut exports = Vec::new();
+        let mut async_exports = Vec::new();
+        for &f in &self.exported {
+            let func = &self.program.funcs[f];
+            if func.is_async {
+                let adapter = cx.helper(Helper::Boundary(Boundary::AsyncAdapter(f)));
+                let callback = cx.helper(Helper::Boundary(Boundary::Callback));
+                async_exports.push((f, adapter, callback));
+            } else if boundary::needs_adapter(types, func) {
+                let adapter = cx.helper(Helper::Boundary(Boundary::Adapter(f)));
+                let post_return = boundary::result_in_memory(types, func)
+                    .then(|| cx.helper(Helper::Boundary(Boundary::PostReturn)));
+                exports.push((f, adapter, post_return));
+            } else {
+                exports.push((f, cx.func_index[f].unwrap(), None));
+            }
+        }
+        let realloc = self
+            .memory
+            .then(|| cx.helper(Helper::Boundary(Boundary::Realloc)));
+        let dtors = self
+            .resources
+            .iter()
+            .map(|&d| (d, cx.helper(Helper::Boundary(Boundary::Dtor(d)))))
+            .collect();
+        let mut done = 0;
+        while done < cx.helpers.len() {
+            let helper = cx.helpers[done];
+            let (params, results, body) = helper.generate(cx);
+            signatures.push(cx.signature(params, results));
+            bodies.push(body);
+            done += 1;
+        }
+        Defined {
+            signatures,
+            bodies,
+            exports,
+            async_exports,
+            realloc,
+            dtors,
+        }
     }
-    for &decl in &resources {
-        let rt = cx.resources[&decl];
-        debug_assert_eq!(rt.reps as usize, globals.len() as usize);
-        let object = cx.heap(types.decl_type_of(decl));
-        let reps = cx.array(StorageType::Val(ref_type(object, true)));
-        let frees = cx.array(StorageType::Val(ValType::I32));
-        for array in [reps, frees] {
+
+    /// The globals, in the order of `index_globals`.
+    fn global_section(&self, cx: &mut ModuleCx<'a>) -> GlobalSection {
+        let mut globals = GlobalSection::new();
+        let mut add = |val_type, mutable, init: &ConstExpr| {
             globals.global(
                 GlobalType {
-                    val_type: ref_type(array, true),
-                    mutable: true,
+                    val_type,
+                    mutable,
                     shared: false,
                 },
-                &ConstExpr::ref_null(HeapType::Concrete(array)),
+                init,
             );
+        };
+        for (val_type, init) in std::mem::take(&mut cx.shared_globals) {
+            add(val_type, false, &ConstExpr::extended(init));
         }
-        for _ in 0..2 {
-            globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(0),
-            );
+        for (id, global) in self.program.globals.iter().enumerate() {
+            if self.used_globals[id] {
+                let val_type = cx.val(global.ty);
+                let init = FuncGen::constant(cx, &global.init);
+                add(val_type, global.mutable, &ConstExpr::extended(init));
+            }
         }
+        let wset = cx.waitable.map(|w| w.set);
+        for _ in [cx.scratch_top, cx.scratch_base, wset]
+            .into_iter()
+            .flatten()
+        {
+            add(ValType::I32, true, &ConstExpr::i32_const(0));
+        }
+        for &decl in &self.resources {
+            let object = cx.heap(self.program.types.decl_type_of(decl));
+            let reps = cx.array(StorageType::Val(ref_type(object, true)));
+            let frees = cx.array(StorageType::Val(ValType::I32));
+            for array in [reps, frees] {
+                add(
+                    ref_type(array, true),
+                    true,
+                    &ConstExpr::ref_null(HeapType::Concrete(array)),
+                );
+            }
+            for _ in 0..2 {
+                add(ValType::I32, true, &ConstExpr::i32_const(0));
+            }
+        }
+        globals
     }
 
-    // Imports (§ 13.10), with the standard names of the Component Model.
-    let mut import_section = ImportSection::new();
-    let mut import_sigs = Vec::new();
-    for &f in &imported {
-        let func = &program.funcs[f];
-        let (params, results) = boundary::import_signature(types, func);
-        import_sigs.push(cx.signature(params, results));
-    }
-    let drop_sig = cx.signature(vec![ValType::I32], vec![]);
-    let task_return_sigs: Vec<u32> = async_exports
-        .iter()
-        .map(|&f| {
-            let params = boundary::task_return_params(types, &program.funcs[f]);
-            cx.signature(params, Vec::new())
-        })
-        .collect();
-    let end_sigs: Vec<[u32; 5]> = ends
-        .iter()
-        .map(|&(stream, _)| {
-            let copy = if stream { 3 } else { 2 };
-            [
-                cx.signature(vec![], vec![ValType::I64]),
-                cx.signature(vec![ValType::I32; copy], vec![ValType::I32]),
-                cx.signature(vec![ValType::I32; copy], vec![ValType::I32]),
-                drop_sig,
-                drop_sig,
-            ]
-        })
-        .collect();
-    let waitable_sigs = [
-        cx.signature(vec![], vec![ValType::I32]),
-        cx.signature(vec![ValType::I32; 2], vec![]),
-        cx.signature(vec![ValType::I32; 2], vec![ValType::I32]),
-        drop_sig,
-    ];
-    let intrinsic_sigs: Vec<[u32; 3]> = resources
-        .iter()
-        .map(|_| {
-            [
-                cx.signature(vec![ValType::I32], vec![ValType::I32]),
-                cx.signature(vec![ValType::I32], vec![ValType::I32]),
-                cx.signature(vec![ValType::I32], vec![]),
-            ]
-        })
-        .collect();
-
-    // Standard Component Model export names (§ 13.3, § 13.6).
-    let mut exports = ExportSection::new();
-    for (f, index, post_return) in core_exports {
-        let func = &program.funcs[f];
-        let path = interface_names[func.interface]
-            .as_ref()
-            .map(|n| &n.canonical)
-            .expect("exported interface present in the WIT");
-        let name = format!("cm32p2|{path}|{}", wit_func_name(types, func));
-        exports.export(&name, ExportKind::Func, index);
-        if let Some(post_return) = post_return {
-            exports.export(&format!("{name}_post"), ExportKind::Func, post_return);
+    /// The exports, with the standard names of the Component Model (§ 13.3, § 13.6).
+    fn export_section(&self, code: &Defined) -> ExportSection {
+        let types = &self.program.types;
+        let mut exports = ExportSection::new();
+        for &(f, index, post_return) in &code.exports {
+            let func = &self.program.funcs[f];
+            let path = self.canonical(func.interface);
+            let name = format!("cm32p2|{path}|{}", wit_func_name(types, func));
+            exports.export(&name, ExportKind::Func, index);
+            if let Some(post_return) = post_return {
+                exports.export(&format!("{name}_post"), ExportKind::Func, post_return);
+            }
         }
-    }
-    // Async exports (§ 13.13) have no standard name yet: they take the names that
-    // `wit-component` reads, with the full name of the interface.
-    for &(f, adapter, callback) in &async_core_exports {
-        let func = &program.funcs[f];
-        let path = &interface_names[func.interface]
-            .as_ref()
-            .expect("exported interface present in the WIT")
-            .full;
-        let name = format!("{path}#{}", wit_func_name(types, func));
-        exports.export(&format!("[async-lift]{name}"), ExportKind::Func, adapter);
-        exports.export(
-            &format!("[callback][async-lift]{name}"),
-            ExportKind::Func,
-            callback,
-        );
-    }
-    for &(decl, dtor) in &dtors {
-        let path = interface_names[types.decls[decl].interface]
-            .as_ref()
-            .map(|n| &n.canonical)
-            .expect("exported interface present in the WIT");
-        let name = types.wit_name(decl);
-        exports.export(
-            &format!("cm32p2|{path}|{name}_dtor"),
-            ExportKind::Func,
-            dtor,
-        );
-    }
-    let mut memories = MemorySection::new();
-    if let Some(realloc) = realloc {
-        memories.memory(MemoryType {
-            minimum: 0,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
-        exports.export("cm32p2_memory", ExportKind::Memory, 0);
-        exports.export("cm32p2_realloc", ExportKind::Func, realloc);
-    }
-
-    // Types: the GC types in one recursion group, then the function types (§ 12.1).
-    let mut type_section = TypeSection::new();
-    let gc_types = cx.rec.len() as u32;
-    if gc_types > 0 {
-        type_section.ty().rec(cx.rec.iter().cloned());
-    }
-    for (params, results) in &cx.signatures {
-        type_section
-            .ty()
-            .function(params.iter().copied(), results.iter().copied());
-    }
-    for (&f, sig) in imported.iter().zip(import_sigs) {
-        let func = &program.funcs[f];
-        let path = interface_names[func.interface]
-            .as_ref()
-            .map(|n| &n.canonical)
-            .expect("imported interface present in the WIT");
-        import_section.import(
-            &format!("cm32p2|{path}"),
-            &wit_func_name(types, func),
-            EntityType::Function(gc_types + sig),
-        );
-    }
-    for (&decl, sigs) in resources.iter().zip(intrinsic_sigs) {
-        let path = interface_names[types.decls[decl].interface]
-            .as_ref()
-            .map(|n| &n.canonical)
-            .expect("exported interface present in the WIT");
-        let name = types.wit_name(decl);
-        for (suffix, sig) in ["new", "rep", "drop"].iter().zip(sigs) {
-            import_section.import(
-                &format!("cm32p2|_ex_{path}"),
-                &format!("{name}_{suffix}"),
-                EntityType::Function(gc_types + sig),
+        // Async exports (§ 13.13) have no standard name yet: they take the names that
+        // `wit-component` reads, with the full name of the interface.
+        for &(f, adapter, callback) in &code.async_exports {
+            let func = &self.program.funcs[f];
+            let path = self.full(func.interface);
+            let name = format!("{path}#{}", wit_func_name(types, func));
+            exports.export(&format!("[async-lift]{name}"), ExportKind::Func, adapter);
+            exports.export(
+                &format!("[callback][async-lift]{name}"),
+                ExportKind::Func,
+                callback,
             );
         }
+        for &(decl, dtor) in &code.dtors {
+            let path = self.canonical(types.decls[decl].interface);
+            let name = types.wit_name(decl);
+            exports.export(
+                &format!("cm32p2|{path}|{name}_dtor"),
+                ExportKind::Func,
+                dtor,
+            );
+        }
+        if let Some(realloc) = code.realloc {
+            exports.export("cm32p2_memory", ExportKind::Memory, 0);
+            exports.export("cm32p2_realloc", ExportKind::Func, realloc);
+        }
+        exports
     }
-    for &decl in &handles {
-        let path = interface_names[types.decls[decl].interface]
-            .as_ref()
-            .map(|n| &n.canonical)
-            .expect("imported interface present in the WIT");
-        import_section.import(
-            &format!("cm32p2|{path}"),
-            &format!("{}_drop", types.wit_name(decl)),
-            EntityType::Function(gc_types + drop_sig),
-        );
-    }
-    for (&f, sig) in async_exports.iter().zip(task_return_sigs) {
-        let func = &program.funcs[f];
-        let path = &interface_names[func.interface]
-            .as_ref()
-            .expect("exported interface present in the WIT")
-            .full;
-        import_section.import(
-            &format!("[export]{path}"),
-            &format!("[task-return]{}", wit_func_name(types, func)),
-            EntityType::Function(gc_types + sig),
-        );
-    }
-    // The intrinsics of streams and futures take the name of a function of the WIT that
-    // carries their type, with its index among the streams and futures of that function
-    // (§ 13.13).
-    for (((stream, _), carrier), sigs) in ends.iter().zip(&carriers).zip(end_sigs) {
-        let kind = if *stream { "stream" } else { "future" };
-        let Carrier {
-            module,
-            func,
-            index,
-        } = carrier;
-        for (name, sig) in END_INTRINSICS.iter().zip(sigs) {
-            import_section.import(
+
+    /// The imports (§ 13.10), in the order of `index_functions`, with the standard names
+    /// of the Component Model. `gc_types` is the number of GC types, which come before
+    /// the function types.
+    fn import_section(&self, cx: &mut ModuleCx<'a>, gc_types: u32) -> ImportSection {
+        let types = &self.program.types;
+        let mut imports = ImportSection::new();
+        let mut import = |cx: &mut ModuleCx<'a>, module: &str, name: &str, params, results| {
+            let sig = cx.signature(params, results);
+            imports.import(module, name, EntityType::Function(gc_types + sig));
+        };
+        for &f in &self.imported {
+            let func = &self.program.funcs[f];
+            let (params, results) = boundary::import_signature(types, func);
+            let module = format!("cm32p2|{}", self.canonical(func.interface));
+            import(cx, &module, &wit_func_name(types, func), params, results);
+        }
+        for &decl in &self.resources {
+            let module = format!("cm32p2|_ex_{}", self.canonical(types.decls[decl].interface));
+            let name = types.wit_name(decl);
+            let i32 = ValType::I32;
+            import(cx, &module, &format!("{name}_new"), vec![i32], vec![i32]);
+            import(cx, &module, &format!("{name}_rep"), vec![i32], vec![i32]);
+            import(cx, &module, &format!("{name}_drop"), vec![i32], vec![]);
+        }
+        for &decl in &self.handles {
+            let module = format!("cm32p2|{}", self.canonical(types.decls[decl].interface));
+            let name = format!("{}_drop", types.wit_name(decl));
+            import(cx, &module, &name, vec![ValType::I32], vec![]);
+        }
+        for &f in &self.async_exports {
+            let func = &self.program.funcs[f];
+            let module = format!("[export]{}", self.full(func.interface));
+            let name = format!("[task-return]{}", wit_func_name(types, func));
+            let params = boundary::task_return_params(types, func);
+            import(cx, &module, &name, params, vec![]);
+        }
+        // The intrinsics of streams and futures take the name of a function of the WIT
+        // that carries their type, with its index among the streams and futures of that
+        // function (§ 13.13).
+        for (&(stream, _), carrier) in self.ends.iter().zip(&self.carriers) {
+            let kind = if stream { "stream" } else { "future" };
+            let copy = vec![ValType::I32; if stream { 3 } else { 2 }];
+            let sigs = [
+                (vec![], vec![ValType::I64]),
+                (copy.clone(), vec![ValType::I32]),
+                (copy, vec![ValType::I32]),
+                (vec![ValType::I32], vec![]),
+                (vec![ValType::I32], vec![]),
+            ];
+            let Carrier {
                 module,
-                &format!("{}{kind}-{name}-{index}]{func}", lowering(name)),
-                EntityType::Function(gc_types + sig),
-            );
+                func,
+                index,
+            } = carrier;
+            for (name, (params, results)) in END_INTRINSICS.iter().zip(sigs) {
+                let name = format!("{}{kind}-{name}-{index}]{func}", lowering(name));
+                import(cx, module, &name, params, results);
+            }
         }
-    }
-    if !ends.is_empty() {
-        for (name, sig) in WAITABLE_INTRINSICS.iter().zip(waitable_sigs) {
-            import_section.import("$root", name, EntityType::Function(gc_types + sig));
+        if !self.ends.is_empty() {
+            let sigs = [
+                (vec![], vec![ValType::I32]),
+                (vec![ValType::I32; 2], vec![]),
+                (vec![ValType::I32; 2], vec![ValType::I32]),
+                (vec![ValType::I32], vec![]),
+            ];
+            for (name, (params, results)) in WAITABLE_INTRINSICS.iter().zip(sigs) {
+                import(cx, "$root", name, params, results);
+            }
         }
+        imports
     }
-    let mut functions = FunctionSection::new();
-    for sig in signatures {
-        functions.function(gc_types + sig);
-    }
-    let mut code = CodeSection::new();
-    for body in &bodies {
-        code.function(body);
-    }
-
-    let mut module = Module::new();
-    module.section(&type_section);
-    if import_count > 0 {
-        module.section(&import_section);
-    }
-    module.section(&functions);
-    if realloc.is_some() {
-        module.section(&memories);
-    }
-    module.section(&globals);
-    module.section(&exports);
-    if !cx.data.is_empty() {
-        module.section(&DataCountSection {
-            count: cx.data.len() as u32,
-        });
-    }
-    module.section(&code);
-    if !cx.data.is_empty() {
-        let mut data = DataSection::new();
-        for bytes in &cx.data {
-            data.passive(bytes.iter().copied());
-        }
-        module.section(&data);
-    }
-    Ok(module.finish())
 }
 
 /// The intrinsics of a stream or future type, in index order: `new`, `write`, `read`,

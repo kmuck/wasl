@@ -79,19 +79,38 @@ waslc/
 │   ├── parser.rs      # syntax analysis
 │   ├── types.rs       # primitive types of the language
 │   ├── hir.rs         # typed intermediate representation
-│   ├── sema.rs        # semantic analysis: AST → HIR
-│   ├── codegen.rs     # HIR → core WebAssembly module
+│   ├── sema.rs        # semantic analysis: AST → HIR, declarations and checks of the package
+│   ├── sema/
+│   │   ├── body.rs    # function bodies and initial values: names, types, control flow
+│   │   └── foreign.rs # interfaces of other packages, read from the WIT of the dependencies
+│   ├── codegen.rs     # HIR → core WebAssembly module: what a world uses, indices, sections
+│   ├── codegen/
+│   │   ├── boundary.rs # the component boundary: Canonical ABI, adapters, realloc
+│   │   ├── boundary/
+│   │   │   └── ends.rs # streams and futures: their built-in functions and the wait of a task
+│   │   └── helpers.rs # helper functions: strings, UTF-8, list copies, integer overflow
 │   ├── wit.rs         # HIR → WIT
 │   └── component.rs   # core module + WIT → component
 └── tests/
     ├── compile.rs     # valid and invalid programs (error codes)
-    ├── run.rs         # runs the produced components with wasmtime
-    └── fixtures/      # WaSL sources used by the tests
+    ├── run.rs         # runs the produced components with wasmtime: numbers, control flow
+    ├── heap.rs        # heap types: strings, lists, records, variants
+    ├── boundary.rs    # values that cross the component boundary
+    ├── imports.rs     # imports of interfaces of other packages and of the package
+    ├── resources.rs   # resources of the package, and their handles for other components
+    ├── handles.rs     # handles of resources of other components, and their release
+    ├── foreign_exports.rs # implementations of interfaces of other packages (WASI 0.2)
+    ├── async.rs       # async functions and async exports
+    ├── streams.rs     # streams and futures, and programs for WASI 0.3
+    ├── task_return.rs # task::return
+    ├── http.rs        # the HTTP target program of 0.4 against wasi:http 0.3
+    └── fixtures/      # WaSL sources and WIT used by the tests
 ```
 
 ## Implementation choices
 
 - **One error per unit**: every stage returns `Result<_, Diagnostic>`, and `?` propagates the first error of its unit. The units are a file for the lexer and the parser, the declarations for the start of `sema`, and a function body for the rest (§ 11.2); `analyze` collects the errors of the units into a `Vec<Diagnostic>`.
+- **Named steps**: `sema::analyze` is a list of the steps of § 11.2, each a method of an `Analyzer` that completes the state of the analysis; `codegen::generate` first finds what a world uses (`Usage`), then assigns the function and global indices, then writes the sections of the module.
 - **Deterministic order**: files are processed in the order they are given, then in text order, so a given error is always reported the same way.
 - **Stable error codes** (`E0001`…), defined in `diag.rs` as in the specification.
 - **No WAT text step**: the module is encoded directly in binary with `wasm-encoder`.
