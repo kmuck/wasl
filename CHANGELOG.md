@@ -16,10 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - The [v0.4 specification](docs/spec_v0.4/README.md) specifies async and WASI 0.3, not implemented yet: `async func` with calls that wait without `await` (§ 2.8), `stream<T>`, `future<T>` and their writable ends with their built-in functions (§ 7.13, § 8.21), `task::return` (§ 8.21), tuple destructuring `local (a: A, b: B) = e;` (§ 9.4), WIT names with uppercase letters written in lowercase (§ 13.2), the async boundary of a component (§ 13.13), `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2), and the error codes E0101, E0222, E0223 and E0416 to E0419 (§ 11.3).
-- The target program [`examples/hello-http`](examples/hello-http), an HTTP service for WASI 0.3 (§ 15.8).
+- The target program [`examples/hello-http`](examples/hello-http), an HTTP service for WASI 0.3 (§ 15.8). CI builds it with the WIT of `wasi:http@0.3.0`, serves it with `wasmtime serve` until `weasel serve` exists, and checks its answer with `curl`.
 - Tuple destructuring, `local (a: A, b: B) = e;`, with `_` for an element that is not kept (§ 9.4). A tuple can hold handles as a temporary, which a destructuring takes apart (§ 7.12): a function can return `tuple<carts::cart, u32>`, and the handles of an element written `_` are released at once (§ 9.9). Reading one element of such a tuple, `t.0`, is E0220.
 - Async functions (§ 2.8, § 8.21, § 13.13): `async func` in an interface, in a resource (`async func m()`, `static async func s()`) and in a foreign export block, written `async func` in the WIT. A call to an async function waits for its result, with no `await` (new error E0101), and only an async function can call one (new error E0416). The `async func`s of imported interfaces can be called, and a world can implement an async foreign interface such as `wasi:cli/run` of WASI 0.3; E0218 checks the color of each function. Exported async functions are lifted with a callback that is never called: the body runs to its end, blocking where it waits, and gives its result to `task.return`. The sync calls that run while an async task waits keep its data in linear memory. `async` is now a keyword; `task`, `stream_writer`, `future_writer` and `subtask` are reserved.
 - Streams and futures (§ 7.13, § 8.21, § 12.12): the handle types `stream<T>`, `stream_writer<T>`, `future<T>` and `future_writer<T>`, and the built-in functions `stream::new`, `stream::write`, `stream::read`, `stream::close`, `future::new`, `future::write` and `future::read`. The ends are moved, borrowed and released like the other handles (§ 9.9); `stream::write`, `stream::read`, `future::write` and `future::read` are async and wait in the waitable set of the task. The items of foreign interfaces that use `stream<T>` and `future<T>` can be used. `stream`, `future`, `stream_writer` and `future_writer` are now keywords. New errors E0222 (a writable end in the WIT) and E0223 (a stream or future type that no function of the world carries).
+- `task::return(e);` (§ 8.21, § 13.13), the `task.return` of the Component Model: an exported async function delivers its result, then goes on running, for instance to write the body of an HTTP response after returning the response. It is a statement of the top level of the body, once, in an async function with a return type (new error E0417). After it, only `return;` ends the function, and the `borrow` parameters, whose handles it gives back, cannot be used (new error E0418). A function that contains it is an entry point, which no function of its component calls (new error E0419). `task` is now a keyword.
+- WIT names with uppercase letters, such as `DNS-timeout` in `wasi:http`, are written in lowercase in WaSL, `error_code::dns_timeout`, and keep the spelling of their dependency in the WIT and the core module (§ 13.2). They were E0215.
 
 ### Changed
 
@@ -31,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `waslc::Analysis::world` returns a world of the package, or E9001 when the package does not define it.
 - A compilation reports several errors (§ 11.2): the first syntax error of each file, then, when there is none, the first error of the declarations, or the first error of each function body and every call to an interface that the world does not import. `weasel` shows the first ten, one per line, and counts the others (§ 14.1). `waslc::analyze` returns its errors as a `Vec<Diagnostic>`.
 - The v0.3 specification is frozen. The [v0.4 specification](docs/spec_v0.4/README.md) continues it with the same section numbers and becomes the reference; it will receive the features of 0.4.
+
+### Fixed
+
+- An integer literal where a type other than an integer is expected, as in `local s: string = 1;` or `local c: char = 65;`, is E0400 (§ 8.2). It made the compiler crash.
 
 ## [0.3.0] - 2026-11-04
 

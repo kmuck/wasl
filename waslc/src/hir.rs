@@ -114,7 +114,7 @@ pub fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
                 visit_stmts(body, f);
             }
             Stmt::Return(value) => value.iter().for_each(|e| visit_expr(e, f)),
-            Stmt::Call(e) => visit_expr(e, f),
+            Stmt::TaskReturn(e) | Stmt::Call(e) => visit_expr(e, f),
             Stmt::Break | Stmt::Continue => {}
         }
     }
@@ -226,15 +226,31 @@ pub enum FuncKind {
 #[derive(Debug)]
 pub struct FuncDef {
     pub name: String,
+    /// For a function of another package, or its implementation in a world (§ 2.4.2), its
+    /// name in the WIT of the dependency, which may have uppercase letters (§ 13.2).
+    pub wit: Option<String>,
     pub kind: FuncKind,
     /// `async func` (§ 2.8): its calls may wait, and only an async function calls it.
     pub is_async: bool,
+    /// Its body contains `task::return` (§ 8.21): an entry point, which delivers its
+    /// result with `task.return` and goes on running. Its core function has no result.
+    pub delivers: bool,
     pub interface: InterfaceId,
     pub params: Vec<(String, Type)>,
     pub ret: Option<Type>,
     /// Types of all the variables of the function: parameters first, then locals.
     pub locals: Vec<Type>,
     pub body: Vec<Stmt>,
+}
+
+impl FuncDef {
+    /// The name of the function in WIT: its spelling in the WIT of its dependency, or its
+    /// WaSL name in kebab case (§ 13.2).
+    pub fn wit_name(&self) -> String {
+        self.wit
+            .clone()
+            .unwrap_or_else(|| crate::wit::kebab(&self.name))
+    }
 }
 
 #[derive(Debug)]
@@ -273,6 +289,9 @@ pub enum Stmt {
     Break,
     Continue,
     Return(Option<Expr>),
+    /// `task::return(e);` (§ 8.21), at the top level of the body of a function that
+    /// [delivers](FuncDef::delivers) its result.
+    TaskReturn(Expr),
     /// Function call used as a statement; its result, if any, is discarded.
     Call(Expr),
 }

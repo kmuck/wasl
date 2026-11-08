@@ -13,7 +13,7 @@ use crate::types::{DeclId, DeclKind, EndKind, Prim, Type, TypeKind, Types};
 /// A block always returns if one of its statements always returns (§ 8.8, § 8.8).
 pub(super) fn always_returns(stmts: &[hir::Stmt]) -> bool {
     stmts.iter().any(|s| match s {
-        hir::Stmt::Return(_) => true,
+        hir::Stmt::Return(_) | hir::Stmt::TaskReturn(_) => true,
         hir::Stmt::If { then, else_, .. } => always_returns(then) && always_returns(else_),
         hir::Stmt::Match { arms, else_, .. } => {
             arms.iter().all(|a| always_returns(&a.body))
@@ -96,6 +96,11 @@ pub(super) struct FnCx<'a> {
     /// Nested scopes: visible names and their variable.
     pub(super) scopes: Vec<Vec<(String, LocalId)>>,
     loop_depth: u32,
+    /// Depth of the blocks: 1 in the top level of the body (§ 8.21).
+    block_depth: u32,
+    /// Whether a `task::return` has been analyzed: after it, the result is delivered
+    /// (E0418).
+    delivered: bool,
     /// Whether the function is async: only an async function makes async calls (E0416).
     pub(super) in_async: bool,
     /// The calls to functions of other packages, with their location (E0221).
@@ -103,6 +108,8 @@ pub(super) struct FnCx<'a> {
     /// The streams and futures the function uses, as readable types, with a location:
     /// each must appear in a function of every world that reaches it (E0223).
     pub(super) end_uses: Vec<(Type, Span)>,
+    /// The calls to functions that contain `task::return`, with their location (E0419).
+    pub(super) entry_calls: Vec<(hir::FuncId, Span)>,
 }
 
 impl<'a> FnCx<'a> {
@@ -124,9 +131,12 @@ impl<'a> FnCx<'a> {
             locals: Vec::new(),
             scopes: Vec::new(),
             loop_depth: 0,
+            block_depth: 0,
+            delivered: false,
             in_async: false,
             foreign_calls: Vec::new(),
             end_uses: Vec::new(),
+            entry_calls: Vec::new(),
         }
     }
 
@@ -144,8 +154,12 @@ impl<'a> FnCx<'a> {
     }
 
     /// E0416: a call to an async function outside an async function (§ 2.8). The
-    /// Component Model traps when a task that is not async would block.
-    fn check_color(&self, func: FuncId, written: &str, span: Span) -> Result<()> {
+    /// Component Model traps when a task that is not async would block. Also records the
+    /// calls to the functions that contain `task::return` (E0419).
+    fn check_color(&mut self, func: FuncId, written: &str, span: Span) -> Result<()> {
+        if self.program.funcs[func].delivers {
+            self.entry_calls.push((func, span));
+        }
         if self.program.funcs[func].is_async && !self.in_async {
             return err(
                 Code::AsyncCall,
@@ -242,12 +256,64 @@ impl<'a> FnCx<'a> {
 
     pub(super) fn block(&mut self, block: &ast::Block) -> Result<Vec<hir::Stmt>> {
         self.scopes.push(Vec::new());
+        self.block_depth += 1;
         let mut stmts = Vec::with_capacity(block.stmts.len());
         for stmt in &block.stmts {
             stmts.push(self.stmt(stmt)?);
         }
+        self.block_depth -= 1;
         self.scopes.pop();
         Ok(stmts)
+    }
+
+    /// E0418: `return e;`, `?` or a `borrow` parameter after `task::return` (§ 8.21).
+    fn after_delivery(&self, span: Span, message: impl FnOnce() -> String) -> Result<()> {
+        if self.delivered {
+            return err(Code::AfterTaskReturn, span, message());
+        }
+        Ok(())
+    }
+
+    /// E0418: a `borrow` parameter used after `task::return` (§ 8.21). The Component
+    /// Model ends the borrows of a task when it delivers its result.
+    fn borrow_use(&self, ty: Type, name: &str, span: Span) -> Result<()> {
+        if !matches!(self.types.kind(ty), TypeKind::Borrow(_)) {
+            return Ok(());
+        }
+        self.after_delivery(span, || {
+            format!(
+                "`{name}` is a `borrow` parameter, used after `task::return`: a borrow ends when the task delivers its result, so use `{name}` before `task::return`"
+            )
+        })
+    }
+
+    /// `task::return(e);` (§ 8.21): at the top level of the body of an async function
+    /// with a return type, once (E0417).
+    fn task_return(&mut self, value: &ast::Expr, span: Span) -> Result<hir::Stmt> {
+        let place = |reason: String| err(Code::TaskReturnPlace, span, reason);
+        let Some(ret) = self.ret else {
+            return place(
+                "`task::return` delivers the result of the function, and this function has no return type".to_string(),
+            );
+        };
+        if !self.in_async {
+            return place(
+                "`task::return` is only allowed in an async function: declare this function `async func`".to_string(),
+            );
+        }
+        if self.delivered {
+            return place(
+                "the result is already delivered by an earlier `task::return`: a function delivers it once".to_string(),
+            );
+        }
+        if self.block_depth != 1 {
+            return place(
+                "`task::return` is only allowed at the top level of the body, not inside an `if`, a `while` or a `match`, so that the result is delivered exactly once".to_string(),
+            );
+        }
+        let value = self.expr(value, Some(ret))?;
+        self.delivered = true;
+        Ok(hir::Stmt::TaskReturn(value))
     }
 
     fn stmt(&mut self, stmt: &ast::Stmt) -> Result<hir::Stmt> {
@@ -342,9 +408,16 @@ impl<'a> FnCx<'a> {
                     hir::Stmt::Continue
                 }
             }
+            StmtKind::TaskReturn(value) => self.task_return(value, stmt.span)?,
             StmtKind::Return(value) => match (value, self.ret) {
                 (None, None) => hir::Stmt::Return(None),
-                (Some(e), Some(ty)) => hir::Stmt::Return(Some(self.expr(e, Some(ty))?)),
+                (None, Some(_)) if self.delivered => hir::Stmt::Return(None),
+                (Some(e), Some(ty)) => {
+                    self.after_delivery(stmt.span, || {
+                        "`return` with a value after `task::return`: the result of the task is already delivered, so only `return;` can end the function".to_string()
+                    })?;
+                    hir::Stmt::Return(Some(self.expr(e, Some(ty))?))
+                }
                 (None, Some(ty)) => {
                     return err(
                         Code::MissingReturnValue,
@@ -636,6 +709,9 @@ impl<'a> FnCx<'a> {
     /// `e?` (§ 8.19). The result has no type when `e` is a `result` whose `ok` has no
     /// payload.
     fn try_(&mut self, inner: &ast::Expr, span: Span) -> Result<hir::Expr> {
+        self.after_delivery(span, || {
+            "`?` after `task::return`: the result of the task is already delivered, so `?` cannot return an error; use `match`".to_string()
+        })?;
         let operand = self.expr(inner, None)?;
         let ty = operand.value_ty();
         let types = &*self.types;
@@ -772,6 +848,7 @@ impl<'a> FnCx<'a> {
             ExprKind::Name(name) => {
                 if let Some(id) = self.lookup_local(name) {
                     let ty = self.locals[id as usize];
+                    self.borrow_use(ty, name, e.span)?;
                     // A resource or an end leaves its local, unless the context only
                     // borrows it.
                     if (matches!(self.types.kind(ty), TypeKind::Decl(_))
@@ -1036,6 +1113,13 @@ impl<'a> FnCx<'a> {
                     Code::TypeMismatch,
                     span,
                     "integer literal used for type `bool`: write `true` or `false`",
+                );
+            }
+            Some(ty) if !ty.is_int() => {
+                return err(
+                    Code::TypeMismatch,
+                    span,
+                    format!("integer literal used for type `{}`", self.show(ty)),
                 );
             }
             Some(ty) => ty,
@@ -2479,6 +2563,7 @@ impl<'a> FnCx<'a> {
     fn place(&mut self, target: &ast::Place) -> Result<(Place, Type)> {
         let name = &target.name;
         let mut base = if let Some(id) = self.lookup_local(&name.name) {
+            self.borrow_use(self.locals[id as usize], &name.name, name.span)?;
             typed(hir::ExprKind::Local(id), self.locals[id as usize])
         } else if let Some(&id) = self.globals.get(name.name.as_str()) {
             typed(hir::ExprKind::Global(id), self.program.globals[id].ty)

@@ -66,3 +66,15 @@ jobs:
         run: |
           cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- build hello
           test "$(wasmtime run -W gc=y -W function-references=y build/hello.wasm)" = "Hello, world!"
+      # The HTTP target program of 0.4: built with the WIT of WASI 0.3, served by the
+      # wasmtime CLI until `weasel serve` exists, and called with curl.
+      - name: Run examples/hello-http
+        if: matrix.crate == 'weasel'
+        working-directory: examples/hello-http
+        run: |
+          cargo run --quiet --locked --manifest-path ../../weasel/Cargo.toml -- build hello_http
+          wasmtime serve -W gc=y -W function-references=y --addr 127.0.0.1:8080 build/hello_http.wasm &
+          server=$!
+          for i in $(seq 1 100); do curl -s -o /dev/null http://127.0.0.1:8080/ && break; sleep 0.1; done
+          test "$(curl -sS --max-time 10 http://127.0.0.1:8080/karim)" = "Hello, /karim!"
+          kill $server

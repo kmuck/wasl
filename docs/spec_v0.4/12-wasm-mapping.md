@@ -263,7 +263,7 @@ The `err` value is rebuilt because `result<T, E>` and `result<U, E>` are two dis
 
 ## 12.12 Async functions, streams and futures
 
-Async functions, streams and futures are available. `task::return` is *specified, not available yet*.
+Async functions, streams, futures and `task::return` are available.
 
 Inside the core module, an async function is an ordinary Wasm function. Being async changes how it is lifted when it is exported, and how the imports it calls are lowered (§ 13.13), never its body. The code of 0.4 **blocks** where the source waits: each wait starts the operation of the Component Model, then waits for its event in `waitable-set.wait`, the blocking wait of the Component Model. No function is cut into states, and the locals stay Wasm locals.
 
@@ -278,7 +278,8 @@ Inside the core module, an async function is an ordinary Wasm function. Being as
 | `stream::close(tx)` | the move of `tx`, `local.get $tx` `i32.const 0` `local.set $tx` (§ 9.9), then the release of the end, below |
 | `future::write(tx, v)` | `v` lowered into the region, `future.write` lowered `async`, the wait when it returns `BLOCKED`, `future.drop-writable`; `i32.const 1` for `COMPLETED`, or the release of the handles of `v` and `i32.const 0` for `DROPPED` |
 | `future::read(rx)` | room for the value in the region, `future.read` lowered `async`, the wait when it returns `BLOCKED`, `future.drop-readable`, the value lifted; `unreachable` for `DROPPED`, which only a writer that has trapped leaves |
-| `task::return(e);` | `e` lowered as the result of the function, then `call` of the `task.return` of the function (§ 13.13) |
+| `task::return(e);` | the handles of the `borrow` parameters given back with `resource.drop`, then `e` lowered and given to the `task.return` of the function, by a helper that sets `$scratch_top` back to where it was, since the task goes on (§ 13.13) |
+| `return e;` and `?` before `task::return` | the release of the handles of the locals (§ 9.9), the same as `task::return(e);`, then `return`: a function that contains `task::return` has no result in the core module |
 | release of an end (§ 9.9) | `stream.drop-readable`, `stream.drop-writable`, `future.drop-readable` or `future.drop-writable` of its type, unless the end is `0` or `-1` (below) |
 
 **The wait.** An operation lowered `async` returns `BLOCKED` (`-1`) when it cannot complete at once. The task then adds the end to its **waitable set** (`waitable.join`), sets `$scratch_base` to `$scratch_top` so that the tasks that run meanwhile leave its data in place (§ 13.13), calls `waitable-set.wait` with 8 bytes of its region, where the event is written, which suspends it until the operation has an event, and takes the end out of the set again (`waitable.join` with `0`). The event gives the result that the operation would have returned. Each task has one waitable set, created by `waitable-set.new` at its first wait, kept by the task (§ 13.13), and dropped when the task ends.

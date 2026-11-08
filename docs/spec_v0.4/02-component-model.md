@@ -199,7 +199,7 @@ A **resource** is the Component Model's object: a type with an identity, a priva
 
 ## 2.8 Async functions and tasks
 
-Async functions, streams and futures are available. `task::return` is *specified, not available yet*.
+Async functions, streams, futures and `task::return` are available.
 
 WASI 0.3 makes input and output async: `wasi:cli/run` declares `run: async func() -> result`, and `wasi:http/handler` declares `handle: async func(request: request) -> result<response, error-code>`. WaSL takes the async model of the Component Model as it is:
 

@@ -35,7 +35,7 @@ Each decision follows from the principles of § 1.2. The rest of this specificat
 7. **One way to write each thing.** A record literal lists its fields in declaration order; every constructor is written with its type (`option::some(x)`, `status::paid`); a variant is inspected only with `match`.
 8. **An integer is exact, or the call stops.** Integer arithmetic and conversions trap when their exact result does not fit in its type, instead of wrapping (§ 10.2). Wrapping remains available when it is written: `u32::wrapping_add(a, b)` is the plain `i32.add`. Wasm has both wrapping instructions (`i32.add`) and trapping ones (`i32.div_s`, `i32.trunc_f64_s`), and the `+` of WaSL checks its result.
 9. **No value is dropped silently.** Wasm removes an unused value with an explicit `drop`; WaSL writes it `_ = f();`. A call used as a statement must call a function without a return value (§ 9.6), so the error of a `result` cannot be lost by accident.
-10. **Async is the Component Model's.** An `async func` is the `async func` of WIT. A call to it waits for its result, as the synchronous lowering of the Component Model does, and nothing marks the call: there is no `await` (§ 2.8). Only an `async func` can call one, which is the rule of the Component Model, checked at compile time. Streams and futures are the `stream<T>` and `future<T>` of WIT, with their writable ends (§ 7.13), and `task::return` is the `task.return` of the Component Model, which delivers the result of a task before its end (§ 8.21). Async functions are available; streams, futures and `task::return` are *specified, not available yet*.
+10. **Async is the Component Model's.** An `async func` is the `async func` of WIT. A call to it waits for its result, as the synchronous lowering of the Component Model does, and nothing marks the call: there is no `await` (§ 2.8). Only an `async func` can call one, which is the rule of the Component Model, checked at compile time. Streams and futures are the `stream<T>` and `future<T>` of WIT, with their writable ends (§ 7.13), and `task::return` is the `task.return` of the Component Model, which delivers the result of a task before its end (§ 8.21). Async functions, streams, futures and `task::return` are available.
 
 ## 1.4 Scope
 
@@ -66,9 +66,9 @@ With these, every WIT type except async types (`stream`, `future`) has its WaSL 
 
 - async functions: their declaration, calls that wait without a marker, and the rule that only an async function calls one (§ 2.8, § 8.21), available;
 - `stream<T>` and `future<T>`, their writable ends `stream_writer<T>` and `future_writer<T>`, and their built-in functions (§ 7.13, § 8.21), available;
-- `task::return`, which delivers the result of an exported async function before its end (§ 8.21);
+- `task::return`, which delivers the result of an exported async function before its end (§ 8.21), available;
 - tuple destructuring, `local (a: A, b: B) = e;`, which gives each handle of a tuple its own local (§ 9.4, § 7.12), available;
-- WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2);
+- WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2), available;
 - the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12), available;
 - `weasel run`, `weasel serve` and `weasel init --template` (§ 14.2).
 
@@ -171,4 +171,4 @@ Version 0.4 accepts every valid v0.3 program with the same behavior. `async`, `s
 | a foreign interface with `async` functions can be exported (§ 13.12) | `export wasi:cli/run { … }` for WASI 0.3 is no longer E0218 |
 | a WIT name with uppercase letters is written in lowercase (§ 13.2) | `error_code::dns_timeout` names `DNS-timeout`, which was E0215 |
 
-The row on uppercase WIT names is *specified, not available yet*; the others are available.
+All of these changes are available.

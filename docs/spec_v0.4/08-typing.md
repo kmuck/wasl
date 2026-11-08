@@ -131,7 +131,7 @@ A conversion is written as a call to the name of the target type: `u64(n)`, `f32
 
 - In a function with return type `T`, every `return` carries an expression of type `T`. A `return;` without value is an error (E0502).
 - In a function without a return type, `return;` is allowed and `return <expr>;` is an error (E0503). Reaching the end of the body is an implicit `return;`.
-- In an async function that has delivered its result with `task::return`, only `return;` is allowed after it (E0418, § 8.21). *Specified, not available yet.*
+- In an async function that has delivered its result with `task::return`, only `return;` is allowed after it, and its `borrow` parameters cannot be used (E0418, § 8.21).
 
 ## 8.8 Every path returns
 
@@ -374,7 +374,7 @@ local d: carts::cart = carts::cart::single(150);   // static function
 
 ## 8.21 Async calls, streams, futures and `task::return`
 
-Async calls and the built-in functions of streams and futures are available. `task::return` is *specified, not available yet*.
+Async calls, the built-in functions of streams and futures, and `task::return` are available.
 
 ### Async calls
 
@@ -421,4 +421,5 @@ async func handle(request: types::request) -> result<types::response, types::err
 - **Before it**, the body is an ordinary body: `return e;` and `?` deliver their value and end the function, for instance with an error before any response.
 - **After it**, the result is delivered: `return e;` and `?` are errors (E0418), at any depth of the statements that follow, and `return;` ends the function, as does reaching the end of its body. For § 8.8, `task::return(e);` always returns.
 - A handle that `e` holds is moved (§ 9.9).
+- **Borrows end with it.** The Component Model ends the borrows of a task when the task delivers its result, and traps at `task.return` if the task still holds one. So the handles of the `borrow` parameters are given back at `task::return`, and a `borrow` parameter, `self` included, cannot be used after it (E0418): `local n: u32 = blob.size();` before `task::return`, not after.
 - **A function that contains `task::return` is an entry point**: only the host and other components call it. A function reachable from the exports of a world cannot call a function that contains `task::return` compiled into the same component (E0419); it can call one of an interface that the world imports, which runs in another component. Inside a component, a call is a plain `call`, which returns at the end of the callee: the caller would wait for the whole function, and could not read a stream that the callee writes after delivering it. The check is a flag per function, like E0221. Concurrency inside a component will lift this rule (§ 16).

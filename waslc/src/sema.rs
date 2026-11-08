@@ -237,6 +237,7 @@ pub fn analyze(
                     }
                     types.decls.push(TypeDecl {
                         name: res.name.name.clone(),
+                        wit: None,
                         interface: iface_id,
                         kind: DeclKind::Resource(def),
                     });
@@ -262,6 +263,7 @@ pub fn analyze(
                     // The members are resolved in step 3; the names are known now.
                     types.decls.push(TypeDecl {
                         name: decl.name.name.clone(),
+                        wit: None,
                         interface: iface_id,
                         kind: match &decl.kind {
                             ast::TypeDeclKind::Enum(cases) => {
@@ -555,6 +557,13 @@ pub fn analyze(
     // the functions of the interface, with the same signatures (E0218).
     for &(imp, foreign, span) in &implementations {
         check_implementation(&types, &program, &scopes, &funcs, imp, foreign, span)?;
+        // Each function is exported with the spelling of the WIT (§ 13.2).
+        for k in 0..program.interfaces[imp].funcs.len() {
+            let f = program.interfaces[imp].funcs[k];
+            if let Some(&wit) = scopes[foreign].funcs.get(&program.funcs[f].name) {
+                program.funcs[f].wit = program.funcs[wit].wit.clone();
+            }
+        }
     }
 
     // Handle types (§ 7.12): the resources of other packages and of the interfaces of the
@@ -746,6 +755,7 @@ pub fn analyze(
     // 8. Function bodies, one error at most per function (§ 11.2).
     let mut foreign_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
     let mut end_uses: Vec<Vec<(Type, Span)>> = Vec::new();
+    let mut entry_calls: Vec<Vec<(FuncId, Span)>> = Vec::new();
     for (id, func) in funcs.iter().enumerate() {
         let iface = program.funcs[id].interface;
         let ret = program.funcs[id].ret;
@@ -791,12 +801,19 @@ pub fn analyze(
                     ),
                 );
             }
-            Ok((cx.locals, body, cx.foreign_calls, cx.end_uses))
+            Ok((
+                cx.locals,
+                body,
+                cx.foreign_calls,
+                cx.end_uses,
+                cx.entry_calls,
+            ))
         })();
         match checked {
-            Ok((locals, body, calls, ends)) => {
+            Ok((locals, body, calls, ends, entries)) => {
                 foreign_calls.push(calls);
                 end_uses.push(ends);
+                entry_calls.push(entries);
                 let def = &mut program.funcs[id];
                 def.locals = locals;
                 def.body = body;
@@ -805,6 +822,7 @@ pub fn analyze(
                 errors.push(d);
                 foreign_calls.push(Vec::new());
                 end_uses.push(Vec::new());
+                entry_calls.push(Vec::new());
             }
         }
     }
@@ -878,6 +896,38 @@ pub fn analyze(
                         types.display(ty),
                         world.name,
                         types.display(ty),
+                    ),
+                ));
+            }
+        }
+    }
+
+    // 11. Calls to entry points, world by world: a function that contains `task::return`
+    //     is only called by the host and other components (E0419, § 8.21).
+    let mut reported: Vec<Span> = Vec::new();
+    for (w, world) in program.worlds.iter().enumerate() {
+        let (used, _) = program.reach(w);
+        for (f, calls) in entry_calls.iter().enumerate() {
+            if !used[f] {
+                continue;
+            }
+            for &(callee, span) in calls {
+                let iface = program.funcs[callee].interface;
+                if world.imports.contains(&iface) || reported.contains(&span) {
+                    continue;
+                }
+                reported.push(span);
+                let caller = &program.funcs[f];
+                errors.push(Diagnostic::new(
+                    Code::EntryCall,
+                    span,
+                    format!(
+                        "`{}::{}` calls `{}::{}`, which contains `task::return`, in the component of world `{}`: a function that delivers its result before its end is an entry point, called only by the host and other components; move the shared code into a function without `task::return`",
+                        program.interfaces[caller.interface].name,
+                        caller.name,
+                        program.interfaces[iface].name,
+                        program.funcs[callee].name,
+                        world.name,
                     ),
                 ));
             }
@@ -1051,8 +1101,14 @@ fn signature(
     };
     Ok(hir::FuncDef {
         name: func.name.name.clone(),
+        wit: None,
         kind,
         is_async: func.is_async,
+        delivers: func
+            .body
+            .stmts
+            .iter()
+            .any(|s| matches!(s.kind, ast::StmtKind::TaskReturn(_))),
         interface: iface,
         params,
         ret,

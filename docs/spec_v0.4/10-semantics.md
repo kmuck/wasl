@@ -156,7 +156,7 @@ The difference cannot be observed. The values that cross the boundary contain no
 
 ## 10.12 Tasks and async calls
 
-Tasks, async calls, streams and futures are available. `task::return` is *specified, not available yet*.
+Tasks, async calls, streams, futures and `task::return` are available.
 
 - **A task** runs the body of an exported function for one call from outside (§ 2.8). It delivers its result once: at its `return e;`, at a `?` that propagates, at its `task::return(e);`, or at the end of its body when it has no return type. The caller resumes as soon as the result is delivered. After `task::return`, the task goes on running until its body ends.
 - **An async call** suspends the calling task until the callee delivers its result. A function of an imported interface runs in another component or in the host. A function of the package compiled into the component is a plain call, which returns when its body ends.

@@ -1034,7 +1034,7 @@ What the program shows:
 
 ## 15.8 An HTTP service: `hello-http`
 
-*Specified, not available yet.* The second target program of version 0.4 is a small HTTP service for WASI 0.3, in `examples/hello-http`. `GET /karim` answers `Hello, /karim!`.
+The second target program of version 0.4 is a small HTTP service for WASI 0.3, in `examples/hello-http`. `GET /karim` answers `Hello, /karim!`. `weasel serve` is *specified, not available yet*; until it is, CI serves the program with the wasmtime CLI: `wasmtime serve -W gc=y -W function-references=y build/hello_http.wasm`.
 
 `examples/hello-http/wasl.toml`:
 
@@ -1108,7 +1108,7 @@ What the program shows:
 
 ## 15.9 Invalid programs of 0.4
 
-Each line is written in `run` of § 15.7 or in `handle` of § 15.8, unless it says otherwise. The lines on `task::return` (E0417 to E0419) are *specified, not available yet*.
+Each line is written in `run` of § 15.7 or in `handle` of § 15.8, unless it says otherwise.
 
 | Code | Error |
 |---|---|
