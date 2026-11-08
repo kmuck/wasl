@@ -8,7 +8,7 @@ Every command except `init` must be run from the **root of a WaSL project**, the
 
 | Command | Description |
 |---|---|
-| `weasel init <namespace>:<name>[@<version>]` | Creates a new project in the directory `<name>` |
+| `weasel init <namespace>:<name>[@<version>] [--template lib\|cli\|http]` | Creates a new project in the directory `<name>` |
 | `weasel build <world>` | Compiles a world into its component: `build/<world>.wasm` |
 | `weasel check` | Checks the project for errors without producing components |
 | `weasel wit` | Prints the WIT of the package |
@@ -24,6 +24,8 @@ Run `weasel <command> --help` for the options of a command, and `weasel --versio
 ```sh
 weasel init my-org:hello-world
 weasel init my-org:hello-world@0.2.0
+weasel init my-org:greet --template cli    # a command of WASI 0.3, for weasel run
+weasel init my-org:api --template http     # an HTTP service of WASI 0.3, for weasel serve
 ```
 
 The package is written as in WIT: a namespace and a name, in kebab-case, and an optional version (`0.1.0` by default). The project goes in a directory named after the package name, and its world is named after it too (`hello-world` → `hello_world`). The generated project:
@@ -168,7 +170,6 @@ Development dependencies: [`tempfile`](https://crates.io/crates/tempfile), for t
 |---|---|
 | `weasel build --all` | Builds every world of the project |
 | `weasel publish` | Publishes a component to a registry, with [wasm-pkg-tools](https://github.com/bytecodealliance/wasm-pkg-tools) |
-| `weasel init <namespace>:<name> --template cli\|http` | Creates a project with a WASI entry point |
 
 ## Development
 

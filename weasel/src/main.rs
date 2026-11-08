@@ -57,6 +57,10 @@ enum Command {
         /// Package of the project, `namespace:name` or `namespace:name@version`
         /// (kebab-case); the directory is named after the package name
         package: String,
+        /// Program the project starts with: an interface (`lib`), a command of WASI 0.3
+        /// (`cli`) or an HTTP service of WASI 0.3 (`http`)
+        #[arg(long, value_enum, default_value_t = init::Template::Lib)]
+        template: init::Template,
     },
     /// Compile a world into a component (build/<world>.wasm)
     Build {
@@ -115,7 +119,7 @@ fn main() -> ExitCode {
 /// `weasel run` (§ 14.2), success otherwise.
 fn run(command: Command) -> Result<ExitCode> {
     match command {
-        Command::Init { package } => init::init(&package)?,
+        Command::Init { package, template } => init::init(&package, template)?,
         Command::Build { world } => build(&world)?,
         Command::Check => {
             let project = Project::load()?;

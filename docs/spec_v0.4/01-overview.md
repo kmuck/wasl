@@ -71,7 +71,7 @@ With these, every WIT type except async types (`stream`, `future`) has its WaSL 
 - WIT names with uppercase letters, written in lowercase in WaSL (§ 13.2), available;
 - the implementation of async foreign interfaces, such as `wasi:cli/run` and `wasi:http/handler` of WASI 0.3 (§ 13.12), available;
 - `weasel run` and `weasel serve`, which run a command and serve an HTTP service, and `weasel call` of async functions (§ 14.2), available;
-- `weasel init --template` (§ 14.2).
+- `weasel init --template cli|http`, which starts a project from the command or the service of 0.4 (§ 14.2), available.
 
 With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and `future` without an element type has its WaSL equivalent, and a WaSL component can run as a WASI 0.3 command (§ 15.7) or HTTP service (§ 15.8).
 
