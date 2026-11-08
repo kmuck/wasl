@@ -27,7 +27,8 @@ Creates a new project in a new directory `<name>` of the current directory.
 - The package is written as in WIT (§ 3.2): `weasel init acme:todo-api`, or `weasel init acme:todo-api@0.2.0`. The namespace and the name follow the rule of § 3.2; the version is a SemVer version and defaults to `0.1.0`. A package without namespace is an error: ``error: invalid package `todo-api`: expected `namespace:name`, such as `acme:shop` ``.
 - The project contains one world, named after the project with `-` replaced by `_` (`todo-api` → `todo_api`). If that name is a keyword or reserved word of WaSL (§ 4.4), the command fails.
 - The command fails if the directory `<name>` already exists.
-- `--template <template>` chooses the program the project starts with (*specified, not available yet*): `lib`, the default, the interface below; `cli`, a command for WASI 0.3, the program of § 15.7 with the dependency `"wasi:cli" = "0.3.0"`; `http`, an HTTP service for WASI 0.3, the program of § 15.8 with the dependency `"wasi:http" = "0.3.0"`. The world has the name above in every template. An unknown template is an error that lists the three.
+- `--template <template>` chooses the program the project starts with: `lib`, the default, the interface below; `cli`, a command for WASI 0.3, the program of § 15.7 with the dependency `"wasi:cli" = "0.3.0"`; `http`, an HTTP service for WASI 0.3, the program of § 15.8 with the dependency `"wasi:http" = "0.3.0"`. The world has the name above in every template, and a comment at the top of the file says how to run it. An unknown template is an invalid command line, which lists the three (exit code `2`, § 14.1).
+- The command prints on standard error how to go on: `weasel build` and `weasel call` for `lib`, `weasel run` for `cli`, `weasel serve` and `curl` for `http`.
 - Generated files (no `.gitignore` and no other file):
 
 ```

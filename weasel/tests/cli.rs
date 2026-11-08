@@ -1029,3 +1029,98 @@ fn serve() {
         .unwrap();
     assert_eq!(stdout, "");
 }
+
+/// Replaces the registry dependency of a project made by `weasel init --template` with
+/// the WIT of the tests, which needs no network.
+fn offline(root: &Path, dependency: &str) {
+    let manifest = fs::read_to_string(root.join("wasl.toml")).unwrap();
+    let registry = format!("\"wasi:{dependency}\" = \"0.3.0\"\n");
+    assert!(
+        manifest.ends_with(&format!("\n[dependencies]\n{registry}")),
+        "{manifest}"
+    );
+    let wasi = wasi_project("");
+    for dir in ["cli", "http"] {
+        let from = wasi.path().join("wit").join(dir);
+        for entry in walk(&from) {
+            let to = root
+                .join("wit")
+                .join(dir)
+                .join(entry.strip_prefix(&from).unwrap());
+            write(&to, &fs::read_to_string(&entry).unwrap());
+        }
+    }
+    let path = format!("\"wasi:{dependency}\" = {{ path = \"wit/{dependency}\" }}\n");
+    fs::write(root.join("wasl.toml"), manifest.replace(&registry, &path)).unwrap();
+}
+
+/// The files under `dir`.
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// `weasel init --template cli|http` (§ 14.2): the programs of § 15.7 and § 15.8, with
+/// their dependency on WASI 0.3.
+#[test]
+fn init_templates() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = weasel(dir.path(), &["init", "demo:greet", "--template", "cli"]);
+    assert!(run.success, "{}", run.stderr);
+    assert!(
+        run.stderr.ends_with("    cd greet\n    weasel run greet\n"),
+        "{}",
+        run.stderr
+    );
+    let root = dir.path().join("greet");
+    offline(&root, "cli");
+    assert_eq!(ok(&root, &["run", "greet"]), "Hello, world!\n");
+
+    let run = weasel(
+        dir.path(),
+        &["init", "demo:hello-web", "--template", "http"],
+    );
+    assert!(run.success, "{}", run.stderr);
+    assert!(
+        run.stderr.contains("    weasel serve hello_web &\n"),
+        "{}",
+        run.stderr
+    );
+    let root = dir.path().join("hello-web");
+    offline(&root, "http");
+    assert_eq!(ok(&root, &["check"]), "");
+    // The service is the program of § 15.8, with the name of the project.
+    let source = fs::read_to_string(root.join("src/hello_web.wasl")).unwrap();
+    let example = include_str!("../../examples/hello-http/src/hello_http.wasl");
+    let body = |text: &str| text[text.find("  import wasi:http/types;").unwrap()..].to_string();
+    assert_eq!(
+        body(&source).replace(
+            "      // The host sends the response, then the handler writes its body.\n",
+            ""
+        ),
+        body(example)
+    );
+
+    // `lib` is the default; an unknown template lists the three.
+    ok(dir.path(), &["init", "demo:plain", "--template", "lib"]);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("plain/wasl.toml")).unwrap(),
+        "[package]\nnamespace = \"demo\"\nname = \"plain\"\nversion = \"0.1.0\"\n"
+    );
+    let run = weasel(dir.path(), &["init", "demo:other", "--template", "web"]);
+    assert_eq!(run.code, Some(2));
+    assert!(
+        run.stderr.contains("[possible values: lib, cli, http]"),
+        "{}",
+        run.stderr
+    );
+    assert!(!dir.path().join("other").exists());
+}

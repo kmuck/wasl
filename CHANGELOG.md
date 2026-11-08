@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `weasel serve <world> [--addr <host>:<port>]` (§ 14.2) serves a world over HTTP, through its export of `wasi:http/handler` of WASI 0.3, on `127.0.0.1:8080` by default. Each request gets a new instance, which lives until the task of `handle` has ended; a trap or an error of `handle` before the response gives the status 500 and is printed on standard error. `SIGINT` and `SIGTERM` stop the service with the code 0.
 - `weasel call` calls async functions: it prints the result once the task has ended (§ 14.2).
 - The host of `weasel` provides WASI 0.3 and `wasi:http` 0.3 next to WASI 0.2, without network: sockets are refused and outgoing HTTP requests are denied (§ 14.2).
+- `weasel init --template cli|http` (§ 14.2) starts a project from the command of § 15.7 or the HTTP service of § 15.8, with its dependency on `wasi:cli` or `wasi:http` 0.3.0; `lib`, the default, is the project of before.
 - `waslc::World::implements` lists the interfaces of other packages that a world implements, with their WIT names (§ 14.3).
 
 ### Changed
