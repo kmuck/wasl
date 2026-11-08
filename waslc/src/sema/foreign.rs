@@ -19,10 +19,14 @@ use crate::types::{
     CaseDef, DeclKind, EndKind, FieldDef, Prim, ResourceDef, Type, TypeDecl, TypeKind, Types,
 };
 
-/// The WaSL name of a WIT name: `output-stream` → `output_stream`, `%from` → `from`.
-/// `None` when it gives no valid WaSL identifier (§ 13.2).
+/// The WaSL name of a WIT name: `output-stream` → `output_stream`, `%from` → `from`,
+/// `DNS-timeout` → `dns_timeout`. `None` when it gives no valid WaSL identifier (§ 13.2).
 pub(crate) fn wasl_name(wit: &str) -> Option<String> {
-    let name = wit.strip_prefix('%').unwrap_or(wit).replace('-', "_");
+    let name = wit
+        .strip_prefix('%')
+        .unwrap_or(wit)
+        .replace('-', "_")
+        .to_ascii_lowercase();
     let valid = !name.is_empty()
         && name
             .split('_')
@@ -185,8 +189,10 @@ impl<'r> Converter<'r> {
                     }
                     funcs.push(hir::FuncDef {
                         name,
+                        wit: Some(func.item_name().to_string()),
                         kind,
                         is_async,
+                        delivers: false,
                         interface: hir_id,
                         params,
                         ret,
@@ -365,6 +371,7 @@ impl<'r> Converter<'r> {
         let decl = types.decls.len();
         types.decls.push(TypeDecl {
             name,
+            wit: Some(wit),
             interface,
             kind,
         });

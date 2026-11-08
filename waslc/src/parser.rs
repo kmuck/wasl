@@ -671,6 +671,23 @@ impl Parser {
             TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
                 self.call_stmt(start)?
             }
+            TokenKind::KwTask => {
+                self.bump();
+                self.expect(&TokenKind::ColonColon, "`::` (`task::return(e);`)")?;
+                if *self.peek() != TokenKind::Return {
+                    return err(
+                        Code::Syntax,
+                        self.span(),
+                        "the only function of `task` is `task::return(e);`, which delivers the result of the task (§ 8.21)",
+                    );
+                }
+                self.bump();
+                self.expect(&TokenKind::LParen, "`(` (`task::return(e);`)")?;
+                let value = self.expr()?;
+                self.expect(&TokenKind::RParen, "`)`")?;
+                self.expect(&TokenKind::Semi, "`;`")?;
+                StmtKind::TaskReturn(value)
+            }
             TokenKind::Underscore => {
                 self.bump();
                 self.expect(
@@ -1173,6 +1190,13 @@ impl Parser {
                 let inner = self.expr()?;
                 self.expect(&TokenKind::RParen, "`)`")?;
                 ExprKind::Paren(Box::new(inner))
+            }
+            TokenKind::KwTask => {
+                return err(
+                    Code::Syntax,
+                    start,
+                    "`task::return(e);` is a statement of its own and has no value (§ 8.21)",
+                );
             }
             _ => return Err(self.unexpected("an expression")),
         };

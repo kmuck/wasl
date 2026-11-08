@@ -138,7 +138,7 @@ A handle (§ 7.12) designates a resource that belongs to another component. The 
 - `return x;`, `return result::ok(x);`, and every constructor that holds `x` (`option::some(x)`, `result::ok(x)`, a variant case);
 - an argument for a parameter of type `T` (not `borrow<T>`);
 - `local y: T = x;` and `y = x;`;
-- the end given to `stream::close`, `future::write` or `future::read`, and the value given to `task::return` (§ 8.21; `task::return` is *specified, not available yet*).
+- the end given to `stream::close`, `future::write` or `future::read`, and the value given to `task::return` (§ 8.21).
 
 After a move, `x` holds the empty handle, `0`, which is never a valid handle. Using `x` again as a handle traps (§ 10.7): the Component Model rejects the index `0`. Assigning `x` a new handle makes it usable again.
 

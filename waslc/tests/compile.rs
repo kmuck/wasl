@@ -551,6 +551,9 @@ fn invalid_v2_programs() {
             Code::Payload,
         ),
         ("local d: u8 = option::none;", Code::TypeMismatch),
+        ("local s: string = 1;", Code::TypeMismatch),
+        ("local c: char = 65;", Code::TypeMismatch),
+        ("local s: status = 1.5;", Code::TypeMismatch),
         (
             "match (option::none) { case none { } else { } }",
             Code::CannotInfer,

@@ -50,7 +50,7 @@ src/orders.wasl:19:12: error[E0400]: mismatched types: expected `u32`, found `u6
 
 ## 11.3 Error codes
 
-Codes never change meaning from one version to the next. E0101, E0222, E0223 and E0416 to E0419 belong to 0.4; E0417 to E0419 are *specified, not available yet*.
+Codes never change meaning from one version to the next. E0101, E0222, E0223 and E0416 to E0419 belong to 0.4.
 
 | Code | Error | Example |
 |---|---|---|
@@ -115,7 +115,7 @@ Codes never change meaning from one version to the next. E0101, E0222, E0223 and
 | E0415 | `?` in a function whose return type cannot receive the error: not a `result` with the same error type, or not an `option` | `prices::of(sku)?` in `func f() -> u64`, `o?` with `o: option<u32>` in a function that returns a `result` |
 | E0416 | async call in a function that is not async (§ 8.21) | `client::send(req)` or `stream::write(tx, xs)` in a `func` without `async` |
 | E0417 | `task::return` in a function that is not async or has no return type, inside an `if`, a `while` or a `match`, or written twice (§ 8.21) | `task::return(r);` inside an `if` |
-| E0418 | `return e;` or `?` after `task::return` (§ 8.21) | `return result::err(e);` after `task::return(result::ok(r));` |
+| E0418 | `return e;`, `?` or a `borrow` parameter after `task::return` (§ 8.21) | `return result::err(e);` after `task::return(result::ok(r));` |
 | E0419 | function reachable from the exports of a world that calls a function containing `task::return` compiled into the same component (§ 8.21) | `handle(req)` called by another function of the package |
 | E0500 | assignment to a global that is not `mut` | `pi = 3.0;` |
 | E0501 | `break` or `continue` outside a `while` | |

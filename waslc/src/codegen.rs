@@ -18,7 +18,7 @@ use crate::hir::{
     Program, Stmt, WorldDef, visit_expr, visit_stmts,
 };
 use crate::types::{DeclId, DeclKind, Prim, Type, TypeKind, Types};
-use crate::wit::{InterfaceName, kebab};
+use crate::wit::InterfaceName;
 
 mod boundary;
 mod helpers;
@@ -276,9 +276,13 @@ pub fn generate(
             continue;
         }
         let params: Vec<ValType> = func.params.iter().map(|(_, t)| cx.val(*t)).collect();
-        let results: Vec<ValType> = func.ret.iter().map(|t| cx.val(*t)).collect();
+        // A function that delivers its result gives it to `task.return` (§ 8.21).
+        let results: Vec<ValType> = match func.ret {
+            Some(t) if !func.delivers => vec![cx.val(t)],
+            _ => Vec::new(),
+        };
         signatures.push(cx.signature(params, results));
-        bodies.push(FuncGen::run(&mut cx, func));
+        bodies.push(FuncGen::run(&mut cx, id, func));
     }
     // Core exports (§ 13.8): an adapter for each function that takes or returns a heap
     // value, the function itself otherwise. An async function always has an adapter,
@@ -465,7 +469,7 @@ pub fn generate(
             .as_ref()
             .map(|n| &n.canonical)
             .expect("exported interface present in the WIT");
-        let name = kebab(&types.decls[decl].name);
+        let name = types.wit_name(decl);
         exports.export(
             &format!("cm32p2|{path}|{name}_dtor"),
             ExportKind::Func,
@@ -513,7 +517,7 @@ pub fn generate(
             .as_ref()
             .map(|n| &n.canonical)
             .expect("exported interface present in the WIT");
-        let name = kebab(&types.decls[decl].name);
+        let name = types.wit_name(decl);
         for (suffix, sig) in ["new", "rep", "drop"].iter().zip(sigs) {
             import_section.import(
                 &format!("cm32p2|_ex_{path}"),
@@ -529,7 +533,7 @@ pub fn generate(
             .expect("imported interface present in the WIT");
         import_section.import(
             &format!("cm32p2|{path}"),
-            &format!("{}_drop", kebab(&types.decls[decl].name)),
+            &format!("{}_drop", types.wit_name(decl)),
             EntityType::Function(gc_types + drop_sig),
         );
     }
@@ -693,12 +697,11 @@ fn carrier(
 /// The name of a function in the core module (§ 13.3): the WIT name of a free function,
 /// `[constructor]r`, `[method]r.m` or `[static]r.s` for the functions of a resource.
 fn wit_func_name(types: &Types, func: &FuncDef) -> String {
-    let resource = |d: DeclId| kebab(&types.decls[d].name);
     match func.kind {
-        FuncKind::Free => kebab(&func.name),
-        FuncKind::Constructor(d) => format!("[constructor]{}", resource(d)),
-        FuncKind::Method(d) => format!("[method]{}.{}", resource(d), kebab(&func.name)),
-        FuncKind::Static(d) => format!("[static]{}.{}", resource(d), kebab(&func.name)),
+        FuncKind::Free => func.wit_name(),
+        FuncKind::Constructor(d) => format!("[constructor]{}", types.wit_name(d)),
+        FuncKind::Method(d) => format!("[method]{}.{}", types.wit_name(d), func.wit_name()),
+        FuncKind::Static(d) => format!("[static]{}.{}", types.wit_name(d), func.wit_name()),
     }
 }
 
@@ -1219,10 +1222,24 @@ struct FuncGen<'g, 'a> {
     owners: Vec<Vec<u32>>,
     /// The number of blocks open at the start of each enclosing loop body.
     loops: Vec<usize>,
+    /// For a function that delivers its result (§ 8.21): its `task::return` helper,
+    /// and the parameters that are borrowed handles, with their `resource.drop`.
+    deliver: Option<(u32, Vec<(u32, u32)>)>,
 }
 
 impl<'g, 'a> FuncGen<'g, 'a> {
-    fn run(cx: &'g mut ModuleCx<'a>, func: &'a FuncDef) -> Function {
+    fn run(cx: &'g mut ModuleCx<'a>, id: FuncId, func: &'a FuncDef) -> Function {
+        let deliver = func.delivers.then(|| {
+            let helper = cx.helper(Helper::Boundary(Boundary::TaskReturn(id)));
+            let borrows = func
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, t))| matches!(cx.types.kind(*t), TypeKind::Borrow(_)))
+                .filter_map(|(k, (_, t))| cx.is_handle(*t).map(|d| (k as u32, cx.drops[&d])))
+                .collect();
+            (helper, borrows)
+        });
         let mut cg = FuncGen {
             cx,
             local_types: &func.locals,
@@ -1233,6 +1250,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             constant: false,
             owners: Vec::new(),
             loops: Vec::new(),
+            deliver,
         };
         // The parameters that own a handle are released on every exit (§ 9.9).
         let params: Vec<u32> = func
@@ -1245,7 +1263,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         cg.owners.push(params);
         cg.block(&func.body);
         cg.release_from(0);
-        if func.ret.is_some() {
+        if func.ret.is_some() && !func.delivers {
             // Every path ends with `return` (checked by semantic analysis);
             // the end of the body is unreachable.
             cg.emit(Instruction::Unreachable);
@@ -1276,6 +1294,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             constant: true,
             owners: Vec::new(),
             loops: Vec::new(),
+            deliver: None,
         };
         cg.expr(init);
         cg.instrs
@@ -1496,12 +1515,17 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                     Frame::LoopStart
                 });
             }
-            Stmt::Return(value) => {
-                if let Some(e) = value {
-                    self.expr(e);
-                }
+            Stmt::Return(Some(e)) => {
+                self.expr(e);
+                self.return_value();
+            }
+            Stmt::Return(None) => {
                 self.release_from(0);
                 self.emit(Instruction::Return);
+            }
+            Stmt::TaskReturn(e) => {
+                self.expr(e);
+                self.deliver();
             }
             Stmt::Call(e) => {
                 self.expr(e);
@@ -1510,6 +1534,27 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 }
             }
         }
+    }
+
+    /// Returns the value on the stack: the function ends, and a function that delivers
+    /// its result gives it to `task.return` (§ 8.21).
+    fn return_value(&mut self) {
+        self.release_from(0);
+        if self.deliver.is_some() {
+            self.deliver();
+        }
+        self.emit(Instruction::Return);
+    }
+
+    /// `task::return` of the value on the stack (§ 8.21): the borrowed handles are given
+    /// back first, as the Component Model requires, then the value is delivered.
+    fn deliver(&mut self) {
+        let (helper, borrows) = self.deliver.clone().expect("a function that delivers");
+        for (param, drop) in borrows {
+            self.emit(Instruction::LocalGet(param));
+            self.emit(Instruction::Call(drop));
+        }
+        self.emit(Instruction::Call(helper));
     }
 
     /// `match` (§ 12.6): one block per arm, plus one for `else`, around a `br_table`
@@ -1660,8 +1705,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                         self.emit(Instruction::GlobalGet(g));
                     }
                 }
-                self.release_from(0);
-                self.emit(Instruction::Return);
+                self.return_value();
                 self.emit(Instruction::End);
                 if ok.is_some() {
                     let case = self.cx.case_type(ty, 0);
@@ -1681,8 +1725,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 };
                 let none = self.cx.option_heap(*ret_inner);
                 self.emit(Instruction::RefNull(HeapType::Concrete(none)));
-                self.release_from(0);
-                self.emit(Instruction::Return);
+                self.return_value();
                 self.emit(Instruction::End);
                 self.emit(Instruction::LocalGet(s));
                 if self.cx.boxed(*inner) {

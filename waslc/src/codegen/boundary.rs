@@ -36,6 +36,9 @@ pub(crate) enum Boundary {
     AsyncAdapter(FuncId),
     /// The callback of the async exports, never called in 0.4 (§ 13.13).
     Callback,
+    /// `(T')`: `task::return(v)` in a function that delivers its result (§ 8.21): lowers
+    /// the value and gives it to `task.return`.
+    TaskReturn(FuncId),
     /// The reverse adapter of an imported function (§ 13.10): lowers the arguments,
     /// calls the import, lifts the result.
     Import(FuncId),
@@ -784,6 +787,7 @@ impl Boundary {
             }
             Boundary::Adapter(f) => adapter(cx, f),
             Boundary::AsyncAdapter(f) => async_adapter(cx, f),
+            Boundary::TaskReturn(f) => task_return(cx, f),
             Boundary::Callback => {
                 let mut g = Gen::new(cx, vec![ValType::I32; 3]);
                 g.emit(I::Unreachable);
@@ -1272,22 +1276,26 @@ fn async_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, F
     // (§ 13.13): `$scratch_base` is 0.
     g.free_scratch();
     g.emit(I::Call(target));
-    // Lent handles are given back before the task delivers its result.
-    for (tmp, drop) in lent {
-        g.emit(I::LocalGet(tmp));
-        g.emit(I::Call(drop));
-    }
-    match func.ret {
-        None => {}
-        Some(t) if task_return_in_memory(types, func) => lower_to_memory(&mut g, t),
-        Some(t) => {
-            let val = g.cx.val(t);
-            let value = g.local(val);
-            g.emit(I::LocalSet(value));
-            g.lower_to_flat(t, &getter(value, val));
+    // A function that delivers its result has done it, and given back the lent handles,
+    // in its body (§ 8.21).
+    if !func.delivers {
+        // Lent handles are given back before the task delivers its result.
+        for (tmp, drop) in lent {
+            g.emit(I::LocalGet(tmp));
+            g.emit(I::Call(drop));
         }
+        match func.ret {
+            None => {}
+            Some(t) if task_return_in_memory(types, func) => lower_to_memory(&mut g, t),
+            Some(t) => {
+                let val = g.cx.val(t);
+                let value = g.local(val);
+                g.emit(I::LocalSet(value));
+                g.lower_to_flat(t, &getter(value, val));
+            }
+        }
+        g.emit(I::Call(task_return));
     }
-    g.emit(I::Call(task_return));
     // The waitable set of the task, if it has waited (§ 12.12).
     if let Some(w) = g.cx.waitable {
         g.code.extend([
@@ -1306,6 +1314,35 @@ fn async_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, F
     }
     g.emit(I::I32Const(0));
     g.finish(vec![ValType::I32])
+}
+
+/// `task::return(v)` (§ 8.21): lowers `v` into flat values or scratch memory, calls
+/// `task.return`, then sets `$scratch_top` back to where it was, since the task goes on.
+fn task_return(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
+    let types = cx.types;
+    let func = &cx.program.funcs[f];
+    let t = func.ret.expect("a function that delivers has a result");
+    let task_return = cx.task_returns[&f];
+    let val = cx.val(t);
+    let mut g = Gen::new(cx, vec![val]);
+    let saved = g.cx.scratch_top.map(|top| {
+        let saved = g.local(ValType::I32);
+        g.emit(I::GlobalGet(top));
+        g.emit(I::LocalSet(saved));
+        saved
+    });
+    if task_return_in_memory(types, func) {
+        g.code.extend(getter(0, val));
+        lower_to_memory(&mut g, t);
+    } else {
+        g.lower_to_flat(t, &getter(0, val));
+    }
+    g.emit(I::Call(task_return));
+    if let (Some(saved), Some(top)) = (saved, g.cx.scratch_top) {
+        g.emit(I::LocalGet(saved));
+        g.emit(I::GlobalSet(top));
+    }
+    g.finish(Vec::new())
 }
 
 /// The reverse adapter of an imported function (§ 13.10): lowers the arguments, calls the

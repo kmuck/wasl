@@ -49,6 +49,8 @@ pub enum TokenKind {
     Match,
     Case,
     Async,
+    /// `task`, whose only function is `task::return` (§ 8.21).
+    KwTask,
 
     // Built-in type names other than primitive types
     KwChar,
@@ -168,6 +170,7 @@ impl TokenKind {
             TokenKind::Match => "match",
             TokenKind::Case => "case",
             TokenKind::Async => "async",
+            TokenKind::KwTask => "task",
             TokenKind::KwChar => "char",
             TokenKind::KwString => "string",
             TokenKind::KwList => "list",
@@ -231,7 +234,7 @@ pub struct Token {
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
-    "package", "use", "type", "map", "own", "task", "await", "subtask", "include", "with", "as",
+    "package", "use", "type", "map", "own", "await", "subtask", "include", "with", "as",
 ];
 
 fn keyword(word: &str) -> Option<TokenKind> {
@@ -250,6 +253,7 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "local" => TokenKind::Local,
         "func" => TokenKind::Func,
         "async" => TokenKind::Async,
+        "task" => TokenKind::KwTask,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "while" => TokenKind::While,
@@ -795,10 +799,10 @@ mod tests {
         assert_eq!(error_code("a__b"), Code::InvalidIdent);
         assert_eq!(error_code("a_1"), Code::InvalidIdent);
         assert_eq!(error_code("use"), Code::ReservedKeyword);
-        assert_eq!(error_code("task"), Code::ReservedKeyword);
         assert_eq!(error_code("subtask"), Code::ReservedKeyword);
         assert_eq!(error_code("await"), Code::Await);
         assert_eq!(kinds("async")[0], TokenKind::Async);
+        assert_eq!(kinds("task")[0], TokenKind::KwTask);
         assert_eq!(kinds("import")[0], TokenKind::Import);
         assert_eq!(kinds("record")[0], TokenKind::Record);
         assert_eq!(kinds("list")[0], TokenKind::KwList);

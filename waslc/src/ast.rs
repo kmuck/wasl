@@ -270,6 +270,8 @@ pub enum StmtKind {
     Call(Expr),
     /// `_ = f(…);`: a call statement whose value is discarded (§ 9.6).
     Discard(Expr),
+    /// `task::return(e);` (§ 8.21): delivers the result of the task.
+    TaskReturn(Expr),
 }
 
 /// Target of an assignment: a name followed by field accesses and indexes (§ 5.3).

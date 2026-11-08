@@ -291,6 +291,9 @@ impl EndKind {
 #[derive(Debug)]
 pub struct TypeDecl {
     pub name: String,
+    /// For a type of another package, its name in the WIT of the dependency, which may
+    /// have uppercase letters (§ 13.2).
+    pub wit: Option<String>,
     /// Index of the interface that declares it.
     pub interface: usize,
     pub kind: DeclKind,
@@ -408,6 +411,15 @@ impl Types {
     /// The type of a declaration.
     pub fn decl_type(&mut self, id: DeclId) -> Type {
         self.intern(TypeKind::Decl(id))
+    }
+
+    /// The name of a declared type in WIT: its spelling in the WIT of its dependency, or
+    /// its WaSL name in kebab case (§ 13.2).
+    pub fn wit_name(&self, id: DeclId) -> String {
+        let decl = &self.decls[id];
+        decl.wit
+            .clone()
+            .unwrap_or_else(|| crate::wit::kebab(&decl.name))
     }
 
     /// The type of a declaration that is already interned.

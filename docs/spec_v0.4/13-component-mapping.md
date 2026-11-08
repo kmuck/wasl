@@ -87,7 +87,7 @@ The WIT of the world, embedded in its component, contains `import types;` added 
 - The primitive and built-in types have the same names in WaSL and in WIT (§ 7.1, § 7.6).
 - A WaSL identifier may coincide with a WIT keyword that is not reserved in WaSL (for instance `from`). The WIT then writes it with the WIT escape `%` (`%from`), which is the standard way to use a keyword as a name in WIT.
 - **Names of other packages** go the other way: a WIT name of a dependency is written in WaSL by replacing each `-` with `_` (`incoming-handler` → `incoming_handler`, `output-stream` → `output_stream`, `blocking-write-and-flush` → `blocking_write_and_flush`), and the namespace and package the same way (`my-org:http-tools` → `my_org:http_tools`). The WIT escape `%` is removed: `%from` is `from`.
-- **Uppercase letters** of a WIT name are written in lowercase (*specified, not available yet*): the case `HTTP` of `scheme` is `scheme::http`, the case `DNS-timeout` of `error-code` is `error_code::dns_timeout`, `TLS-protocol-error` is `tls_protocol_error`. Two names of the same scope never give the same WaSL name: the Component Model requires the names of a scope to stay distinct once their hyphens are removed and their uppercase letters lowercased (*strongly-unique* names). The compiler writes each name with the spelling of the WIT of the dependency, where it appears in the WIT of the world and in the names of the core module.
+- **Uppercase letters** of a WIT name are written in lowercase: the case `HTTP` of `scheme` is `scheme::http`, the case `DNS-timeout` of `error-code` is `error_code::dns_timeout`, `TLS-protocol-error` is `tls_protocol_error`. Two names of the same scope never give the same WaSL name: the Component Model requires the names of a scope to stay distinct once their hyphens are removed and their uppercase letters lowercased (*strongly-unique* names). The compiler writes each name with the spelling of the WIT of the dependency, where it appears in the WIT of the world and in the names of the core module.
 - A WIT name with a word that starts with a digit, or that is a WaSL keyword or reserved word (§ 4.4), gives no valid WaSL identifier and cannot be named from WaSL: using the item is E0215, and the interface stays usable for its other items.
 
 ## 13.3 Exports of the core module
@@ -250,16 +250,18 @@ The compiler reads the WIT of the foreign interface from the dependency (§ 3.5)
 
 ## 13.13 Async at the boundary
 
-Async functions, streams and futures are available. `task::return` is *specified, not available yet*.
+Async functions, streams, futures and `task::return` are available.
 
 **Exported async functions.** An exported `async func`, of an interface of the package or of a foreign export block, is lifted with `canon lift async` and a `callback`, the mode of the Component Model that every runtime of WASI 0.3 supports. In 0.4 the callback is never called: the adapter runs the whole body of the function, which blocks wherever it waits (§ 12.12), then returns the code `EXIT` (`0`). The adapter:
 
 1. lifts the arguments, as in § 13.8;
 2. calls the WaSL function;
-3. if the function delivered nothing yet, lowers its value and calls the `task.return` of the function; a `task::return(e);` of the body has already done it, and for a function without a return type `task.return` takes no value;
+3. gives back the handles lent to the function (§ 13.8), lowers its value and calls the `task.return` of the function; for a function without a return type, `task.return` takes no value. A function that contains `task::return` has done both in its body (below), and the adapter skips this step;
 4. drops the waitable set of the task, if it has waited on a stream or a future (§ 12.12), gives back the region of the task (below), and returns `EXIT`.
 
 The result is never returned as flat values and there is no post-return function: the Component Model copies the result during `task.return`, while it is still in memory.
+
+**Functions that deliver their result.** A function that contains `task::return` (§ 8.21) has no result in the core module: it gives its value to `task.return` itself, at `task::return(e);`, and at each `return e;` and `?` that ends it before. There, the code gives back the handles of its `borrow` parameters with `resource.drop`, since the Component Model traps at `task.return` while the task holds a borrow, then calls a helper that lowers the value, calls `task.return`, and sets `$scratch_top` back to where it was: the task goes on in its region. After `task::return`, the function ends with `return;` or at the end of its body, and its adapter goes on with step 4.
 
 **Names.** The standard names of § 13.3 have no form for async yet. The items that only exist for async use the names that `wit-component` reads for them, its *legacy* names, which carry the full version of the interface; a module can mix them with the standard names of its other items:
 

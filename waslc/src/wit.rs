@@ -154,8 +154,9 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
         let mut uses: Vec<(usize, Vec<String>)> = Vec::new();
         for d in foreign {
             let decl = &types.decls[d];
-            let name = kebab(&decl.name);
-            let local = if taken.contains(&name) {
+            // The spelling of the dependency, which may have uppercase letters (§ 13.2).
+            let name = types.wit_name(d);
+            let local = if taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) {
                 format!(
                     "{}-{name}",
                     kebab(&program.interfaces[decl.interface].name).replace(':', "-")
