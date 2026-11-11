@@ -6,12 +6,14 @@ use wasl:std/json;
 world catalog {
   export wasl:std/http {
     async func handle(request: request) -> response {
-      local r = router(request);
-      if (r.get("/products"))
+      local parts = segments(request);
+      if (request.method != "GET")
+        return reply(405, "text/plain", "method not allowed\n");
+      if (parts == ["products"])
         return reply(200, "application/json", json::stringify(shop::products_json()));
-      if (r.get("/products/{id}"))
-        return catalog_api::product(r.param("id"));
-      return r.unsupported();
+      if (list.len(parts) == 2 && parts[0] == "products")
+        return catalog_api::product(parts[1]);
+      return not_found();
     }
   }
 }

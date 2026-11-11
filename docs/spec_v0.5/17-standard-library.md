@@ -13,7 +13,7 @@ use wasl:std/json;
 |---|---|---|
 | `text` | operations on strings (§ 17.2) | nothing |
 | `json` | the JSON value, parsing and printing (§ 17.3) | nothing |
-| `http` | an HTTP service: its request, its response, `handle` and a router (§ 17.4) | `wasi:http` 0.3, through its adapter |
+| `http` | an HTTP service: its request, its response, `handle` and a few helpers (§ 17.4) | `wasi:http` 0.3, through its adapter |
 | `cli` | a command: `run`, its arguments, its standard streams (§ 17.5) | `wasi:cli` 0.3 |
 | `fs` | files as text or bytes (§ 17.6) | `wasi:filesystem` 0.3 |
 
@@ -195,8 +195,8 @@ interface http {
   func header(request: request, name: string) -> option<string> { … }
   func query_param(request: request, name: string) -> option<string> { … }
   func body_text(request: request) -> option<string> { … }
-
-  resource router { … }
+  func segments(request: request) -> list<string> { … }
+  func not_found() -> response { … }
 }
 ```
 
@@ -221,50 +221,31 @@ world hello_http {
 }
 ```
 
-### The router
-
-A service with many routes, or with parameters in its paths, can use the **router**, a resource that remembers the request and tries the routes one after the other:
+A path with a parameter, such as `/products/2`, is read with `segments`, and compared with `==` on lists (§ 8.3):
 
 ```wasl
 use wasl:std/http;
+use wasl:std/json;
 
 world catalog {
   export wasl:std/http {
     async func handle(request: request) -> response {
-      local r = router(request);
-      if (r.get("/products"))
-        return api::all();
-      if (r.get("/products/{id}"))
-        return api::one(r.param("id"));
-      if (r.post("/products"))
+      local parts = segments(request);
+      if (request.method == "GET" && parts == ["products"])
+        return reply(200, "application/json", json::stringify(api::all()));
+      if (request.method == "GET" && list.len(parts) == 2 && parts[0] == "products")
+        return api::one(parts[1]);
+      if (request.method == "POST" && parts == ["products"])
         return api::create(request.body);
-      return r.unsupported();
+      return not_found();
     }
   }
 }
 ```
 
-```wasl
-resource router {
-  constructor(request: request) { … }
-  func get(pattern: string) -> bool { … }
-  func post(pattern: string) -> bool { … }
-  func put(pattern: string) -> bool { … }
-  func patch(pattern: string) -> bool { … }
-  func delete(pattern: string) -> bool { … }
-  func route(method: string, pattern: string) -> bool { … }
-  func param(name: string) -> string { … }
-  func unsupported() -> response { … }
-}
-```
-
-- A **pattern** is a path whose segments are either text, which must be equal to the segment of the request, or `{name}`, which matches any segment and gives it the name `name`. Segments are separated by `/`, and empty segments are ignored on both sides: `/products/` matches `/products`.
-- `route(method, pattern)` is `true` when the request has this method and its path matches the pattern; `get(p)` is `route("GET", p)`, and so on. When it is `true`, the router keeps the parameters of the pattern.
-- `param(name)` is the segment that `{name}` matched in the last route that returned `true`. A name that this route does not have traps: it is a bug of the code, which a test finds at the first request.
-- `unsupported()` is the response for a request that no route took: `405` with the header `allow` listing the methods of the routes whose path matched, or `404` if no path matched.
-- The routes are tried in the order of the code, and the first that matches wins: `/products/new` is written before `/products/{id}`.
-
-The router has no function values (§ 9.1): each route is an `if` that calls an ordinary function with its parameters, which a test calls directly (§ 3.6). It is a resource of the library: in the program, it is a WasmGC object; in the WIT of `wasl:std/http`, a resource.
+- `segments(request)` is the path split on `/`, without empty segments and with the `%XX` escapes decoded: `/products/2/` gives `["products", "2"]`, `/` gives `[]`.
+- `not_found()` is `reply(404, "text/plain", "not found\n")`.
+- The routes are `if`s, tried in the order of the code: the first that matches wins. Each one calls an ordinary function with its parameters, which a test calls directly (§ 3.6).
 
 ## 17.5 `cli`
 

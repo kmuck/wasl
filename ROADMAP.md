@@ -61,7 +61,7 @@ Targets: `hello` for WASI 0.3, run with `weasel run` (§ 15.7), and `hello-http`
 ### 0.5: standard library, readability and tooling
 
 - Readability: locals without type, `for (x in xs)`, bodies without braces, built-in functions written `list.len(xs)`, call statements without `_ =`, structural `==`, type aliases, `///`, `use` (§ 1.10).
-- The standard library `wasl:std`, written in WaSL above WASI: `text`, `json`, `http` (with `handle` and a router), `cli` (with `run`) and `fs` (chapter 17).
+- The standard library `wasl:std`, written in WaSL above WASI: `text`, `json`, `http` (with `handle`), `cli` (with `run`) and `fs` (chapter 17).
 - `weasel test`, `weasel fmt`, `weasel build --all`. `weasel publish` waits until the specification is stable.
 
 Target: `examples/shop`, a small version of the reference use case: two HTTP services and a command sharing their types and business logic (§ 15.10).

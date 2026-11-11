@@ -6,10 +6,9 @@ use wasl:std/http;
 world orders {
   export wasl:std/http {
     async func handle(request: request) -> response {
-      local r = router(request);
-      if (r.post("/orders"))
+      if (request.method == "POST" && request.path == "/orders")
         return checkout::quote(request);
-      return r.unsupported();
+      return not_found();
     }
   }
 }

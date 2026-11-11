@@ -1142,7 +1142,7 @@ Each line is written in `run` of § 15.7 or in `handle` of § 15.8, unless it sa
 
 *Specified, not available yet.*
 
-`examples/shop` is a small shop: two HTTP services and a command that share their types and their logic, the small version of the backend of several services that WaSL aims at. It uses the features of 0.5: locals without type, `for`, bodies without braces, built-in functions with `.`, `==` on records, a type alias, doc comments, `use`, and the standard library: `json`, `http` with its router, and `cli`. 0.5 is done when it runs in the continuous integration.
+`examples/shop` is a small shop: two HTTP services and a command that share their types and their logic, the small version of the backend of several services that WaSL aims at. It uses the features of 0.5: locals without type, `for`, bodies without braces, built-in functions with `.`, `==` on records, a type alias, doc comments, `use`, and the standard library: `json`, `http` and `cli`. 0.5 is done when it runs in the continuous integration.
 
 ```
 examples/shop/
@@ -1353,12 +1353,14 @@ use wasl:std/json;
 world catalog {
   export wasl:std/http {
     async func handle(request: request) -> response {
-      local r = router(request);
-      if (r.get("/products"))
+      local parts = segments(request);
+      if (request.method != "GET")
+        return reply(405, "text/plain", "method not allowed\n");
+      if (parts == ["products"])
         return reply(200, "application/json", json::stringify(shop::products_json()));
-      if (r.get("/products/{id}"))
-        return catalog_api::product(r.param("id"));
-      return r.unsupported();
+      if (list.len(parts) == 2 && parts[0] == "products")
+        return catalog_api::product(parts[1]);
+      return not_found();
     }
   }
 }
@@ -1394,10 +1396,9 @@ use wasl:std/http;
 world orders {
   export wasl:std/http {
     async func handle(request: request) -> response {
-      local r = router(request);
-      if (r.post("/orders"))
+      if (request.method == "POST" && request.path == "/orders")
         return checkout::quote(request);
-      return r.unsupported();
+      return not_found();
     }
   }
 }
@@ -1558,7 +1559,7 @@ What the program shows:
 
 - **One logic, three components.** `shop` is exported by no world: each component compiles the part it reaches (§ 2.3). `json::value` appears in its signatures, which is possible because it never reaches a WIT (§ 7.11).
 - **Entry points without WASI.** The three worlds export `wasl:std/http` or `wasl:std/cli`, and write only `handle` or `run`; the built files are WASI 0.3 services and commands (§ 17.1).
-- **The routes are a table.** `handle` only chooses a function; the work is in `catalog_api` and `checkout`, which tests could call. A route that needs a helper puts it in an interface, since the block of a foreign export only holds the functions without body (§ 2.4.3).
+- **The routes are `if`s.** `handle` compares the method and the segments of the path, with `==` on lists, and only chooses a function; the work is in `catalog_api` and `checkout`, which tests could call. A route that needs a helper puts it in an interface, since the block of a foreign export only holds the functions without body (§ 2.4.3).
 - **What stays verbose.** Converting JSON to a record takes a helper per JSON type, to turn an `option` into a `result` with a message, and building a list from another one takes a `list<mut T>` and an index. These are the places where function values, a growable list, or code generated from records would help (§ 16).
 
 ## 15.11 Invalid programs of 0.5
