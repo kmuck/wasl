@@ -1,6 +1,6 @@
 # Roadmap
 
-This is the direction WaSL follows from one version to the next. It is a guideline, not a commitment: versions may be reordered or split when the implementation teaches something new. It supersedes the list of planned features in [chapter 16 of the v0.1 specification](docs/spec_v0.1/16-roadmap.md), which is frozen with v0.1. The current specification is [v0.4](docs/spec_v0.4/README.md).
+This is the direction WaSL follows from one version to the next. It is a guideline, not a commitment: versions may be reordered or split when the implementation teaches something new. It supersedes the list of planned features in [chapter 16 of the v0.1 specification](docs/spec_v0.1/16-roadmap.md), which is frozen with v0.1. The current specification is [v0.5](docs/spec_v0.5/README.md).
 
 ## How versions are built
 

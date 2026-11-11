@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The v0.4 specification is frozen. The [v0.5 specification](docs/spec_v0.5/README.md) continues it with the same section numbers and becomes the reference; it will receive the features of 0.5.
+
 ## [0.4.0] - 2026-11-08
 
 Async and WASI 0.3, implementing the [v0.4 specification](docs/spec_v0.4/README.md) (provisional until v0.5): async functions, streams and futures, `task::return`, tuple destructuring, and the commands `weasel run` and `weasel serve`. The target programs, [`examples/hello`](examples/hello), a WASI 0.3 command run with `weasel run`, and [`examples/hello-http`](examples/hello-http), an HTTP service served with `weasel serve` and called with `curl`, build and run in the continuous integration, with `weasel` alone.
