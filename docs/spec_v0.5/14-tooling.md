@@ -11,11 +11,11 @@ WaSL comes with two programs: the build tool `weasel`, used by developers, and t
   error: could not find the `src` directory next to `wasl.toml`
   ```
 
-- **Standard output** only receives results: the value returned by `call`, the WIT printed by `wit`, and the output of the program that `run` runs.
+- **Standard output** only receives results: the value returned by `call`, the WIT printed by `wit`, the output of the program that `run` runs, and the report of `test`.
 - **Standard error** receives progress messages (`Built …`) and errors.
 - Compilation errors use the format of § 11.1, manifest errors the format of § 11.4, other errors `error: <message>` (§ 11.5).
 - A compilation shows its **first ten errors** (§ 11.2), one per line, as the Go compiler does; the others are counted on a last line: `error: 3 more errors not shown`.
-- **Exit code**: `0` on success, `1` on any error (including a trap during `call`), `2` for an invalid command line (unknown command, missing argument). `weasel run` exits with the code of the program it runs.
+- **Exit code**: `0` on success, `1` on any error (including a trap during `call`, a failed test, or a file that `fmt --check` would change), `2` for an invalid command line (unknown command, missing argument). `weasel run` exits with the code of the program it runs.
 - Each option has a single spelling, its long name: `weasel --help` and `weasel <command> --help` describe the commands, `weasel --version` prints the version. There are no one-letter options (`-h`, `-V`) and no `help` command.
 
 ## 14.2 `weasel` commands
@@ -27,7 +27,7 @@ Creates a new project in a new directory `<name>` of the current directory.
 - The package is written as in WIT (§ 3.2): `weasel init acme:todo-api`, or `weasel init acme:todo-api@0.2.0`. The namespace and the name follow the rule of § 3.2; the version is a SemVer version and defaults to `0.1.0`. A package without namespace is an error: ``error: invalid package `todo-api`: expected `namespace:name`, such as `acme:shop` ``.
 - The project contains one world, named after the project with `-` replaced by `_` (`todo-api` → `todo_api`). If that name is a keyword or reserved word of WaSL (§ 4.4), the command fails.
 - The command fails if the directory `<name>` already exists.
-- `--template <template>` chooses the program the project starts with: `lib`, the default, the interface below; `cli`, a command for WASI 0.3, the program of § 15.7 with the dependency `"wasi:cli" = "0.3.0"`; `http`, an HTTP service for WASI 0.3, the program of § 15.8 with the dependency `"wasi:http" = "0.3.0"`. The world has the name above in every template, and a comment at the top of the file says how to run it. An unknown template is an invalid command line, which lists the three (exit code `2`, § 14.1).
+- `--template <template>` chooses the program the project starts with: `lib`, the default, the interface below; `cli`, a command written with the standard library, the program `hello` of § 17.5; `http`, an HTTP service written with the standard library, the program `hello_http` of § 17.4. These two need no dependency (§ 3.5). The world has the name above in every template, and a comment at the top of the file says how to run it. An unknown template is an invalid command line, which lists the three (exit code `2`, § 14.1).
 - The command prints on standard error how to go on: `weasel build` and `weasel call` for `lib`, `weasel run` for `cli`, `weasel serve` and `curl` for `http`.
 - Generated files (no `.gitignore` and no other file):
 
@@ -63,16 +63,18 @@ interface math {
 }
 ```
 
-### `weasel build <world>`
+### `weasel build <world>`, `weasel build --all`
 
 Compiles the world `<world>` into its component (§ 2.3, § 3.4).
 
 1. The dependencies are resolved (§ 3.5), fetched if needed, and `wkg.lock` is written if it changed.
 2. The whole package is analyzed; any error stops the command.
-3. The component of `<world>` is generated and written to `build/<world>.wasm` (the `build/` directory is created if needed).
-4. `Built \`build/<world>.wasm\`` is printed on standard error.
+3. The component of `<world>` is generated. If the world exports `wasl:std/http` or `wasl:std/cli`, it is composed with the adapter of the standard library (§ 17.1).
+4. It is written to `build/<world>.wasm` (the `build/` directory is created if needed), and `Built \`build/<world>.wasm\`` is printed on standard error.
 
-The component keeps its imports: `build` never composes it with the components that provide them, so that the same file can be deployed and composed by any tool (`wac`, a host). `weasel call` composes in memory (below).
+`--all` builds every world of the package, in declaration order, after one analysis; it takes no world. Giving both is an invalid command line.
+
+Apart from the adapter of the standard library, which belongs to the program, the component keeps its imports: `build` never composes it with the components that provide them, so that the same file can be deployed and composed by any tool (`wac`, a host). `weasel call` composes in memory (below).
 
 The world is always given explicitly, even when the project has a single world: a world is an entry point, and one build produces one component. An unknown world is an error (E9001):
 
@@ -86,7 +88,7 @@ Resolves the dependencies like `build`, analyzes the whole package without gener
 
 ### `weasel wit`
 
-Prints the WIT of the package (§ 13.1) on standard output.
+Prints the WIT of the package (§ 13.1) on standard output. The worlds show the imports that the standard library adds (§ 3.5) and their exports as the program writes them, `export wasl:std/http@0.5.0;`; a comment after a world that exports `wasl:std/http` or `wasl:std/cli` says what the built file exports after composition: `// built: export wasi:http/handler@0.3.0;`.
 
 ### `weasel call <world> <function> [<arguments>…]`
 
@@ -124,17 +126,18 @@ Each `call` runs on a fresh instance: globals start from their initial values.
 - an interface of WASI 0.2 or 0.3 that wasmtime provides (`wasi:cli`, `wasi:io`, `wasi:clocks`, `wasi:random`, `wasi:filesystem`, `wasi:sockets`), or of `wasi:http` 0.3, is provided by the host. The component's standard output and standard error both go to the standard error of `weasel`, so that standard output only receives the result (§ 14.1). The component has no environment variables and no access to the filesystem or the network: sockets are refused, and an outgoing request of `wasi:http` fails with `HTTP-request-denied`;
 - any other import is an error: ``error: no component provides `example:catalog/carts@0.1.0`: add it as a path dependency on a WaSL project``.
 
-Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export run with `weasel run` (`wasi:cli/run`) and `weasel serve` (`wasi:http/handler`), below. An async function is called like the others: `call` waits until it has delivered its result, and until its task has ended (§ 8.21), then prints the result. A trap after `task::return` is an error too, and the result is not printed.
+Every instance of the composition is fresh for each `call`. Only the functions of the interfaces of the package can be called; the functions of a foreign export run with `weasel run` (`wasi:cli/run`) and `weasel serve` (`wasi:http/handler`), below. An async function is called like the others: `call` waits until it has delivered its result, and until its task has ended (§ 8.21), then prints the result. A trap after `task.return` is an error too, and the result is not printed.
 
-### `weasel run <world> [<arguments>…]`
+### `weasel run [--dir <dir>]… <world> [<arguments>…]`
 
-Compiles the world `<world>` in memory and runs it as a command: it calls the `run` function of its export of `wasi:cli/run`, of WASI 0.2 or 0.3. Nothing is written to `build/`.
+Compiles the world `<world>` in memory and runs it as a command: it calls the `run` function of its export of `wasi:cli/run`, of WASI 0.2 or 0.3, or of `wasl:std/cli` through its adapter (§ 17.1). Nothing is written to `build/`.
 
-- The world must export `wasi:cli/run`: ``error: world `app` does not export `wasi:cli/run`; its exports are `math` ``.
-- Every argument after the world is given to the program, unchanged, even `--help` or `--`. The program receives the name of the world as its first argument, followed by `<arguments>`, as a command receives its own name first: `weasel run args a --help` gives `["args", "a", "--help"]` to `get-arguments` of `wasi:cli/environment`.
-- The standard input, output and error of the program are those of `weasel`. The program has no environment variables and no access to the filesystem or the network.
+- The world must export `wasi:cli/run` or `wasl:std/cli`: ``error: world `app` does not export `wasi:cli/run` or `wasl:std/cli`; its exports are `math` ``.
+- Every argument after the world is given to the program, unchanged, even `--help` or `--`. The program receives the name of the world as its first argument, followed by `<arguments>`, as a command receives its own name first: `weasel run args a --help` gives `["args", "a", "--help"]` to `get-arguments` of `wasi:cli/environment`, and to `cli::args()` (§ 17.5).
+- The standard input, output and error of the program are those of `weasel`. The program has no environment variables and no access to the network.
+- `--dir <dir>` gives the program access to the directory `<dir>`, relative to the current directory, with the same name: `--dir .` lets `fs::read_text("notes.txt")` read `./notes.txt` (§ 17.6). It can be repeated. Without it, the program has no access to the filesystem. It is written before the world, since everything after the world belongs to the program.
 - Imports are composed as for `call`.
-- **Exit code**: `0` when `run` returns `result::ok`, `1` when it returns `result::err`, the code of `wasi:cli/exit` when the program calls it (`exit::exit(result::err)` gives `1`), and `1` with an error message for a trap (``error: `run` trapped: integer divide by zero``). Only a trap prints a message.
+- **Exit code**: `0` when `run` returns `result.ok`, `1` when it returns `result.err`, the code of `wasi:cli/exit` when the program calls it (`exit::exit(result.err)` gives `1`), and `1` with an error message for a trap (``error: `run` trapped: integer divide by zero``). Only a trap prints a message.
 - With WASI 0.3, `run` ends once its task has ended, after its result.
 
 ```sh
@@ -144,13 +147,13 @@ weasel run hello
 
 ### `weasel serve <world> [--addr <host>:<port>]`
 
-Compiles the world `<world>` in memory and serves it as an HTTP service: each request is given to the `handle` function of its export of `wasi:http/handler`, of WASI 0.3. Nothing is written to `build/`.
+Compiles the world `<world>` in memory and serves it as an HTTP service: each request is given to the `handle` function of its export of `wasi:http/handler`, of WASI 0.3, or of `wasl:std/http` through its adapter (§ 17.1). Nothing is written to `build/`.
 
-- The world must export `wasi:http/handler`: ``error: world `app` does not export `wasi:http/handler`; its exports are `math` ``.
+- The world must export `wasi:http/handler` or `wasl:std/http`: ``error: world `app` does not export `wasi:http/handler` or `wasl:std/http`; its exports are `math` ``.
 - The service listens on `127.0.0.1:8080`, or on the address of `--addr`, and prints ``Serving `hello_http` on http://127.0.0.1:8080`` on standard error, once it accepts connections. With the port `0`, the system chooses a free port, which this line shows. The service runs until it is interrupted (`SIGINT`, Ctrl-C) or asked to terminate (`SIGTERM`), then exits with the code `0`.
 - **Each request gets a new instance**, which no other request uses: globals start from their initial values for every request, and a request never waits for another one (§ 13.13). The instance lives until the task of `handle` has ended, after its response, while it writes the body.
 - A trap ends the request, which receives the status 500 without a body if no response was delivered yet; after the response, the body ends where the trap happened. The trap is printed on standard error (``error: request `GET /` trapped: integer divide by zero``), and the service goes on.
-- When `handle` returns `result::err(e)`, the request receives the status 500 without a body, and the error is printed on standard error (``error: request `GET /` failed: internal error: boom``).
+- When `handle` returns `result.err(e)`, the request receives the status 500 without a body, and the error is printed on standard error (``error: request `GET /` failed: internal error: boom``).
 - The standard output and error of the component go to the standard error of `weasel`. Imports are composed as for `call`, and the component has no access to the network either.
 
 ```sh
@@ -158,6 +161,42 @@ weasel serve hello_http &
 curl http://127.0.0.1:8080/karim
 # Hello, /karim!
 ```
+
+### `weasel test [<filter>]`
+
+*Specified, not available yet.*
+
+Analyzes the package with its test files (§ 3.6), then runs every test, in the order of the files (§ 3.3) and of the functions in them.
+
+- With `<filter>`, only the tests whose name (`shop_test::total_of_two_lines`) contains `<filter>` run.
+- Each test runs in a new instance of a component that `weasel` builds in memory for the tests: it exports the test interfaces, and imports what they need, composed as for `call`. Its standard output and error go to the standard error of `weasel`.
+- One line per test is printed on standard output, then a summary:
+
+```
+ok    shop_test::total_of_two_lines
+FAIL  shop_test::parses_an_empty_order: expected no line
+FAIL  shop_test::rejects_zero: trapped: integer divide by zero
+
+1 passed, 2 failed
+```
+
+- The exit code is `0` when every test passes, `1` otherwise. A project without test is not an error: `0 passed`.
+
+### `weasel fmt [--check]`
+
+*Specified, not available yet.*
+
+Rewrites every source and test file in the one layout of WaSL. There is no option and no configuration file: one layout for every project, as `gofmt` does.
+
+- **Indentation** of two spaces per level; one statement per line; `{` at the end of the line that opens it, `}` alone on its line.
+- A **body without braces** (§ 5.3) goes on the next line, indented one level, as in the example of § 5.3.
+- One space around binary operators and `=`, after `,` and `:`, none inside parentheses and brackets; `if (`, `while (`, `for (`, `match (` with a space.
+- At most one blank line in a row; one blank line between the declarations of an interface is kept when it was written.
+- The `use` items are sorted, one per line, followed by one blank line.
+- A literal, a call or a signature that would pass 100 columns is split, one element per line, with a trailing comma.
+- Comments stay where they are, attached to the line that follows them.
+
+`weasel fmt --check` writes nothing: it prints the path of every file that `fmt` would change, on standard output, and exits with `1` if there is one. A file with a syntax error is reported (§ 11.1) and left as it is.
 
 ### `weasel clean`
 
@@ -212,11 +251,9 @@ The following commands are planned ([ROADMAP.md](../../ROADMAP.md)):
 
 | Command | Purpose |
 |---|---|
-| `weasel build --all` | build every world |
-| `weasel test` | run the tests of the project |
-| `weasel publish` | publish a component or a WIT package with wasm-pkg-tools |
+| `weasel publish` | publish a component or a WIT package with wasm-pkg-tools, once the specification is stable |
 
-`weasel run` and `weasel serve`, planned in 0.3, are available in 0.4 (§ 14.2). Like `build`, they always take the world explicitly.
+`weasel run` and `weasel serve`, planned in 0.3, are available in 0.4 (§ 14.2). Like `build`, they always take the world explicitly. `weasel build --all`, `weasel test` and `weasel fmt` are specified for 0.5 (§ 14.2).
 
 ## 14.5 Values in `weasel call`
 

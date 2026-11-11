@@ -37,7 +37,7 @@ The typing rules refer to these categories:
 
 ## 7.3 Distinct types
 
-All types are distinct. No type converts implicitly to another: a `u32` cannot be used where a `u64` is expected, an integer cannot be used as a condition, a `bool` is not a number. Two records with the same fields are two different types, and `list<T>` and `list<mut T>` are two different types. Conversions between numeric types are written explicitly (§ 8.5).
+All types are distinct. No type converts implicitly to another: a `u32` cannot be used where a `u64` is expected, an integer cannot be used as a condition, a `bool` is not a number. Two records with the same fields are two different types, and `list<T>` and `list<mut T>` are two different types. Conversions between numeric types are written explicitly (§ 8.5). A type alias is not a new type: it is a second name of the type it aliases (§ 7.14).
 
 ## 7.4 Functions without a value
 
@@ -73,8 +73,8 @@ The categories of § 7.2 apply: `char`, enums and flags are scalar types, the ot
 
 ### `string`
 
-- A string is an immutable sequence of Unicode scalar values, encoded in UTF-8. Its length (`string::len`) is its number of **bytes**.
-- A string is always valid UTF-8: every way to build one (literals, `+`, `string::from_bytes`, `string::from_chars`, the component boundary) guarantees it.
+- A string is an immutable sequence of Unicode scalar values, encoded in UTF-8. Its length (`string.len`) is its number of **bytes**.
+- A string is always valid UTF-8: every way to build one (literals, `+`, `string.from_bytes`, `string.from_chars`, the component boundary) guarantees it.
 - Strings are compared by content with `==` and `!=`, and concatenated with `+` (§ 8.3).
 
 ### `list<T>` and `list<mut T>`
@@ -216,14 +216,14 @@ interface tree {
 
 | From | To | With |
 |---|---|---|
-| `list<mut T>` | `list<T>` | `list::freeze(xs)`: a new immutable list with the elements of `xs` |
-| `list<T>` or `list<mut T>` | `list<mut T>` | `list::copy(xs)`: a new mutable list with the elements of `xs` |
+| `list<mut T>` | `list<T>` | `list.freeze(xs)`: a new immutable list with the elements of `xs` |
+| `list<T>` or `list<mut T>` | `list<mut T>` | `list.copy(xs)`: a new mutable list with the elements of `xs` |
 
 ```wasl
 func digits() -> list<u8> {
-  local d: list<mut u8> = list::filled(3, 0);
+  local d: list<mut u8> = list.filled(3, 0);
   d[0] = 1;
-  return list::freeze(d);    // `return d;` would be E0400
+  return list.freeze(d);    // `return d;` would be E0400
 }
 ```
 
@@ -232,7 +232,7 @@ Why immutability is a guarantee and not a read-only view:
 - **A `list<T>` can be trusted.** A function that receives or stores a `list<T>` knows that its elements will never change, whatever the rest of the program does. Only `list<mut T>` values can be shared and modified at the same time.
 - **It prepares copy-free boundaries.** With the `gc` option of the Canonical ABI (§ 16), an immutable list can be handed to another component by reference, since nobody can modify it. A mutable list never crosses the boundary (§ 7.11). The language must therefore know, for every list, that it is really immutable.
 
-Most lists are built once, with a literal, `list::filled` or at the boundary, and need no `freeze`. The copy made by `list::freeze` is the price of building an immutable list element by element; the representation that makes it necessary today is explained in § 12.5.
+Most lists are built once, with a literal, `list.filled` or at the boundary, and need no `freeze`. The copy made by `list.freeze` is the price of building an immutable list element by element; the representation that makes it necessary today is explained in § 12.5.
 
 ## 7.11 Types in the WIT
 
@@ -243,7 +243,7 @@ Any type can be used for parameters, return values, locals, globals, fields, lis
 - nothing that can change: no `mut` field and no `list<mut T>`, at any depth (E0214);
 - no writable end of a stream or a future, `stream_writer<T>` or `future_writer<T>`, at any depth (E0222, § 7.13): WIT only names readable ends.
 
-**Mutability stays inside the component.** The WIT has no mutability, as it has no recursive types: what it cannot express stays internal. A record with a `mut` field, or a type that contains a `list<mut T>`, is declared in an interface that no world exports, and does not appear in an exported signature. An exported function that needs to change a list it receives takes a `list<T>` and works on `list::copy(xs)`; one that changes a record returns a new record.
+**Mutability stays inside the component.** The WIT has no mutability, as it has no recursive types: what it cannot express stays internal. A record with a `mut` field, or a type that contains a `list<mut T>`, is declared in an interface that no world exports, and does not appear in an exported signature. An exported function that needs to change a list it receives takes a `list<T>` and works on `list.copy(xs)`; one that changes a record returns a new record.
 
 This makes exported functions behave the same for every caller. Values that cross the boundary are copied today, while calls inside the component share them (§ 10.10). Since nothing that crosses can change, and the language has no identity comparison, a copy and a shared reference cannot be told apart. The same holds when the `gc` option of the Canonical ABI lets references cross without copy (§ 16).
 
@@ -252,9 +252,9 @@ interface counters {          // exported by a world
   record counter { hits: mut u32 }       // E0214: `hits` is `mut`
   func sort(xs: list<mut u32>) { … }     // E0214: `list<mut u32>`
   func sorted(xs: list<u32>) -> list<u32> {
-    local ys: list<mut u32> = list::copy(xs);
+    local ys: list<mut u32> = list.copy(xs);
     // … sort ys in place …
-    return list::freeze(ys);
+    return list.freeze(ys);
   }
 }
 ```
@@ -327,9 +327,9 @@ A resource has two representations, depending on where its object lives (§ 12.1
 A **handle type** is a resource type declared in an interface of another package, or in an interface of the package that at least one world imports. The ends of streams and futures, `stream<T>`, `stream_writer<T>`, `future<T>` and `future_writer<T>`, are handle types too (§ 7.13). The rules below apply to handle types everywhere in the package, so that the same code is valid in every world, whatever the representation the world gives it; the only exception is that the locals and parameters of the functions of the interface that declares the resource, which are only compiled where it is a struct, may hold it in any type:
 
 - A handle type can be the type of a local, a parameter, a match binding, the return type of a function, and the payload of an `option`, a `result` or a variant, or an element of a tuple, that is returned or passed on at once.
-- A value whose type contains a handle type, other than the handle type itself, is a **temporary**: the result of a call, or a constructor such as `option::some(c)` or `tuple(c, n)`, used at once by `?`, `match`, `return`, `_ =` or a destructuring `local (…) = e;` (§ 9.4, § 9.9).
+- A value whose type contains a handle type, other than the handle type itself, is a **temporary**: the result of a call, or a constructor such as `option.some(c)` or `tuple(c, n)`, used at once by `?`, `match`, `return` or a destructuring `local (…) = e;`, or discarded by a call statement (§ 9.4, § 9.6, § 9.9).
 - A handle type cannot appear in a record, a list, a global or a field, and a local, a parameter or a match binding cannot have a type that contains one without being one (E0220). This keeps the ownership of every handle in a single local, so that releasing it is a local decision (§ 9.9).
-- A tuple that holds a handle is the way WASI 0.3 returns several handles at once: `types::response::new(…)` returns `tuple<response, future<…>>`, `stream::new()` returns both ends of a stream. Its destructuring gives each handle its own local (§ 9.4). A tuple was a forbidden place for a handle in 0.3. Reading one element of such a tuple, `types::response::new(…).0`, is E0220: it would lose the other handles.
+- A tuple that holds a handle is the way WASI 0.3 returns several handles at once: `types::response::new(…)` returns `tuple<response, future<…>>`, `stream.new()` returns both ends of a stream. Its destructuring gives each handle its own local (§ 9.4). A tuple was a forbidden place for a handle in 0.3. Reading one element of such a tuple, `types::response::new(…).0`, is E0220: it would lose the other handles.
 - A local of a resource type needs an initial value (E0410), as for every heap type.
 - Resources cannot be compared: `==` does not apply to them (§ 8.3).
 
@@ -352,7 +352,7 @@ A **stream** carries a sequence of values from one component to another, and a *
 | `future_writer<T>` | the writable end of a future of `T` | none |
 
 ```wasl
-local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+local (body: stream<u8>, body_tx: stream_writer<u8>) = stream.new();
 // `body` is given to another component, which reads it; this one writes to `body_tx`.
 ```
 
@@ -364,3 +364,37 @@ local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
 - `stream` and `future` without an element type, which WIT allows, are not available (E0215, § 2.5).
 
 **The types come from the WIT of the world.** The Component Model creates the two ends with an instruction that names the type, `stream.new` or `future.new`. The tools that build a component from a core module, which `waslc` uses (§ 13.9), only know the stream and future types that appear in the functions of the WIT of the world. So a function reachable from the exports of a world can only use a stream or a future whose readable type appears in a function of that world, imported or exported (E0223). Programs meet this rule naturally: a stream connects two components, and the function of the other side, which receives or returns the readable end, names its type. `stdout::write_via_stream(data: stream<u8>)` lets a component create a `stream<u8>`; `types::response::new(…)` lets it create the `stream<u8>` of a body and the `future<result<option<types::trailers>, types::error_code>>` of its trailers. A stream between two functions of the same component could not be used anyway: in 0.4, two async tasks never run at the same time in one instance (§ 13.13), and the Component Model only copies numbers between two ends held by the same instance.
+
+## 7.14 Type aliases
+
+*Specified, not available yet.*
+
+A **type alias** gives a name to a type, inside an interface, as in WIT:
+
+```wasl
+interface shop {
+  type price = u64;                          // cents
+  type lines = list<order_line>;
+
+  record order_line { sku: string, quantity: u32, unit_price: price }
+
+  func total(lines: lines) -> price { … }
+}
+```
+
+```wit
+interface shop {
+  type price = u64;
+  type lines = list<order-line>;
+  record order-line { sku: string, quantity: u32, unit-price: price }
+  total: func(lines: lines) -> price;
+}
+```
+
+- An alias is **the same type** as the type it names: a `price` is a `u64`, a `u64` is a `price`, without conversion. It exists to document, and to write a long type once.
+- It is declared like the other types (§ 7.7): in an interface, in the namespace of its types and functions (E0206), named from another interface with a path, `shop::price` (§ 7.8). It can be used before its declaration.
+- The aliased type can be any type, including a built-in type, a declared type, another alias or a type of another package. An alias cannot name itself, directly or through other aliases (E0225): `type a = list<a>;` is not a recursive type, it is an error.
+- In the WIT, the alias is written `type name = T;` in its interface when the interface appears in the WIT (§ 13.1), and the signatures keep its name. An alias of a type that cannot appear in the WIT follows the rules of § 7.11 at the places where it is used.
+- An alias declared in another package, such as `wasi:clocks/types.instant`, is named the same way (§ 2.5).
+
+`type` only declares aliases. The other declarations keep their own word: `record`, `enum`, `variant`, `flags`, `resource`.

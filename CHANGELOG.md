@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The [v0.5 specification](docs/spec_v0.5/README.md) describes the features of 0.5, specified but not implemented yet (§ 1.10): locals without type, `for (x in xs)`, bodies without braces, built-in functions written `list.len(xs)`, call statements that discard their value (E0413 retired), structural `==`, type aliases, `///` doc comments, `use`, functions without body, the standard library `wasl:std` with `text`, `json`, `http`, `cli` and `fs` (chapter 17), and `weasel test`, `weasel fmt`, `weasel build --all`, `weasel run --dir`. New error codes E0224 to E0226 and E0420.
+- [`examples/shop`](examples/shop), the target program of 0.5: two HTTP services and a command sharing their logic, written for the v0.5 specification and not compiled yet (§ 15.10).
+
 ### Changed
 
 - The v0.4 specification is frozen. The [v0.5 specification](docs/spec_v0.5/README.md) continues it with the same section numbers and becomes the reference; it will receive the features of 0.5.

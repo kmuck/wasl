@@ -13,6 +13,8 @@ This chapter defines what a valid program computes. Most rules are those of WebA
 - In `e.f`, `e` is evaluated; in `e[i]`, `e` then `i`, then the bounds are checked.
 - The operands of `+` on strings are evaluated, then the new string is created.
 - In `match (e)`, `e` is evaluated once, then the block of its case runs.
+- In `for (x in xs)`, `xs` is evaluated once, before the first iteration (§ 9.10).
+- `a == b` on heap types evaluates `a`, then `b`, then compares them, field by field and element by element in order, and stops at the first difference (§ 8.3).
 
 ## 10.2 Integers
 
@@ -47,7 +49,7 @@ This chapter defines what a valid program computes. Most rules are those of WebA
 
 **Comparisons** use the signed order for signed types and the unsigned order for unsigned types: with `u32`, `1 < 4294967295` is `true`; with `s32`, `1 < -1` is `false`.
 
-**When wrapping is wanted.** Hashes, checksums and random number generators compute modulo 2ⁿ on purpose. They say so with the built-in functions of § 8.17: `u32::wrapping_add(h, c)` gives the result reduced modulo 2ⁿ, where n is the bit width of the type (`u8::wrapping_add(255, 1)` is `0`, `s8::wrapping_neg(-128)` is `-128`), and `u8::wrapping_from(n)` the low-order bits of `n`. A program that treats an overflow as an error rather than a trap uses `u64::checked_mul(a, b)`, which gives `option::none` instead of trapping.
+**When wrapping is wanted.** Hashes, checksums and random number generators compute modulo 2ⁿ on purpose. They say so with the built-in functions of § 8.17: `u32.wrapping_add(h, c)` gives the result reduced modulo 2ⁿ, where n is the bit width of the type (`u8.wrapping_add(255, 1)` is `0`, `s8.wrapping_neg(-128)` is `-128`), and `u8.wrapping_from(n)` the low-order bits of `n`. A program that treats an overflow as an error rather than a trap uses `u64.checked_mul(a, b)`, which gives `option.none` instead of trapping.
 
 **Why.** An exported call that traps fails alone: the host gets an error, and the instance is discarded with its state (§ 10.7). A wrong number, on the contrary, continues its way into a result, a stored value or another component. For a service that answers each request with a fresh instance, the trap is the failure that costs the least. WebAssembly already makes this choice for division (`div_s` traps on `MIN / -1`) and for its `trunc` conversions; the plain wrapping instructions remain available through the `wrapping_` functions.
 
@@ -76,7 +78,7 @@ Let `T(e)` be a conversion where `e` has type `S`. In the examples, `S` value �
 | `f32` → `f64` | the exact same value | |
 | `char` → `u32` | the code point of the char | `'A'` → 65 |
 
-The low-order bits of an integer, read as a `T`, are written `T::wrapping_from(e)` (§ 8.17): `u8::wrapping_from(n)` is `44` for `n: u32` = 300, `s8::wrapping_from(n)` is `−56` for `n: u8` = 200.
+The low-order bits of an integer, read as a `T`, are written `T.wrapping_from(e)` (§ 8.17): `u8.wrapping_from(n)` is `44` for `n: u32` = 300, `s8.wrapping_from(n)` is `−56` for `n: u8` = 200.
 
 ## 10.6 Calls and globals
 
@@ -93,17 +95,17 @@ A **trap** stops the current call immediately. The host receives an error and th
 | signed `MIN / -1` | `integer overflow` |
 | integer arithmetic or conversion whose exact result does not fit in its type (§ 10.2, § 10.5) | `integer overflow` |
 | conversion of a NaN float to an integer (§ 10.5) | `invalid conversion to integer` |
-| index outside a list: `xs[i]` or `xs[i] = e` with `i >= list::len(xs)` | `out of bounds array access` |
-| object too large: `list::filled(n, x)`, `+` or `list::copy` above the size limit of the runtime | `allocation size too large` |
+| index outside a list: `xs[i]` or `xs[i] = e` with `i >= list.len(xs)` | `out of bounds array access` |
+| object too large: `list.filled(n, x)`, `+` or `list.copy` above the size limit of the runtime | `allocation size too large` |
 | heap exhausted | the runtime's out-of-memory message |
 | call stack exhaustion (recursion too deep) | `call stack exhausted` |
 | use of a moved handle: a method call or an argument with the empty handle `0` (§ 9.9) | `unknown handle index 0` |
-| a stream end given to another component after its other end has left: a read that returned `option::none`, or a write that returned fewer elements (§ 10.12) | `unknown handle index 4294967295` |
+| a stream end given to another component after its other end has left: a read that returned `option.none`, or a write that returned fewer elements (§ 10.12) | `unknown handle index 4294967295` |
 | release of a `future_writer<T>` that has not written its value (§ 9.9, § 7.13) | `cannot drop future write end without first writing a value` |
 | every task waits and nothing can wake any of them, such as a task that reads a stream it writes itself (§ 10.12) | `deadlock detected: event loop cannot make further progress` |
 | a trap in an imported function, in the component or host that provides it | the message of that trap |
 
-Nothing else traps: float operations never trap, there is no null reference (the empty handle is not a reference), no failing cast, and no invalid UTF-8 (`string::from_bytes` returns `option::none`). Messages are those of the reference runtime; their exact text is not part of the language.
+Nothing else traps: float operations never trap, there is no null reference (the empty handle is not a reference), no failing cast, and no invalid UTF-8 (`string.from_bytes` returns `option.none`). Messages are those of the reference runtime; their exact text is not part of the language.
 
 ## 10.8 References and sharing
 
@@ -122,7 +124,7 @@ b.hits = 1;                   // a.hits is now 1 as well: a and b are the same r
 
 Sharing is only observable through what can change: `mut` fields and the elements of `list<mut T>`. Strings, tuples and `list<T>` never change, so whether two of them are the same object cannot be observed; the language has no identity comparison (§ 16).
 
-`list::filled(n, x)` shares `x` between all the elements: with a record `x` that has `mut` fields, changing the field through one element changes it for all of them.
+`list.filled(n, x)` shares `x` between all the elements: with a record `x` that has `mut` fields, changing the field through one element changes it for all of them.
 
 **Lifetime.** An object lives as long as it is reachable. The runtime's garbage collector reclaims it afterwards; a WaSL program never frees memory and cannot observe when an object is reclaimed.
 
@@ -130,7 +132,7 @@ Sharing is only observable through what can change: `mut` fields and the element
 
 ## 10.9 Creation
 
-Each evaluation of a record literal, a non-empty list literal, a tuple, a constructor with a payload, `+` on strings, `list::filled`, `list::copy`, `list::freeze`, `string::chars`, `string::from_chars` and `string::from_bytes` (when it returns `some`) creates a **new** object. Two evaluations of the same literal create two distinct objects.
+Each evaluation of a record literal, a non-empty list literal, a tuple, a constructor with a payload, `+` on strings, `list.filled`, `list.copy`, `list.freeze`, `string.chars`, `string.from_chars` and `string.from_bytes` (when it returns `some`) creates a **new** object. Two evaluations of the same literal create two distinct objects.
 
 String literals, constructors without payload and empty lists may be shared by the implementation: nothing can modify them, so the difference cannot be observed.
 
@@ -156,14 +158,14 @@ The difference cannot be observed. The values that cross the boundary contain no
 
 ## 10.12 Tasks and async calls
 
-Tasks, async calls, streams, futures and `task::return` are available.
+Tasks, async calls, streams, futures and `task.return` are available.
 
-- **A task** runs the body of an exported function for one call from outside (§ 2.8). It delivers its result once: at its `return e;`, at a `?` that propagates, at its `task::return(e);`, or at the end of its body when it has no return type. The caller resumes as soon as the result is delivered. After `task::return`, the task goes on running until its body ends.
+- **A task** runs the body of an exported function for one call from outside (§ 2.8). It delivers its result once: at its `return e;`, at a `?` that propagates, at its `task.return(e);`, or at the end of its body when it has no return type. The caller resumes as soon as the result is delivered. After `task.return`, the task goes on running until its body ends.
 - **An async call** suspends the calling task until the callee delivers its result. A function of an imported interface runs in another component or in the host. A function of the package compiled into the component is a plain call, which returns when its body ends.
 - **Suspension points.** Each async call, including the async built-in functions, is a point where other tasks of the same instance may run, and change its `mut` globals and the `mut` fields of the objects it shares with them. Between two suspension points, a task runs alone: code without an async call is never interrupted. The order in which waiting tasks resume is the runtime's.
-- **Streams are rendezvous.** A stream has no buffer: `stream::write` waits until the reader reads, and `stream::read` waits until the writer writes. The elements arrive in order, never duplicated, and none is lost while both ends exist. A write waits for ever if nobody reads: a function that returns a stream must deliver it with `task::return` before writing to it (§ 8.21).
-- **A future** is written once and read once: `future::write` waits until the reader takes the value, `future::read` until the writer gives it.
-- **A reader or a writer that leaves.** When the readable end of a stream is released, the writer is told: `stream::write` returns fewer elements than it was given, then `0`. When the readable end of a future is released, `future::write` returns `false`. When the writable end of a stream is released or closed, the reader reads the remaining elements, then `option::none`. An end whose other end has left holds no handle any more: reading or writing it again is allowed and does nothing, giving it to another component traps (§ 10.7, § 12.12). A `future_writer<T>` must write its value before it is released (§ 10.7).
+- **Streams are rendezvous.** A stream has no buffer: `stream.write` waits until the reader reads, and `stream.read` waits until the writer writes. The elements arrive in order, never duplicated, and none is lost while both ends exist. A write waits for ever if nobody reads: a function that returns a stream must deliver it with `task.return` before writing to it (§ 8.21).
+- **A future** is written once and read once: `future.write` waits until the reader takes the value, `future.read` until the writer gives it.
+- **A reader or a writer that leaves.** When the readable end of a stream is released, the writer is told: `stream.write` returns fewer elements than it was given, then `0`. When the readable end of a future is released, `future.write` returns `false`. When the writable end of a stream is released or closed, the reader reads the remaining elements, then `option.none`. An end whose other end has left holds no handle any more: reading or writing it again is allowed and does nothing, giving it to another component traps (§ 10.7, § 12.12). A `future_writer<T>` must write its value before it is released (§ 10.7).
 - **Waiting for nothing.** When every task waits and nothing outside the component can wake any of them, the runtime traps (§ 10.7). A task that reads a stream that it writes itself is the simplest case.
 - **Cancellation.** A caller can ask the Component Model to cancel a task, for instance when an HTTP client disconnects. In 0.4, a WaSL task is not told: it runs to its end, and its writes to readers that have left return fewer elements or `false` (§ 16).
 - **Instances in 0.4.** The compiler of 0.4 never runs two async tasks of one instance at the same time: an async task that waits keeps the instance, and the other async calls to that instance wait for their turn (§ 13.13). A call to an exported function that is not async can still run while an async task waits. A host that serves several requests at once creates several instances, which `weasel serve` does (§ 14.2). Programs must not rely on this: when a later compiler interleaves the tasks of an instance (§ 16), the suspension points stay the only guarantee.

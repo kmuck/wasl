@@ -1,6 +1,6 @@
 # 6. Declarations
 
-A source file contains three kinds of top-level declarations: `world`, `interface` and `global`. Their role in the Component Model is described in chapter 2; this chapter gives their rules. Type declarations, which live inside interfaces, are in § 7.7.
+A source file starts with its `use` items (§ 6.6), then contains three kinds of top-level declarations: `world`, `interface` and `global`. Their role in the Component Model is described in chapter 2; this chapter gives their rules. Type declarations, which live inside interfaces, are in § 7.7.
 
 ## 6.1 Package namespace
 
@@ -19,6 +19,8 @@ world calculator {
 ```
 
 ```wasl
+use wasi:cli/stdout;
+
 world orders_service {
   import accounts;                  // an interface of the package, provided by another component
   import wasi:cli/stdout;           // an interface of a dependency
@@ -31,7 +33,7 @@ world orders_service {
 
 - A world contains `import` and `export` items, in any order. Their order is the order of the WIT (§ 13.1).
 - `export <name>;` names an interface of the package. An unknown name, or the name of a world or a global, is an error (E0203). An interface can be exported only once per world (E0204). The same interface can be exported by several worlds.
-- `export <foreign name> { … }` implements an interface of a dependency for this world (§ 2.4.2). The interface must exist in a dependency (E0215), and the block must match its WIT (E0218).
+- `export <foreign name> { … }` implements an interface of a dependency for this world (§ 2.4.2). The interface must exist in a dependency (E0215), and the block must match its WIT (E0218). For an interface of a library with functions without body, the block contains exactly those functions (§ 2.4.3).
 - `import <name>;` names an interface of the package (unknown name: E0203); `import <foreign name>;` an interface of a dependency (E0215). A world imports an interface at most once, and never imports an interface it exports (E0216).
 - A world can be empty; it then produces a component without imports or exports.
 - Each world is compiled into its own component (§ 2.3); the interfaces it imports are not compiled into it (§ 2.5).
@@ -76,7 +78,7 @@ func clamp(x: s32, lo: s32, hi: s32) -> s32 { … }
 func reset() { … }
 ```
 
-- A function has zero or more parameters and zero or one return value. The type of each parameter and of the return value is required.
+- A function has zero or more parameters and zero or one return value. The type of each parameter and of the return value is required: a signature is the contract of the WIT, never inferred.
 - Two parameters of the same function cannot have the same name (E0304).
 - A function is declared inside an interface, inside a resource (a method or a static function, § 7.12) or inside the foreign export block of a world (§ 2.4.2); there are no free functions at the top level.
 - The rules of the body are in chapters 8 (typing) and 9 (names).
@@ -88,3 +90,23 @@ func reset() { … }
 ```wasl
 async func fetch(url: string) -> result<string, fetch_error> { … }
 ```
+- A function **without body**, its signature followed by `;`, is only allowed in an interface of a library (§ 2.4.3); in an interface of the package it is E0224.
+
+## 6.6 `use`
+
+*Specified, not available yet.*
+
+```wasl
+use wasl:std/json;
+use wasi:cli/stdout;
+use wasi:http/types as http_types;
+```
+
+- `use <foreign name>;` makes an interface of another package nameable **in the file where it is written**, by the last part of its name: `json::parse(s)`, `stdout::write_via_stream(rx)`. `use <foreign name> as <name>;` names it `<name>` instead: `http_types::request`.
+- The `use` items come before the declarations of the file (E0100). The interface must exist in a dependency of the project or in the standard library (E0215, § 3.5). A file uses an interface at most once (E0217).
+- In one file, the names of the used interfaces, the names of the interfaces of the package and the names of the worlds and globals of the package are all different (E0217). This is what `as` is for: `wasi:cli/types` and `wasi:http/types` are both `types`, and a file that needs both renames one of them.
+- `use` only gives a name. It does not import anything into a component: the imports of a component are the `import` items of its world (§ 2.5). The names after `import` and `export` in a world are full foreign names and need no `use`.
+- An interface of the package needs no `use`: it is visible in every file (§ 2.1).
+- The name given by `as` exists only in the source. The WIT and the component keep the full name of the interface.
+
+`use` is the `use` of WIT, where a file names an interface of another package with `use wasi:http/types as http-types;` and `import` is reserved to worlds. In 0.4, an interface of another package imported or exported by a world was nameable in every file; from 0.5 a file names what it uses.

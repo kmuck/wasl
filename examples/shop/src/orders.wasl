@@ -1,0 +1,48 @@
+use wasl:std/http;
+
+/// The orders service: `POST /orders` with an order in JSON answers its total.
+/// Run it with `weasel serve orders`, then
+/// `curl -d '{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}' http://127.0.0.1:8080/orders`.
+world orders {
+  export wasl:std/http {
+    async func handle(request: request) -> response {
+      local r = router(request);
+      if (r.post("/orders"))
+        return checkout::quote(request);
+      return r.unsupported();
+    }
+  }
+}
+
+interface checkout {
+
+  func quote(request: http::request) -> http::response {
+    match (read_order(request)) {
+      case ok(order) {
+        match (shop::total(order)) {
+          case ok(cents) {
+            return http::reply(200, "application/json", "{\"total\":" + u64.to_string(cents) + "}\n");
+          }
+          case err(e) {
+            return http::reply(422, "text/plain", shop::describe(e) + "\n");
+          }
+        }
+      }
+      case err(message) {
+        return http::reply(400, "text/plain", message + "\n");
+      }
+    }
+  }
+
+  func read_order(request: http::request) -> result<shop::order, string> {
+    match (http::body_text(request)) {
+      case some(body) {
+        return shop::order_from_json(body);
+      }
+      case none {
+        return result.err("the body is not UTF-8");
+      }
+    }
+  }
+
+}

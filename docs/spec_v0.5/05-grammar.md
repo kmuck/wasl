@@ -15,7 +15,8 @@ The grammar is written in EBNF:
 ## 5.2 Complete grammar
 
 ```ebnf
-file              = { declaration } ;
+file              = { use } { declaration } ;
+use               = "use" foreign_name [ "as" identifier ] ";" ;
 declaration       = world | interface | global ;
 
 (* Declarations, chapter 6 *)
@@ -27,7 +28,8 @@ interface_name    = identifier | foreign_name ;
 foreign_name      = identifier ":" identifier "/" identifier ;
 
 interface         = "interface" identifier "{" { interface_item } "}" ;
-interface_item    = function | record | enum | variant | flags | resource ;
+interface_item    = function | record | enum | variant | flags | resource | alias ;
+alias             = "type" identifier "=" type ";" ;
 
 record            = "record" identifier "{" field { "," field } [ "," ] "}" ;
 field             = identifier ":" [ "mut" ] type ;
@@ -42,8 +44,9 @@ resource_item     = field ","
 
 global            = "global" identifier ":" [ "mut" ] type "=" expression ";" ;
 
-function          = [ "async" ] "func" identifier "(" [ parameters ] ")" [ "->" type ] block ;
-parameters        = parameter { "," parameter } ;
+function          = [ "async" ] "func" identifier "(" [ parameters ] ")" [ "->" type ]
+                    ( block | ";" ) ;
+parameters        = parameter { "," parameter } [ "," ] ;
 parameter         = identifier ":" type ;
 
 (* Types, chapter 7 *)
@@ -69,26 +72,31 @@ primitive_type    = "bool" | "s8" | "s16" | "s32" | "s64"
 block             = "{" { statement } "}" ;
 
 statement         = local_declaration
-                  | assignment
                   | if
                   | while
+                  | for
                   | match
+                  | "task" "." "return" "(" expression ")" ";"
+                  | simple_statement ;
+
+simple_statement  = assignment
                   | "break" ";"
                   | "continue" ";"
                   | "return" [ expression ] ";"
-                  | call_statement ";"
-                  | "_" "=" call_statement ";"
-                  | "task" "::" "return" "(" expression ")" ";" ;
+                  | call_statement ";" ;
 
-local_declaration = "local" identifier ":" type [ "=" expression ] ";"
+local_declaration = "local" identifier [ ":" type ] "=" expression ";"
+                  | "local" identifier ":" type ";"
                   | "local" "(" binding { "," binding } [ "," ] ")" "=" expression ";" ;
-binding           = identifier ":" type | "_" ;
+binding           = identifier [ ":" type ] | "_" ;
 assignment        = place "=" expression ";" ;
 place             = identifier { selector } | "self" selector { selector } ;
 selector          = "." ( identifier | int_literal ) | "[" expression "]" ;
 call_statement    = postfix ;   (* ending with a call, a method call or "?", § 5.3 *)
-if                = "if" "(" expression ")" block [ "else" ( if | block ) ] ;
-while             = "while" "(" expression ")" block ;
+body              = block | simple_statement ;
+if                = "if" "(" expression ")" body [ "else" ( if | body ) ] ;
+while             = "while" "(" expression ")" body ;
+for               = "for" "(" identifier "in" expression ")" body ;
 match             = "match" "(" expression ")" "{" match_case { match_case }
                     [ "else" block ] "}" ;
 match_case        = "case" identifier [ "(" identifier ")" ] block ;
@@ -117,6 +125,7 @@ primary           = int_literal
                   | "self"
                   | path
                   | call
+                  | builtin
                   | conversion
                   | record_literal
                   | flags_literal
@@ -124,12 +133,13 @@ primary           = int_literal
                   | tuple_literal
                   | "(" expression ")" ;
 
-path              = path_head "::" identifier [ "::" identifier ] ;
-path_head         = identifier | "char" | "string" | "list" | "option" | "result"
+path              = identifier "::" identifier [ "::" identifier ] ;
+call              = [ identifier "::" [ identifier "::" ] ] identifier "(" [ arguments ] ")" ;
+builtin           = builtin_type "." identifier [ "(" [ arguments ] ")" ] ;
+builtin_type      = "char" | "string" | "list" | "option" | "result"
                   | "stream" | "future" | int_type ;
 int_type          = "s8" | "s16" | "s32" | "s64" | "u8" | "u16" | "u32" | "u64" ;
-call              = [ path_head "::" [ identifier "::" ] ] identifier "(" [ arguments ] ")" ;
-arguments         = expression { "," expression } ;
+arguments         = expression { "," expression } [ "," ] ;
 conversion        = primitive_type "(" expression ")" ;
 record_literal    = type_name "{" field_value { "," field_value } [ "," ] "}" ;
 field_value       = identifier ":" expression ;
@@ -144,28 +154,44 @@ These rules follow from the grammar; they are listed because they differ from ma
 
 **Blocks and conditions**
 
-- Braces are **required** after `if`, `else`, `while`, each `case` and the `else` of a `match`: `if (x > 0) return x;` is invalid. An empty block is allowed: `case none { }`.
-- The condition of `if` and `while`, and the expression of `match`, are **always in parentheses**: `if x > 0 { … }` is invalid.
-- `else if` chains a new `if` directly; it is the only form where `else` is not followed by `{`.
+- The **body** of `if`, `else`, `while` and `for` is a block, or a single **simple statement**: an assignment, `break`, `continue`, `return` or a call statement. `if (x > 0) return x;` is valid. Anything else needs braces: a `local`, an `if`, a loop, a `match` or `task.return`. `if (a) if (b) f();` is invalid, so an `else` always belongs to the nearest `if`, without ambiguity.
+- Each `case` and the `else` of a `match` always take a block. An empty block is allowed: `case none { }`.
+- The compiler does not look at whitespace: `if (n == 0) return 1;` on one line and the same statement on the next line, indented, are the same program. `weasel fmt` writes a simple statement body on the next line, indented (§ 14.2):
+
+```wasl
+if (list.len(args) < 2)
+  return result.err("usage: hello <name>");
+else
+  print("Hello, " + args[1] + "!\n");
+
+for (p in products)
+  total = total + p.price;
+```
+
+- The condition of `if` and `while`, the list of `for` and the expression of `match` are **always in parentheses**: `if x > 0 { … }` and `for x in xs { … }` are invalid.
+- `else if` chains a new `if` directly.
 - A block is not a statement: a `{ … }` cannot appear on its own inside a function body.
 
 **Statements**
 
 - Every simple statement ends with `;`. No `;` follows a `}`.
-- Only an assignment or a call statement can start with a name or `self`. A statement that starts with a name followed by anything other than `=`, `(`, `::`, `.` or `[` is invalid: `x + 1;` and `x;` are invalid.
+- Only an assignment or a call statement can start with a name, `self` or a built-in type name. A statement that starts with a name followed by anything other than `=`, `(`, `::`, `.` or `[` is invalid: `x + 1;` and `x;` are invalid.
 - The target of an assignment starts with a name or `self`, followed by any number of field accesses and indexes: `x = …`, `c.hits = …`, `self.items = …`, `rows[i].cells[j] = …`. `self` itself cannot be assigned: `self = c;` is invalid. A call cannot appear in an assignment target: `f().x = 1;` and `c.last().sku = …` are invalid.
-- A **call statement** is a name followed by selectors, method calls and `?`, whose last element is a call, a method call or a `?`: `f(x);`, `math::reset();`, `c.add(x);`, `c.add(x)?;`, `items[0].cart.clear();`. A statement made of a name and field accesses or indexes only is invalid: `inv.status;`.
-- An expression is not a statement: `1;` and `f(1) + 2;` are invalid. A call statement is the only expression that can be used as a statement (§ 9.6).
-- `_ = f(…);` discards the value of a call statement (§ 9.6). Only a call statement can follow `_ =`: `_ = x;` is invalid, `_ = c.add(x)?;` is valid.
+- A **call statement** is a name or a built-in call followed by selectors, method calls and `?`, whose last element is a call, a method call or a `?`: `f(x);`, `math::reset();`, `c.add(x);`, `c.add(x)?;`, `items[0].cart.clear();`, `stream.write(tx, bytes);`. A statement made of a name and field accesses or indexes only is invalid: `inv.status;`.
+- An expression is not a statement: `1;` and `f(1) + 2;` are invalid. A call statement is the only expression that can be used as a statement, and its value, if any, is discarded (§ 9.6).
 - `match` is a statement, not an expression. It has at least one `case`; `else`, if present, comes last.
 - There are no compound assignments (`+=`, `-=`, …) and no `++` / `--`: write `i = i + 1;`.
-- `local` always has a type: `local x = 5;` is invalid.
-- A **destructuring** `local (a: A, b: B) = e;` declares one local per element of a tuple, each with its type, or `_` for an element that is not kept (§ 9.4). It always has a value: `local (a: u32, b: u32);` is invalid. Its elements are names, never patterns: `local ((a: u32, b: u32), c: u32) = e;` is invalid.
-- `task::return(e);` is a statement of its own (§ 8.21), not a call: it cannot be used as a value, `local x: u32 = task::return(1);` is invalid, and `_ = task::return(1);` too.
+- `local` has a type, an initial value, or both: `local x = 5;`, `local x: u32 = 5;` and `local x: u32;` are valid, `local x;` is invalid. Without a type, the local takes the type of its initial value (§ 9.4).
+- A **destructuring** `local (a, b: B) = e;` declares one local per element of a tuple, each with its type or without, or `_` for an element that is not kept (§ 9.4). It always has a value: `local (a: u32, b: u32);` is invalid. Its elements are names, never patterns: `local ((a, b), c) = e;` is invalid.
+- `for (x in xs)` declares `x`, without a type, and runs its body once per element of the list `xs` (§ 9.10).
+- `task.return(e);` is a statement of its own (§ 8.21), not a call: it cannot be used as a value, `local x: u32 = task.return(1);` is invalid.
 
 **Declarations**
 
+- The `use` items of a file come before its declarations (§ 6.6).
 - A `global` is declared at the top level, never inside an interface.
+- A **type alias** `type name = T;` is declared inside an interface, like the other types (§ 7.14).
+- A function without body ends with `;` after its signature: `async func handle(request: request) -> response;` (§ 2.4.3). A method, a static function, a constructor and a function of a foreign export block always have a body.
 - An interface contains functions and type declarations, in any order. A type can be used before its declaration.
 - A `world` only contains `import` and `export` items: types are not declared in worlds. The block of a foreign export only contains functions (§ 2.4.2).
 - A foreign name is written `namespace:package/interface`, with WaSL identifiers and no version: `wasi:cli/run`, `example:catalog/carts`. An interface of the package is written with its name alone; `export` of an interface of the package ends with `;`, `export` of a foreign interface is followed by its implementation in braces.
@@ -177,12 +203,12 @@ These rules follow from the grammar; they are listed because they differ from ma
 
 - A comparison is not associative: `a < b < c` is invalid; write `a < b && b < c`.
 - A conversion is the name of a primitive type followed by a parenthesized expression: `u64(n)`. A type name is not an expression on its own.
-- An integer type followed by `::` starts a call to one of its built-in functions, `u32::wrapping_add(a, b)`; followed by `(`, it is a conversion, `u32(x)` (§ 8.17).
-- A path has at most two `::`: `status::paid`, `invoices::status::paid`, `invoices::discount::percent(10)`. A call has an optional path: `fib(n)`, `math::fib(n)`, `string::len(s)`.
+- A **built-in type name followed by `.`** names a built-in function or constructor of that type: `list.len(xs)`, `string.bytes(s)`, `u32.wrapping_add(a, b)`, `u32.to_string(n)`, `option.none`, `result.ok(x)`, `stream.new()`, `task.return(v)` (§ 8.17, § 8.21). An integer type followed by `(` is a conversion, `u32(x)`. `::` is only for names declared in code: `status::paid`, `math::fib(n)`. `list::len(xs)` and `status.paid` are invalid.
+- A path has at most two `::`: `status::paid`, `invoices::status::paid`, `invoices::discount::percent(10)`. A call has an optional path: `fib(n)`, `math::fib(n)`.
 - A `{` directly after a type name starts a record literal or a flags literal: a record literal has a `:` after its first name (`line { label: … }`), a flags literal has none (`delivery { paper }`, `delivery { }`). Because the conditions of `if`, `while` and `match` are always in parentheses, `if (x) { … }` and `line { … }` are never confused.
 - Field access and indexing apply to any expression of the right type, and chain from left to right: `all[i].customer`, `sample().lines[0]`.
-- A `.` followed by a name and `(` is a method call: `c.add(x)`, `stdout::get_stdout().blocking_flush()` (§ 8.20). A field that holds a value cannot be called: `r.f(x)` always calls the method `f`.
+- A `.` after an expression followed by a name and `(` is a method call: `c.add(x)`, `stdout::get_stdout().blocking_flush()` (§ 8.20). A field that holds a value cannot be called: `r.f(x)` always calls the method `f`. The built-in functions are never methods: `xs.len()` is invalid, write `list.len(xs)`.
 - `?` applies to the postfix expression on its left and binds tighter than every operator: `-f()?` is `-(f()?)`, `c.last_line()?.sku` reads the field of the payload (§ 8.19).
 - `borrow<T>` is a type, but it is accepted only as the type of a parameter (§ 7.12, E0219).
 - There is no `await`: a call to an async function waits by itself (§ 2.8). `f(x).await` and `await f(x)` are E0101, not E0100, so that the message can say to remove it (§ 4.4).
-- Commas separate the fields of a record literal, the flags of a flags literal and the elements of a list or a tuple; a trailing comma is allowed, which keeps multi-line literals uniform.
+- Commas separate the fields of a record literal, the flags of a flags literal, the elements of a list or a tuple, the parameters of a function and the arguments of a call; a trailing comma is allowed, which keeps multi-line literals and calls uniform (§ 14.2, `weasel fmt`).

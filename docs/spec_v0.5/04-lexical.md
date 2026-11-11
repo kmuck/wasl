@@ -12,6 +12,7 @@ The lexer splits each source file into **tokens**: keywords, identifiers, litera
 ## 4.2 Comments
 
 - `//` starts a comment that extends to the end of the line. A comment may contain any UTF-8 character.
+- `///` starts a **doc comment**, which also extends to the end of the line. A run of doc comments documents the declaration that follows it: a world, an interface, a function, a type, a field, a case, a flag or a resource item. The compiler copies it into the generated WIT, which has exactly the same comments (§ 13.1), so that the tools that read WIT (editors, bindings generators, registries) show it. A doc comment that is followed by anything else, such as a statement or another comment, is an ordinary comment: it is ignored. `////` and more are ordinary comments.
 - There is no other form of comment (no `/* … */`).
 
 ## 4.3 Identifiers
@@ -44,8 +45,8 @@ The lexer reads the longest run of ASCII letters, digits and `_` starting with a
 
 ```
 world interface export import global mut local func
-if else while break continue return true false
-record enum variant flags match case
+if else while for in break continue return true false
+record enum variant flags match case type use as
 resource constructor static self borrow
 async task
 ```
@@ -61,18 +62,20 @@ stream future stream_writer future_writer
 **Reserved words**, which are not used yet but cannot be identifiers, for future versions and for compatibility with WIT:
 
 ```
-package use type map own
+package map own
 await subtask
-include with as
+include with
 ```
 
 Any keyword, type name or reserved word written where an identifier is expected is an error (E0005): `local record: u32 = 1;`, `local while: u32 = 1;`, `func string() { }`.
 
-`async`, `task`, `stream`, `future`, `stream_writer` and `future_writer` are used from 0.4 (§ 2.8, § 7.13, § 8.21). They are all keywords. `task` names the built-in functions of the current task, as `list` names those of lists: `task::return(v)`. `subtask` is reserved for concurrency inside a task (§ 16).
+`async`, `task`, `stream`, `future`, `stream_writer` and `future_writer` are used from 0.4 (§ 2.8, § 7.13, § 8.21). They are all keywords. `task` names the built-in functions of the current task, as `list` names those of lists: `task.return(v)`. `subtask` is reserved for concurrency inside a task (§ 16).
+
+`for` and `in` (§ 9.10), `type` (§ 7.14), `use` and `as` (§ 6.6) are used from 0.5. `in` was not reserved before: an identifier named `in` is E0005 from 0.5.
 
 **`await`.** WaSL has no `await`: a call to an async function waits by itself (§ 2.8). `await` written anywhere is an error of its own (E0101), whose message says to remove it, so that code written by habit from Rust or JavaScript is corrected at once: `client::send(req).await?` and `await client::send(req)` both report E0101.
 
-The case names `some`, `none`, `ok` and `err` are **not** keywords: they are always written after `option::` or `result::`, or after `case` (§ 8.16), so they never collide with user names.
+The case names `some`, `none`, `ok` and `err` are **not** keywords: they are always written after `option.` or `result.`, or after `case` (§ 8.16), so they never collide with user names.
 
 ## 4.5 Integer literals
 
@@ -134,4 +137,4 @@ A char literal contains exactly one Unicode scalar value, written directly or as
 - The lexer always takes the longest possible token: `<<` is one token, not two `<`; `::` is one token, not two `:`; `->` is one token, not `-` followed by `>`.
 - `.` after the digits of a number starts a float literal (§ 4.6), so `1.5` is a float and `inv.status` is a field access.
 - `?` is the error propagation operator, written after an expression (§ 8.19). It does not combine with `.` or `:`: there is no `?.` or `??`.
-- **Wildcard.** A word made of a single `_` is the token `_`, used only in `result<_, E>` (§ 7.6), in `_ = f();` (§ 9.6) and in a destructuring, `local (a: A, _) = e;` (§ 9.4). Any other identifier starting or ending with `_` remains E0004.
+- **Wildcard.** A word made of a single `_` is the token `_`, used only in `result<_, E>` (§ 7.6) and in a destructuring, `local (a: A, _) = e;` (§ 9.4). Any other identifier starting or ending with `_` remains E0004.

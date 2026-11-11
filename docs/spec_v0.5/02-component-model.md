@@ -5,7 +5,7 @@ This chapter explains how a WaSL program is structured and how that structure ma
 ## 2.1 Packages
 
 - A WaSL **project** is a WIT **package**. Its identity `namespace:name@version` (e.g. `example:calc@0.1.0`) is declared in the manifest `wasl.toml` (§ 3.2).
-- All the source files of the project belong to the package (§ 3.3). There is no import between files: everything declared in the package is visible everywhere in it.
+- All the source files of the project belong to the package (§ 3.3). There is no import between files: everything declared in the package is visible everywhere in it. A file names the interfaces of **other** packages it uses with `use` (§ 6.6).
 - The top-level declarations of a package are `world`s, `interface`s and `global`s (chapter 6). Types are declared inside interfaces (§ 7.7).
 
 ## 2.2 Interfaces
@@ -80,7 +80,8 @@ Rules:
 
 - The name after `export` is the name of the interface in WIT, `<namespace>:<package>/<interface>`, written with WaSL identifiers: `wasi:http/incoming_handler` for `wasi:http/incoming-handler` (§ 13.2). It has no version: the version is the one of the dependency, declared in the manifest (§ 3.2). The package must be a dependency of the project (E0215).
 - The block after the name implements that interface **for this world only**. Each world that exports it has its own implementation.
-- The block must implement every function of the foreign interface, with exactly the signatures that its WIT declares, and nothing else (E0218). The types of the interface are named with the interface's own name as path (`types::request`), as for an imported interface (§ 2.5).
+- The block must implement every function of the foreign interface, with exactly the signatures that its WIT declares, and nothing else (E0218).
+- Inside the block, the names of the exported interface are written **without path**, as inside an interface of the package: its types, the types it takes from other interfaces with a WIT `use` (`request` in `wasi:http/handler`), and its functions. `types::request` stays valid when the file has `use wasi:http/types;` (§ 6.6).
 - The functions of the block can call the functions of the package interfaces (`math::fib(…)`), the functions of the interfaces the world imports, and the other functions of the same block (by their name).
 - A foreign interface can only be implemented in a world. An `interface` block always declares an interface of the package.
 
@@ -99,11 +100,53 @@ world main {
 }
 ```
 
+### 2.4.3 Functions without body
+
+*Specified, not available yet.*
+
+An interface written in WaSL can declare a function **without body**: its signature followed by `;`. Such a function is part of the contract of the interface, and its implementation is written by each world that exports the interface, in the block of a foreign export, exactly like a function of a WIT interface (§ 2.4.2). This is how a library asks the program that uses it to provide a function: the standard library declares `handle` in `wasl:std/http` and `run` in `wasl:std/cli` (chapter 17).
+
+```wasl
+// in wasl:std/http (chapter 17)
+interface http {
+  record request { method: string, path: string, … }
+  record response { status: u16, … }
+
+  async func handle(request: request) -> response;      // written by the program
+
+  func reply(status: u16, content_type: string, body: string) -> response { … }
+}
+```
+
+```wasl
+// in the program
+world catalog {
+  export wasl:std/http {
+    async func handle(request: request) -> response {
+      if (request.method == "GET" && request.path == "/products")
+        return reply(200, "application/json", products::all());
+      return reply(404, "text/plain", "not found\n");
+    }
+  }
+}
+```
+
+Rules:
+
+- Only an interface of a **library**, a dependency written in WaSL whose sources are compiled with the package (§ 3.5), can declare a function without body. In an interface of the package, a function without body is an error (E0224): the package would have no implementation for it.
+- A world that exports such an interface writes `export <foreign name> { … }`, and its block contains exactly the functions without body, with their signatures (E0218). The functions that have a body belong to the library: they are compiled into the component with the block, and the block does not repeat them. Inside the block, all the names of the interface are written without path (§ 2.4.2): `request`, `response`, `reply`.
+- The functions written in the block have no name outside it, as every function of a foreign export block: they are entry points, called by the host or by another component. The other functions of the interface are called with a path anywhere in the package, `http::reply(…)`, when the file uses the interface (§ 6.6).
+- In the WIT, the interface is exported with all its functions, with and without body, like an interface of the package (§ 13.1): its types and signatures must therefore follow § 7.11.
+
+**In the binary.** The component of the world exports the interface of the library, under the library's name (`wasl:std/http@0.5.0`), with the functions of the block and the functions of the library. Nothing else changes: a function without body is the `func` of a WIT interface, whose implementation a component provides. What makes the standard library useful is the component it composes with it (§ 17.1), which turns `wasl:std/http` into `wasi:http/handler`.
+
 ## 2.5 Imports
 
 A world can also **import** interfaces: interfaces whose implementation is provided by the host (WASI interfaces such as `wasi:cli/stdout` or `wasi:filesystem/types`) or by another component.
 
 ```wasl
+use example:catalog/carts;
+
 world checkout {
   import example:catalog/carts;
   export orders;
@@ -112,14 +155,14 @@ world checkout {
 interface orders {
   func quote(sku: string, quantity: u32) -> result<u64, carts::cart_error> {
     local c: carts::cart = carts::cart::of(sku, quantity)?;
-    return result::ok(c.total());
+    return result.ok(c.total());
   }
 }
 ```
 
 There are two kinds of imports:
 
-- **An interface of another package**, `import <namespace>:<package>/<interface>;`, written like a foreign export (§ 2.4.2), from a dependency of the project (§ 3.5). Its functions and types are named with the last part of its name as path: `carts::cart`, `stdout::get_stdout()`. WaSL code calls them directly, without generated bindings.
+- **An interface of another package**, `import <namespace>:<package>/<interface>;`, written like a foreign export (§ 2.4.2), from a dependency of the project (§ 3.5). A file that names it has `use <namespace>:<package>/<interface>;` (§ 6.6), and then names its functions and types with the last part of its name as path: `carts::cart`, `stdout::get_stdout()`. WaSL code calls them directly, without generated bindings.
 - **An interface of the same package**, `import <interface>;`. In the component of this world, the interface is not compiled in: every call to its functions goes to another component, which provides it, usually the component of another world of the package that exports it. This is how the services of one project call each other while each one is deployed, scaled and instantiated on its own:
 
 ```wasl
@@ -136,7 +179,7 @@ world orders_service {
 Rules:
 
 - A world imports an interface at most once, and cannot both import and export it (E0216).
-- Two interfaces that code can name, the interfaces of the package and the interfaces of other packages that a world of the package imports or exports, cannot have the same last name (E0217): `example:catalog/carts` cannot coexist with an `interface carts` of the package.
+- In one file, two interfaces that code can name, the interfaces of the package and the interfaces of other packages that the file uses, cannot have the same name (E0217): a file that has `use example:catalog/carts;` cannot be in a package with an `interface carts`. `use … as` gives the foreign interface another name in the file: `use wasi:http/types as http_types;` (§ 6.6).
 - A function reachable from the exports of a world that calls a function of another package must belong to a world that imports that interface (E0221). An interface of the package that a world does not import is compiled into its component, as in § 2.3.
 - An imported interface has no implementation in the component: its functions are imported functions of the core module (§ 13.10). Its resources are **handles** (§ 7.12).
 - An item of an interface of another package that WaSL cannot use, because its name gives no WaSL identifier (§ 13.2), or because it uses a WIT type WaSL does not have (`map`, `error-context`, or a `stream` or `future` without an element type), can be named, but naming it is an error (E0215) that says why. The other items of the interface stay usable. Async functions can be used (§ 2.8). The types `stream<T>` and `future<T>` can be used too (§ 7.13).
@@ -147,6 +190,7 @@ Why this model:
 - **It is the Component Model.** A world lists its imports and its exports; WIT names them the same way. The component carries the code of its exports and nothing of its imports.
 - **The two kinds are the two ways to reuse code.** Without `import`, an interface of the package is a library: its code is copied into each component that uses it (§ 2.3). With `import`, it is a service: one component provides it, the others call it at run time, with their own instance and their own state.
 - **No version in the source.** A dependency has one version, written once in the manifest (§ 3.2); the generated WIT writes it (§ 13.1), so the source and the manifest cannot disagree.
+- **`import` and `use` are the two words of WIT.** In WIT too, a world `import`s an interface, which becomes an import of the component, and a file or an interface `use`s one, which only gives it a name. WaSL keeps them apart for the same reason: naming an interface never changes the binary.
 
 ## 2.6 The WIT of a package
 
@@ -199,31 +243,34 @@ A **resource** is the Component Model's object: a type with an identity, a priva
 
 ## 2.8 Async functions and tasks
 
-Async functions, streams, futures and `task::return` are available.
+Async functions, streams, futures and `task.return` are available.
 
 WASI 0.3 makes input and output async: `wasi:cli/run` declares `run: async func() -> result`, and `wasi:http/handler` declares `handle: async func(request: request) -> result<response, error-code>`. WaSL takes the async model of the Component Model as it is:
 
 ```wasl
+use wasi:cli/types;
+use wasi:cli/stdout;
+
 world hello {
   import wasi:cli/types;
   import wasi:cli/stdout;
 
   export wasi:cli/run {
     async func run() -> result {
-      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();
       local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
-      _ = stream::write(tx, string::bytes("Hello, world!\n"));   // waits until stdout has taken the bytes
-      stream::close(tx);
-      match (future::read(done)) {                             // waits until stdout is done
-        case ok { return result::ok; }
-        case err { return result::err; }
+      stream.write(tx, string.bytes("Hello, world!\n"));       // waits until stdout has taken the bytes
+      stream.close(tx);
+      match (future.read(done)) {                             // waits until stdout is done
+        case ok { return result.ok; }
+        case err { return result.err; }
       }
     }
   }
 }
 ```
 
-- **Tasks.** Each call of an exported function is a **task** of the Component Model. A task delivers its result to its caller once. An async task can deliver it before its end, with `task::return`, and go on running: an HTTP handler returns its response, then writes its body (§ 8.21).
+- **Tasks.** Each call of an exported function is a **task** of the Component Model. A task delivers its result to its caller once. An async task can deliver it before its end, with `task.return`, and go on running: an HTTP handler returns its response, then writes its body (§ 8.21).
 - **`async func`** declares an async function, the `async func` of WIT, wherever WIT allows one: in an interface, in a resource (`async func m()`, `static async func s()`) and in a foreign export block. A constructor is never async, as in WIT.
 - **A call waits.** A call to an async function returns when the callee has delivered its result: `client::send(req)` is written like any other call, without `await`. This is the synchronous lowering of the Component Model, where the caller is suspended until the result is there.
 - **Colors come from WIT.** Only an async function can call an async function, an async method or an async built-in function (E0416). The Component Model traps when a task that is not async would block; WaSL reports it at compile time, with one check per call. Functions that are not async can be called from anywhere.
@@ -235,3 +282,28 @@ Why this model:
 - **It is the Component Model.** A WaSL call is a `canon lower`, and the Component Model has no `await`, so neither does WaSL. The color of a function is part of its WIT type, which the binary keeps, so the source keeps it too.
 - **Programs do not depend on how tasks are scheduled.** In 0.4, a component never runs two async tasks at the same time, and `weasel serve` gives each concurrent request its own instance (§ 13.13). The specification still says that other tasks may run at every async call, so that a later compiler can run many tasks in one instance, with the stackful or threaded modes of the Component Model, without changing any program (§ 16).
 - **Concurrency inside a task comes later.** `async f(x)` will start a call without waiting for it and return a *subtask*, the word of the Component Model (§ 16). A call written without `async` always waits, so a forgotten marker never starts something by accident.
+
+## 2.9 The standard library
+
+*Specified, not available yet.*
+
+The standard library is a WaSL package, `wasl:std`, shipped with `weasel` and versioned with the compiler. It sits above WASI, as the standard library of other languages sits above the system calls: a program writes `print("…")` and `reply(200, …)`, and the library speaks `wasi:cli` and `wasi:http`. Its interfaces are `text`, `json`, `http`, `cli` and `fs` (chapter 17).
+
+```wasl
+use wasl:std/cli;
+
+world hello {
+  export wasl:std/cli {
+    async func run() -> result<_, string> {
+      if (list.len(args()) < 2)
+        return result.err("usage: hello <name>");
+      print("Hello, " + args()[1] + "!\n");
+      return result.ok;
+    }
+  }
+}
+```
+
+- **A library compiled in.** The interfaces of `wasl:std` are compiled into each component that uses them, like the interfaces of the package (§ 3.5). A program pays only for what it calls.
+- **Entry points.** `wasl:std/http` and `wasl:std/cli` each declare one function without body, `handle` and `run` (§ 2.4.3). A world that exports one of them is an HTTP service or a command. `weasel build` composes its component with a small component of the library, the **adapter**, written in WaSL, which exports `wasi:http/handler` or `wasi:cli/run` and calls `handle` or `run` (§ 17.1). The built file is a plain WASI 0.3 service or command.
+- **WASI stays available.** A program can still import WASI interfaces and export `wasi:http/handler` or `wasi:cli/run` itself, for what the library does not cover, such as streaming a body.

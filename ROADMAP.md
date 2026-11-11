@@ -58,12 +58,13 @@ Targets:
 
 Targets: `hello` for WASI 0.3, run with `weasel run` (§ 15.7), and `hello-http`, a small HTTP service served by `weasel serve` and called with `curl` in CI (§ 15.8).
 
-### 0.5: standard library and tooling
+### 0.5: standard library, readability and tooling
 
-- A standard library written in WaSL: text and formatting, console, HTTP routing, JSON.
-- `weasel test`, `weasel fmt`, `weasel build --all`, `weasel publish`.
+- Readability: locals without type, `for (x in xs)`, bodies without braces, built-in functions written `list.len(xs)`, call statements without `_ =`, structural `==`, type aliases, `///`, `use` (§ 1.10).
+- The standard library `wasl:std`, written in WaSL above WASI: `text`, `json`, `http` (with `handle` and a router), `cli` (with `run`) and `fs` (chapter 17).
+- `weasel test`, `weasel fmt`, `weasel build --all`. `weasel publish` waits until the specification is stable.
 
-Target: a small version of the reference use case, a project with two or three worlds (`account`, `order`…) sharing their types and business logic.
+Target: `examples/shop`, a small version of the reference use case: two HTTP services and a command sharing their types and business logic (§ 15.10).
 
 ### Towards 1.0
 
@@ -78,10 +79,9 @@ WaSL reaches 1.0 when:
 These land whenever a version needs them, rather than being tied to one:
 
 - hexadecimal and binary literals, digit separators, exponents;
-- `///` documentation comments copied into the WIT;
-- unqualified constructors where the expected type is known (§ 16, question 2);
-- structural equality of heap values (§ 16, question 4);
-- type aliases, `type trailers = fields;` as in WIT, to shorten long types such as those of futures.
+- unqualified constructors where the expected type is known (§ 16, question 1);
+- outgoing HTTP requests, clocks and random numbers in the standard library;
+- libraries written by users, compiled from source like the standard library.
 
 ## Further out
 

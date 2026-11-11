@@ -33,6 +33,9 @@ world calculator {
 - The **component of a world** embeds the WIT of that world: the world, the interfaces it imports and exports, the package they belong to, and the packages of the dependencies they come from.
 - The types of an interface appear in its WIT **before its functions**, in declaration order, with WIT names (§ 13.2): `unit_price` → `unit-price`.
 - `mut` never appears: the WIT has no mutability, so the types it contains have no `mut` field and no `list<mut T>` (E0214, § 7.11).
+- A type alias becomes `type name = T;` among the types of its interface, and the signatures keep its name (§ 7.14).
+- A doc comment `///` is copied, with the same text, before the item it documents: a world, an interface, a type, a function, a field, a case, a flag or an item of a resource (§ 4.2).
+- An export of `wasl:std/http` or `wasl:std/cli` is written `export wasl:std/http@0.5.0;`, with the version of the standard library, like the export of an interface of another package, and the imports of WASI that the code of the library needs are written as imports of the world (§ 3.5). The file that `weasel build` writes is composed with the adapter (§ 17.1), so its own WIT exports `wasi:http/handler` or `wasi:cli/run` instead.
 - `string`, `list<T>`, `option<T>`, `result<…>`, `record`, `enum` and `variant` are written as in WIT, which uses the same names and the same forms.
 - When an interface `a` uses a type of another interface `b` (in a function signature or in one of its types), the WIT of `a` starts with `use b.{t1, t2};`, listing the types of `b` it uses in declaration order, and the path is erased: `invoices::line` is written `line` in `a`. When `b` belongs to another package, the `use` names it with its package and version: `use example:catalog/carts@0.1.0.{cart, cart-error};`.
 
@@ -79,6 +82,8 @@ world shop {
 ```
 
 The WIT of the world, embedded in its component, contains `import types;` added by WIT elaboration; it is not written in the WIT of the package. Types used only by internal interfaces never appear.
+
+**`use` and `as`** (§ 6.6) never appear: they only name interfaces in the source. The WIT always writes the full name of a foreign interface.
 
 ## 13.2 Names
 
@@ -250,18 +255,18 @@ The compiler reads the WIT of the foreign interface from the dependency (§ 3.5)
 
 ## 13.13 Async at the boundary
 
-Async functions, streams, futures and `task::return` are available.
+Async functions, streams, futures and `task.return` are available.
 
 **Exported async functions.** An exported `async func`, of an interface of the package or of a foreign export block, is lifted with `canon lift async` and a `callback`, the mode of the Component Model that every runtime of WASI 0.3 supports. In 0.4 the callback is never called: the adapter runs the whole body of the function, which blocks wherever it waits (§ 12.12), then returns the code `EXIT` (`0`). The adapter:
 
 1. lifts the arguments, as in § 13.8;
 2. calls the WaSL function;
-3. gives back the handles lent to the function (§ 13.8), lowers its value and calls the `task.return` of the function; for a function without a return type, `task.return` takes no value. A function that contains `task::return` has done both in its body (below), and the adapter skips this step;
+3. gives back the handles lent to the function (§ 13.8), lowers its value and calls the `task.return` of the function; for a function without a return type, `task.return` takes no value. A function that contains `task.return` has done both in its body (below), and the adapter skips this step;
 4. drops the waitable set of the task, if it has waited on a stream or a future (§ 12.12), gives back the region of the task (below), and returns `EXIT`.
 
 The result is never returned as flat values and there is no post-return function: the Component Model copies the result during `task.return`, while it is still in memory.
 
-**Functions that deliver their result.** A function that contains `task::return` (§ 8.21) has no result in the core module: it gives its value to `task.return` itself, at `task::return(e);`, and at each `return e;` and `?` that ends it before. There, the code gives back the handles of its `borrow` parameters with `resource.drop`, since the Component Model traps at `task.return` while the task holds a borrow, then calls a helper that lowers the value, calls `task.return`, and sets `$scratch_top` back to where it was: the task goes on in its region. After `task::return`, the function ends with `return;` or at the end of its body, and its adapter goes on with step 4.
+**Functions that deliver their result.** A function that contains `task.return` (§ 8.21) has no result in the core module: it gives its value to `task.return` itself, at `task.return(e);`, and at each `return e;` and `?` that ends it before. There, the code gives back the handles of its `borrow` parameters with `resource.drop`, since the Component Model traps at `task.return` while the task holds a borrow, then calls a helper that lowers the value, calls `task.return`, and sets `$scratch_top` back to where it was: the task goes on in its region. After `task.return`, the function ends with `return;` or at the end of its body, and its adapter goes on with step 4.
 
 **Names.** The standard names of § 13.3 have no form for async yet. The items that only exist for async use the names that `wit-component` reads for them, its *legacy* names, which carry the full version of the interface; a module can mix them with the standard names of its other items:
 

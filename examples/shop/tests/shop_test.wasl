@@ -1,0 +1,67 @@
+interface shop_test {
+
+  func total_of_two_lines() -> result<_, string> {
+    local order = shop::order {
+      customer: "ada",
+      lines: [
+        shop::order_line { product_id: 1, quantity: 3 },
+        shop::order_line { product_id: 3, quantity: 1 },
+      ],
+    };
+    if (shop::total(order) != result.ok(1350))
+      return result.err("expected a total of 1350");
+    return result.ok;
+  }
+
+  func empty_order() -> result<_, string> {
+    local order = shop::order { customer: "ada", lines: [] };
+    if (shop::total(order) != result.err(shop::order_error::empty))
+      return result.err("expected `empty`");
+    return result.ok;
+  }
+
+  func unknown_product() -> result<_, string> {
+    local order = shop::order {
+      customer: "ada",
+      lines: [shop::order_line { product_id: 9, quantity: 1 }],
+    };
+    if (shop::total(order) != result.err(shop::order_error::unknown_product(9)))
+      return result.err("expected `unknown_product(9)`");
+    return result.ok;
+  }
+
+  func order_from_json() -> result<_, string> {
+    local order = shop::order_from_json(
+      "{\"customer\": \"ada\", \"lines\": [{\"product_id\": 2, \"quantity\": 2}]}",
+    )?;
+    local expected = shop::order {
+      customer: "ada",
+      lines: [shop::order_line { product_id: 2, quantity: 2 }],
+    };
+    if (order != expected)
+      return result.err("unexpected order");
+    return result.ok;
+  }
+
+  func missing_field() -> result<_, string> {
+    match (shop::order_from_json("{\"customer\": \"ada\"}")) {
+      case ok {
+        return result.err("expected an error");
+      }
+      case err(message) {
+        if (message != "missing field `lines`")
+          return result.err("unexpected message: " + message);
+        return result.ok;
+      }
+    }
+  }
+
+  func format_cents() -> result<_, string> {
+    if (shop::format_cents(1205) != "12.05")
+      return result.err("expected 12.05, got " + shop::format_cents(1205));
+    if (shop::format_cents(90) != "0.90")
+      return result.err("expected 0.90, got " + shop::format_cents(90));
+    return result.ok;
+  }
+
+}
