@@ -18,7 +18,7 @@ world w {
 }
 
 // The library does not see the globals of the package: its locals keep their names.
-global b: u32 = 0;
+global out: u32 = 0;
 
 // An interface of the package may have the name of an interface of the library.
 interface t {
