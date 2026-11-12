@@ -11,9 +11,34 @@ use wit_parser::{PackageId, Resolve, WorldId};
 
 use crate::deps::Dependencies;
 use crate::diag::{Code, Diagnostic, Result};
-use crate::hir::{FuncKind, InterfaceId, Program};
+use crate::hir::{FuncKind, InterfaceId, Program, Spelling};
 use crate::package::Package;
 use crate::types::{DeclId, DeclKind, Type, TypeKind, Types};
+
+/// A type the WIT names: a declared type or an alias of the package (§ 7.14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Named {
+    Decl(DeclId),
+    Alias(usize),
+}
+
+impl Named {
+    /// The interface that declares it.
+    pub fn interface(self, types: &Types) -> InterfaceId {
+        match self {
+            Named::Decl(d) => types.decls[d].interface,
+            Named::Alias(a) => types.aliases[a].interface,
+        }
+    }
+
+    /// Its name in code.
+    pub fn name(self, types: &Types) -> &str {
+        match self {
+            Named::Decl(d) => &types.decls[d].name,
+            Named::Alias(a) => &types.aliases[a].name,
+        }
+    }
+}
 
 /// Converts a WaSL identifier into a WIT identifier: `fib_rec` → `fib-rec` (§ 13.2).
 pub fn kebab(name: &str) -> String {
@@ -141,25 +166,30 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
 
         // Types of other interfaces: `use other.{a, b as other-b};`. A name is renamed
         // when it collides with a type of this interface or with another used type.
-        let mut names: HashMap<DeclId, String> = HashMap::new();
-        let mut taken: Vec<String> = iface
+        let mut names: HashMap<Named, String> = HashMap::new();
+        let own = iface
             .types
             .iter()
-            .map(|&d| kebab(&types.decls[d].name))
-            .collect();
-        for &d in &iface.types {
-            names.insert(d, kebab(&types.decls[d].name));
+            .map(|&d| Named::Decl(d))
+            .chain(iface.aliases.iter().map(|&a| Named::Alias(a)));
+        for n in own {
+            names.insert(n, kebab(n.name(types)));
         }
+        let mut taken: Vec<String> = names.values().cloned().collect();
+        taken.sort();
         let foreign = foreign_decls(types, program, id, exported);
         let mut uses: Vec<(usize, Vec<String>)> = Vec::new();
         for d in foreign {
-            let decl = &types.decls[d];
+            let interface = d.interface(types);
             // The spelling of the dependency, which may have uppercase letters (§ 13.2).
-            let name = types.wit_name(d);
+            let name = match d {
+                Named::Decl(d) => types.wit_name(d),
+                Named::Alias(_) => kebab(d.name(types)),
+            };
             let local = if taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) {
                 format!(
                     "{}-{name}",
-                    kebab(&program.interfaces[decl.interface].name).replace(':', "-")
+                    kebab(&program.interfaces[interface].name).replace(':', "-")
                 )
             } else {
                 name.clone()
@@ -171,9 +201,9 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
             };
             taken.push(local.clone());
             names.insert(d, local);
-            match uses.iter_mut().find(|(i, _)| *i == decl.interface) {
+            match uses.iter_mut().find(|(i, _)| *i == interface) {
                 Some((_, items)) => items.push(item),
-                None => uses.push((decl.interface, vec![item])),
+                None => uses.push((interface, vec![item])),
             }
         }
         uses.sort_by_key(|(i, _)| *i);
@@ -185,31 +215,45 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
             writeln!(text, "  use {path}.{{{}}};", items.join(", ")).unwrap();
         }
 
+        for &a in &iface.aliases {
+            let alias = &types.aliases[a];
+            if in_wit(types, alias.ty) {
+                writeln!(
+                    text,
+                    "  type %{} = {};",
+                    kebab(&alias.name),
+                    wit_type(types, alias.spelled, &names)
+                )
+                .unwrap();
+            }
+        }
+
         for &d in &iface.types {
             let decl = &types.decls[d];
             let name = kebab(&decl.name);
             match &decl.kind {
                 DeclKind::Record(fields) => {
                     writeln!(text, "  record %{name} {{").unwrap();
-                    for f in fields {
+                    for (k, f) in fields.iter().enumerate() {
+                        let ty = program.spelled(Spelling::Member(d, k), f.ty);
                         writeln!(
                             text,
                             "    %{}: {},",
                             kebab(&f.name),
-                            wit_type(types, f.ty, &names)
+                            wit_type(types, ty, &names)
                         )
                         .unwrap();
                     }
                 }
                 DeclKind::Variant(cases) => {
                     writeln!(text, "  variant %{name} {{").unwrap();
-                    for c in cases {
+                    for (k, c) in cases.iter().enumerate() {
                         match c.payload {
                             Some(p) => writeln!(
                                 text,
                                 "    %{}({}),",
                                 kebab(&c.name),
-                                wit_type(types, p, &names)
+                                wit_type(types, program.spelled(Spelling::Member(d, k), p), &names)
                             ),
                             None => writeln!(text, "    %{},", kebab(&c.name)),
                         }
@@ -229,11 +273,8 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                     for f in funcs {
                         let func = &program.funcs[f];
                         let skip = matches!(func.kind, FuncKind::Method(_)) as usize;
-                        let params = wit_params(types, &func.params[skip..], &names);
-                        let ret = func
-                            .ret
-                            .map(|t| format!(" -> {}", wit_type(types, t, &names)))
-                            .unwrap_or_default();
+                        let params = wit_params(types, program, f, skip, &names);
+                        let ret = wit_ret(types, program, f, &names);
                         let func_kw = if func.is_async { "async func" } else { "func" };
                         match func.kind {
                             FuncKind::Constructor(_) => {
@@ -270,11 +311,8 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                 if func.kind != FuncKind::Free {
                     continue;
                 }
-                let params = wit_params(types, &func.params, &names);
-                let ret = func
-                    .ret
-                    .map(|t| format!(" -> {}", wit_type(types, t, &names)))
-                    .unwrap_or_default();
+                let params = wit_params(types, program, f, 0, &names);
+                let ret = wit_ret(types, program, f, &names);
                 let func_kw = if func.is_async { "async func" } else { "func" };
                 writeln!(text, "  %{}: {func_kw}({params}){ret};", kebab(&func.name)).unwrap();
             }
@@ -326,7 +364,7 @@ pub fn appears(types: &Types, program: &Program) -> Vec<bool> {
     let mut work: Vec<InterfaceId> = (0..appears.len()).filter(|&i| appears[i]).collect();
     while let Some(i) = work.pop() {
         for d in foreign_decls(types, program, i, program.has_wit_funcs(i)) {
-            let other = types.decls[d].interface;
+            let other = d.interface(types);
             // The interfaces of other packages are in the WIT of their package.
             if !appears[other] && program.interfaces[other].foreign.is_none() {
                 appears[other] = true;
@@ -340,15 +378,15 @@ pub fn appears(types: &Types, program: &Program) -> Vec<bool> {
 /// A cycle of `use` between the interfaces that appear in the WIT, which WIT forbids
 /// (E0213): each interface of the cycle with a type it uses from the next one. The cycle
 /// starts with its first interface in declaration order.
-pub fn use_cycle(types: &Types, program: &Program) -> Option<Vec<(InterfaceId, DeclId)>> {
+pub fn use_cycle(types: &Types, program: &Program) -> Option<Vec<(InterfaceId, Named)>> {
     let appears = appears(types, program);
     // Edges: for each interface, the first type it uses from each other interface.
-    let edges: Vec<Vec<(InterfaceId, DeclId)>> = (0..program.interfaces.len())
+    let edges: Vec<Vec<(InterfaceId, Named)>> = (0..program.interfaces.len())
         .map(|i| {
-            let mut out: Vec<(InterfaceId, DeclId)> = Vec::new();
+            let mut out: Vec<(InterfaceId, Named)> = Vec::new();
             if appears[i] {
                 for d in foreign_decls(types, program, i, program.has_wit_funcs(i)) {
-                    let other = types.decls[d].interface;
+                    let other = d.interface(types);
                     if program.interfaces[other].foreign.is_none()
                         && !out.iter().any(|&(o, _)| o == other)
                     {
@@ -362,10 +400,10 @@ pub fn use_cycle(types: &Types, program: &Program) -> Option<Vec<(InterfaceId, D
     // Depth-first search; `state`: 0 not visited, 1 on the current path, 2 done.
     fn visit(
         i: InterfaceId,
-        edges: &[Vec<(InterfaceId, DeclId)>],
+        edges: &[Vec<(InterfaceId, Named)>],
         state: &mut [u8],
-        path: &mut Vec<(InterfaceId, DeclId)>,
-    ) -> Option<Vec<(InterfaceId, DeclId)>> {
+        path: &mut Vec<(InterfaceId, Named)>,
+    ) -> Option<Vec<(InterfaceId, Named)>> {
         state[i] = 1;
         for &(other, d) in &edges[i] {
             path.push((i, d));
@@ -396,60 +434,115 @@ pub fn use_cycle(types: &Types, program: &Program) -> Option<Vec<(InterfaceId, D
     })
 }
 
-/// The types of other interfaces that the WIT of interface `id` names: in its types and,
-/// if `with_funcs`, in the signatures of its functions. In a deterministic order.
+/// The types of other interfaces that the WIT of interface `id` names: in its types and
+/// aliases and, if `with_funcs`, in the signatures of its functions. In a deterministic
+/// order.
 fn foreign_decls(
     types: &Types,
     program: &Program,
     id: InterfaceId,
     with_funcs: bool,
-) -> Vec<DeclId> {
+) -> Vec<Named> {
     let iface = &program.interfaces[id];
-    let mut roots: Vec<Type> = iface
-        .types
-        .iter()
-        .flat_map(|&d| types.children(types.decl_type_of(d)))
-        .collect();
+    let mut roots: Vec<Type> = Vec::new();
+    for &d in &iface.types {
+        let members: Vec<Option<Type>> = match &types.decls[d].kind {
+            DeclKind::Record(fields) => fields.iter().map(|f| Some(f.ty)).collect(),
+            DeclKind::Variant(cases) => cases.iter().map(|c| c.payload).collect(),
+            // The fields of a resource are private: they never cross the boundary.
+            DeclKind::Enum(_) | DeclKind::Flags(_) | DeclKind::Resource(_) => Vec::new(),
+        };
+        for (k, t) in members.into_iter().enumerate() {
+            roots.extend(t.map(|t| program.spelled(Spelling::Member(d, k), t)));
+        }
+    }
+    for &a in &iface.aliases {
+        if in_wit(types, types.aliases[a].ty) {
+            roots.push(types.aliases[a].spelled);
+        }
+    }
     if with_funcs {
         for &f in &iface.funcs {
             let func = &program.funcs[f];
-            roots.extend(func.params.iter().map(|(_, t)| *t));
-            roots.extend(func.ret);
+            roots.extend(
+                func.params
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (_, t))| program.spelled(Spelling::Param(f, k), *t)),
+            );
+            roots.extend(func.ret.map(|t| program.spelled(Spelling::Ret(f), t)));
         }
     }
     let mut found = Vec::new();
     for root in roots {
-        named_decls(types, root, &mut found);
+        named_types(types, root, &mut found);
     }
-    found.retain(|&d| types.decls[d].interface != id);
-    found.sort_by_key(|&d| (types.decls[d].interface, d));
+    found.retain(|d| d.interface(types) != id);
+    found.sort_by_key(|&d| (d.interface(types), d));
     found.dedup();
     found
 }
 
-/// The declared types written in a type expression, without looking inside them.
-fn named_decls(types: &Types, ty: Type, found: &mut Vec<DeclId>) {
+/// The declared types and aliases written in a type, without looking inside them.
+fn named_types(types: &Types, ty: Type, found: &mut Vec<Named>) {
     match types.kind(ty) {
-        TypeKind::Decl(d) => found.push(*d),
+        TypeKind::Decl(d) => found.push(Named::Decl(*d)),
+        TypeKind::Alias(a) => found.push(Named::Alias(*a)),
         _ => {
             for child in types.children(ty) {
-                named_decls(types, child, found);
+                named_types(types, child, found);
             }
         }
     }
 }
 
-/// WIT text of parameters: `%a: u32, %b: string`.
-fn wit_params(types: &Types, params: &[(String, Type)], names: &HashMap<DeclId, String>) -> String {
-    params
+/// Whether the type an alias names can be written in the WIT (§ 7.11): nothing that can
+/// change, no writable end and no recursive type. An alias of another type is left out of
+/// the WIT; the places that use it follow the rules of § 7.11.
+fn in_wit(types: &Types, ty: Type) -> bool {
+    types.first_mutable(ty).is_none()
+        && crate::sema::writable_end(types, ty).is_none()
+        && !types
+            .reachable_decls(ty)
+            .into_iter()
+            .any(|d| types.is_recursive(d))
+}
+
+/// WIT text of the parameters of function `f`, from the `skip`-th: `%a: u32, %b: string`.
+fn wit_params(
+    types: &Types,
+    program: &Program,
+    f: usize,
+    skip: usize,
+    names: &HashMap<Named, String>,
+) -> String {
+    program.funcs[f]
+        .params
         .iter()
-        .map(|(name, ty)| format!("%{}: {}", kebab(name), wit_type(types, *ty, names)))
+        .enumerate()
+        .skip(skip)
+        .map(|(k, (name, ty))| {
+            let ty = program.spelled(Spelling::Param(f, k), *ty);
+            format!("%{}: {}", kebab(name), wit_type(types, ty, names))
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// WIT text of a type; `names` gives the name of each declared type in the interface.
-fn wit_type(types: &Types, ty: Type, names: &HashMap<DeclId, String>) -> String {
+/// WIT text of the return type of function `f`: ` -> u32`, or nothing.
+fn wit_ret(types: &Types, program: &Program, f: usize, names: &HashMap<Named, String>) -> String {
+    program.funcs[f]
+        .ret
+        .map(|t| {
+            let t = program.spelled(Spelling::Ret(f), t);
+            format!(" -> {}", wit_type(types, t, names))
+        })
+        .unwrap_or_default()
+}
+
+/// WIT text of a type; `names` gives the name of each declared type and alias in the
+/// interface.
+fn wit_type(types: &Types, ty: Type, names: &HashMap<Named, String>) -> String {
     match types.kind(ty) {
         TypeKind::Prim(p) => p.name().to_string(),
         TypeKind::Char => "char".into(),
@@ -482,6 +575,7 @@ fn wit_type(types: &Types, ty: Type, names: &HashMap<DeclId, String>) -> String 
                 wit_type(types, *err, names)
             ),
         },
-        TypeKind::Decl(d) => format!("%{}", names[d]),
+        TypeKind::Decl(d) => format!("%{}", names[&Named::Decl(*d)]),
+        TypeKind::Alias(a) => format!("%{}", names[&Named::Alias(*a)]),
     }
 }

@@ -88,14 +88,14 @@ impl Interface {
     pub fn funcs(&self) -> impl Iterator<Item = &Func> {
         self.items.iter().filter_map(|item| match item {
             InterfaceItem::Func(f) => Some(f),
-            InterfaceItem::Type(_) | InterfaceItem::Resource(_) => None,
+            InterfaceItem::Type(_) | InterfaceItem::Resource(_) | InterfaceItem::Alias(_) => None,
         })
     }
 
     pub fn types(&self) -> impl Iterator<Item = &TypeDecl> {
         self.items.iter().filter_map(|item| match item {
             InterfaceItem::Type(t) => Some(t),
-            InterfaceItem::Func(_) | InterfaceItem::Resource(_) => None,
+            InterfaceItem::Func(_) | InterfaceItem::Resource(_) | InterfaceItem::Alias(_) => None,
         })
     }
 }
@@ -105,6 +105,14 @@ pub enum InterfaceItem {
     Func(Func),
     Type(TypeDecl),
     Resource(ResourceDecl),
+    Alias(AliasDecl),
+}
+
+/// `type name = T;` (§ 7.14): another name for a type.
+#[derive(Debug)]
+pub struct AliasDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
 }
 
 /// Declaration of a `resource` (§ 7.12): its private fields, then its constructor,

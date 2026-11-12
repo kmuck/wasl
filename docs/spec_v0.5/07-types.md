@@ -367,8 +367,6 @@ local (body: stream<u8>, body_tx: stream_writer<u8>) = stream.new();
 
 ## 7.14 Type aliases
 
-*Specified, not available yet.*
-
 A **type alias** gives a name to a type, inside an interface, as in WIT:
 
 ```wasl
@@ -394,7 +392,7 @@ interface shop {
 - An alias is **the same type** as the type it names: a `price` is a `u64`, a `u64` is a `price`, without conversion. It exists to document, and to write a long type once.
 - It is declared like the other types (§ 7.7): in an interface, in the namespace of its types and functions (E0206), named from another interface with a path, `shop::price` (§ 7.8). It can be used before its declaration.
 - The aliased type can be any type, including a built-in type, a declared type, another alias or a type of another package. An alias cannot name itself, directly or through other aliases (E0225): `type a = list<a>;` is not a recursive type, it is an error.
-- In the WIT, the alias is written `type name = T;` in its interface when the interface appears in the WIT (§ 13.1), and the signatures keep its name. An alias of a type that cannot appear in the WIT follows the rules of § 7.11 at the places where it is used.
+- In the WIT, the alias is written `type name = T;` in its interface when the interface appears in the WIT (§ 13.1), and the signatures and the members of the types keep its name. Like a declared type, an alias of an interface that has functions can only be named in the WIT of a world that exports or imports that interface (E0209). An alias of a type that cannot appear in the WIT, such as `type buffer = list<mut u8>;`, is left out of the WIT, and follows the rules of § 7.11 at the places where it is used.
 - An alias declared in another package, such as `wasi:clocks/types.instant`, is named the same way (§ 2.5).
 
 `type` only declares aliases. The other declarations keep their own word: `record`, `enum`, `variant`, `flags`, `resource`.

@@ -39,6 +39,8 @@ pub enum TokenKind {
     While,
     For,
     In,
+    /// `type`, which declares an alias (§ 7.14).
+    KwType,
     Break,
     Continue,
     Return,
@@ -162,6 +164,7 @@ impl TokenKind {
             TokenKind::While => "while",
             TokenKind::For => "for",
             TokenKind::In => "in",
+            TokenKind::KwType => "type",
             TokenKind::Break => "break",
             TokenKind::Continue => "continue",
             TokenKind::Return => "return",
@@ -238,7 +241,7 @@ pub struct Token {
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
-    "package", "use", "type", "map", "own", "await", "subtask", "include", "with", "as",
+    "package", "use", "map", "own", "await", "subtask", "include", "with", "as",
 ];
 
 fn keyword(word: &str) -> Option<TokenKind> {
@@ -263,6 +266,7 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "while" => TokenKind::While,
         "for" => TokenKind::For,
         "in" => TokenKind::In,
+        "type" => TokenKind::KwType,
         "break" => TokenKind::Break,
         "continue" => TokenKind::Continue,
         "return" => TokenKind::Return,
