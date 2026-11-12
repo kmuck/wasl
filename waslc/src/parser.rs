@@ -42,6 +42,11 @@ impl Parser {
         self.tokens[self.pos.saturating_sub(1)].span
     }
 
+    /// The doc comment before the next token (§ 4.2).
+    fn doc(&self) -> Option<String> {
+        self.tokens[self.pos].doc.clone()
+    }
+
     fn bump(&mut self) -> Token {
         let token = self.tokens[self.pos].clone();
         if token.kind != TokenKind::Eof {
@@ -239,6 +244,7 @@ impl Parser {
     }
 
     fn world(&mut self) -> Result<World> {
+        let doc = self.doc();
         self.bump();
         let name = self.ident("a world name")?;
         self.expect(&TokenKind::LBrace, "`{`")?;
@@ -291,6 +297,7 @@ impl Parser {
                         }
                     }
                     Some(Interface {
+                        doc: None,
                         name: f.name.clone(),
                         items: funcs,
                     })
@@ -306,10 +313,11 @@ impl Parser {
                 body,
             });
         }
-        Ok(World { name, items })
+        Ok(World { doc, name, items })
     }
 
     fn interface(&mut self) -> Result<Interface> {
+        let doc = self.doc();
         self.bump();
         let name = self.ident("an interface name")?;
         self.expect(&TokenKind::LBrace, "`{`")?;
@@ -322,6 +330,7 @@ impl Parser {
                 }
                 TokenKind::Resource => InterfaceItem::Resource(self.resource()?),
                 TokenKind::KwType => {
+                    let doc = self.doc();
                     self.bump();
                     let name = self.ident("the name of the alias")?;
                     self.expect(
@@ -330,7 +339,7 @@ impl Parser {
                     )?;
                     let ty = self.ty()?;
                     self.expect(&TokenKind::Semi, "`;`")?;
-                    InterfaceItem::Alias(AliasDecl { name, ty })
+                    InterfaceItem::Alias(AliasDecl { doc, name, ty })
                 }
                 TokenKind::Global => {
                     return err(
@@ -347,12 +356,13 @@ impl Parser {
             };
             items.push(item);
         }
-        Ok(Interface { name, items })
+        Ok(Interface { doc, name, items })
     }
 
     /// `resource` declaration (§ 7.12): fields, each followed by `,`, then the
     /// constructor, methods and static functions.
     fn resource(&mut self) -> Result<ResourceDecl> {
+        let doc = self.doc();
         self.bump();
         let name = self.ident("a resource name")?;
         self.expect(&TokenKind::LBrace, "`{`")?;
@@ -377,10 +387,12 @@ impl Parser {
                 }
                 TokenKind::Constructor => {
                     let span = self.span();
+                    let doc = self.doc();
                     let mut func = self.func_rest(Ident {
                         name: "constructor".into(),
                         span,
                     })?;
+                    func.doc = doc;
                     if let Some(ret) = func.ret.take() {
                         return err(
                             Code::Syntax,
@@ -405,13 +417,16 @@ impl Parser {
                     func: self.func()?,
                 }),
                 TokenKind::Static => {
+                    let doc = self.doc();
                     self.bump();
                     if !matches!(self.peek(), TokenKind::Func | TokenKind::Async) {
                         return Err(self.unexpected("`func` or `async func` after `static`"));
                     }
+                    let mut func = self.func()?;
+                    func.doc = doc;
                     funcs.push(ResourceFunc {
                         kind: ResourceFuncKind::Static,
-                        func: self.func()?,
+                        func,
                     });
                 }
                 _ => {
@@ -422,6 +437,7 @@ impl Parser {
             }
         }
         Ok(ResourceDecl {
+            doc,
             name,
             fields,
             funcs,
@@ -430,6 +446,7 @@ impl Parser {
 
     /// `record`, `enum`, `variant` or `flags` declaration (§ 7.7).
     fn type_decl(&mut self) -> Result<TypeDecl> {
+        let doc = self.doc();
         let keyword = self.bump().kind;
         let name = self.ident("a type name")?;
         self.expect(&TokenKind::LBrace, "`{`")?;
@@ -444,7 +461,9 @@ impl Parser {
         let mut fields = Vec::new();
         let mut names = Vec::new();
         let mut cases = Vec::new();
+        let mut member_docs = Vec::new();
         loop {
+            member_docs.push(self.doc());
             let item = self.ident(what)?;
             match keyword {
                 TokenKind::Record => {
@@ -486,7 +505,12 @@ impl Parser {
             TokenKind::Enum => TypeDeclKind::Enum(names),
             _ => TypeDeclKind::Flags(names),
         };
-        Ok(TypeDecl { name, kind })
+        Ok(TypeDecl {
+            doc,
+            name,
+            kind,
+            member_docs,
+        })
     }
 
     fn global(&mut self) -> Result<Global> {
@@ -508,11 +532,13 @@ impl Parser {
 
     /// `func` or `async func` (§ 6.5), at the keyword.
     fn func(&mut self) -> Result<Func> {
+        let doc = self.doc();
         let is_async = self.eat(&TokenKind::Async);
         self.expect(&TokenKind::Func, "`func`")?;
         let name = self.ident("a function name")?;
         let mut func = self.func_rest(name)?;
         func.is_async = is_async;
+        func.doc = doc;
         Ok(func)
     }
 
@@ -546,6 +572,7 @@ impl Parser {
         };
         let body = self.block("`{`")?;
         Ok(Func {
+            doc: None,
             is_async: false,
             name,
             params,
