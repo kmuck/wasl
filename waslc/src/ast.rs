@@ -14,6 +14,8 @@ pub enum Item {
     World(World),
     Interface(Interface),
     Global(Box<Global>),
+    /// `use wasi:cli/stdout;` (§ 6.6), before the declarations of a file.
+    Use(UseDecl),
 }
 
 impl Item {
@@ -22,7 +24,23 @@ impl Item {
             Item::World(w) => &w.name,
             Item::Interface(i) => &i.name,
             Item::Global(g) => &g.name,
+            Item::Use(u) => u.name(),
         }
+    }
+}
+
+/// `use <foreign name> [as <name>];` (§ 6.6): names an interface of another package in
+/// one file.
+#[derive(Debug)]
+pub struct UseDecl {
+    pub iface: ForeignName,
+    pub alias: Option<Ident>,
+}
+
+impl UseDecl {
+    /// The name the file gives to the interface: its last part, or the name after `as`.
+    pub fn name(&self) -> &Ident {
+        self.alias.as_ref().unwrap_or(&self.iface.name)
     }
 }
 

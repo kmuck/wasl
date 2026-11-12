@@ -211,6 +211,8 @@ impl Runner {
 }
 
 const PROGRAM: &str = r#"
+use demo:host/log;
+
 world w {
   import demo:host/log;
   export t;
@@ -323,7 +325,8 @@ fn calls_to_imported_functions() {
 #[test]
 fn wit_of_imports() {
     let analysis = analyze(
-        "world w { import demo:host/log; export t; }
+        "use demo:host/log;
+world w { import demo:host/log; export t; }
          interface t { func f(e: log::entry) -> log::level { return e.level; } }",
     )
     .unwrap();
@@ -335,7 +338,8 @@ fn wit_of_imports() {
     assert!(wit.contains("import demo:host/log@1.0.0;"), "{wit}");
     assert_eq!(analysis.worlds()[0].imports, ["demo:host/log@1.0.0"]);
     build(
-        "world w { import demo:host/log; export t; }
+        "use demo:host/log;
+world w { import demo:host/log; export t; }
          interface t { func f(e: log::entry) -> log::level { return e.level; } }",
         "w",
     );
@@ -467,18 +471,19 @@ fn errors() {
         "unknown interface `nope`",
     );
     fails(
-        "world w { import demo:host/log; } interface log { }",
+        "use demo:host/log;\nworld w { import demo:host/log; } interface log { }",
         Code::InterfaceNameClash,
-        "`demo:host/log` is named `log` in code, like the interface `log` of the package",
+        "`demo:host/log` names the interface `log` in this file, like an interface of the package",
     );
     fails(
-        "world w { import demo:host/log; export log; }",
+        "use demo:host/log;\nworld w { import demo:host/log; export log; }",
         Code::UnknownExportedInterface,
         "write `demo:host/log`",
     );
     // A call reached from a world that does not import the interface.
     fails(
-        "world a { import demo:host/log; export t; }
+        "use demo:host/log;
+world a { import demo:host/log; export t; }
          world b { export t; }
          interface t { func f() -> u32 { return helper(); } func helper() -> u32 { return log::add(1, 2); } }",
         Code::UnimportedCall,
@@ -487,7 +492,8 @@ fn errors() {
     // Unreachable code may call it.
     assert!(
         analyze(
-            "world b { export t; }
+            "use demo:host/log;
+world b { export t; }
              interface t { func f() -> u32 { return 1; } }
              interface u { func g() -> u32 { return log::add(1, 2); } }
              world a { import demo:host/log; }"
@@ -496,28 +502,32 @@ fn errors() {
     );
     // An imported async function is called from an async function (§ 2.8).
     fails(
-        "world w { import demo:host/files; export t; }
+        "use demo:host/files;
+world w { import demo:host/files; export t; }
          interface t { func f() { files::wait(); } }",
         Code::AsyncCall,
         "`files::wait(…)` is async, and only an async function can call it",
     );
     assert!(
         analyze(
-            "world w { import demo:host/files; export t; }
+            "use demo:host/files;
+world w { import demo:host/files; export t; }
              interface t { async func f() { files::wait(); } }"
         )
         .is_ok()
     );
     assert!(
         analyze(
-            "world w { import demo:host/files; export t; }
+            "use demo:host/files;
+world w { import demo:host/files; export t; }
              interface t { func f() -> u32 { return files::count() + files::from(); } }"
         )
         .is_ok()
     );
     // A type of an interface with functions that the world does not import (E0209).
     fails(
-        "world w { import demo:host/log; export t; }
+        "use demo:host/log;
+world w { import demo:host/log; export t; }
          world v { export t; }
          interface t { func f(l: log::level) { } }",
         Code::UnexportedTypeInterface,
@@ -526,10 +536,120 @@ fn errors() {
     // A types-only interface needs no import.
     assert!(
         analyze(
-            "world w { import demo:host/types_only; export t; }
+            "use demo:host/types_only;
+world w { import demo:host/types_only; export t; }
              world v { export t; }
              interface t { func f(p: types_only::point) -> s32 { return p.x; } }"
         )
         .is_ok()
+    );
+}
+
+/// `use` names an interface of another package in one file (§ 6.6).
+#[test]
+fn use_names_per_file() {
+    let deps = deps();
+    let package = Package::new("test", "app", "0.1.0").unwrap();
+    let analyze_files = |files: &[(&str, &str)]| {
+        let mut sources = SourceMap::default();
+        for (path, text) in files {
+            sources.add((*path).into(), text.to_string());
+        }
+        waslc::analyze(&package, &sources, &deps).map_err(|mut e| e.remove(0))
+    };
+    // `as` renames, and each file names what it uses.
+    let ok = analyze_files(&[
+        (
+            "src/main.wasl",
+            "use demo:host/log as journal;
+             world w { import demo:host/log; export t; export u; }
+             interface t { func f() -> u32 { return journal::add(1, 2); } }",
+        ),
+        (
+            "src/other.wasl",
+            "use demo:host/log;
+             use demo:host/types_only as shapes;
+             interface u {
+               func g() -> u32 { return log::add(3, 4); }
+               func h(p: shapes::point) -> s32 { return p.x; }
+             }",
+        ),
+    ]);
+    if let Err(e) = ok {
+        panic!("{}", e.message);
+    }
+    // The WIT keeps the full names.
+    let wit = analyze_files(&[(
+        "src/main.wasl",
+        "use demo:host/types_only as shapes;
+         world w { export t; }
+         interface t { func h(p: shapes::point) -> s32 { return p.x; } }",
+    )])
+    .unwrap()
+    .wit()
+    .unwrap();
+    assert!(
+        wit.contains("use demo:host/types-only@1.0.0.{point};"),
+        "{wit}"
+    );
+
+    let fails_files = |files: &[(&str, &str)], code: Code, message: &str| match analyze_files(files)
+    {
+        Ok(_) => panic!("accepted: {files:?}"),
+        Err(e) => {
+            assert_eq!(e.code, code, "{}", e.message);
+            assert!(e.message.contains(message), "{}", e.message);
+        }
+    };
+    // A name given in one file does not exist in another.
+    fails_files(
+        &[
+            (
+                "src/main.wasl",
+                "use demo:host/log;\nworld w { import demo:host/log; export t; }",
+            ),
+            (
+                "src/t.wasl",
+                "interface t { func f() -> u32 { return log::add(1, 2); } }",
+            ),
+        ],
+        Code::UnknownName,
+        "add `use demo:host/log;` at the top of the file",
+    );
+    let world = "world w { import demo:host/log; export t; }\n";
+    fails(
+        &format!("{world}interface t {{ func f(e: log::entry) {{ }} }}"),
+        Code::UnknownName,
+        "unknown interface `log`: add `use demo:host/log;` at the top of the file",
+    );
+    fails(
+        &format!("{world}use demo:host/log;\ninterface t {{ }}"),
+        Code::Syntax,
+        "`use` comes before the declarations of the file",
+    );
+    fails(
+        "use demo:host/log;\nuse demo:host/log as journal;\nworld w { export t; }\ninterface t { }",
+        Code::InterfaceNameClash,
+        "`demo:host/log` is already used in this file",
+    );
+    fails(
+        "use demo:host/log;\nuse demo:host/files as log;\nworld w { export t; }\ninterface t { }",
+        Code::InterfaceNameClash,
+        "like `demo:host/log`",
+    );
+    fails(
+        "use demo:host/log as t;\nworld w { export t; }\ninterface t { }",
+        Code::InterfaceNameClash,
+        "`demo:host/log as t` names the interface `t` in this file, like an interface of the package",
+    );
+    fails(
+        "use demo:host/nope;\nworld w { export t; }\ninterface t { }",
+        Code::ForeignInterface,
+        "package `demo:host` has no interface `nope`",
+    );
+    fails(
+        "use t;\nworld w { export t; }\ninterface t { }",
+        Code::Syntax,
+        "the interfaces of the package need no `use`",
     );
 }

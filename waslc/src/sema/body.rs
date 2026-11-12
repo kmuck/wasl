@@ -1569,8 +1569,8 @@ impl<'a> FnCx<'a> {
                 return self.case_of(decl, head, name);
             }
         }
-        let iface = match self.resolver.names.get(head.name.as_str()) {
-            Some(TopLevel::Interface(id)) => *id,
+        let iface = match self.resolver.top(head) {
+            Some(TopLevel::Interface(id)) => id,
             Some(other) => {
                 return err(
                     Code::UnknownName,
@@ -1582,7 +1582,11 @@ impl<'a> FnCx<'a> {
                 return err(
                     Code::UnknownName,
                     head.span,
-                    format!("unknown interface or type `{}`", head.name),
+                    format!(
+                        "unknown interface or type `{}`{}",
+                        head.name,
+                        self.resolver.missing_use(head)
+                    ),
                 );
             }
         };

@@ -177,6 +177,10 @@ fn hello_wit() {
 /// Copies the standard input to the standard output, four bytes at a time: reads until
 /// the end of the stream, which `stream.read` reports again after it.
 const ECHO: &str = r#"
+use wasi:cli/types;
+use wasi:cli/stdin;
+use wasi:cli/stdout;
+
 world echo {
   import wasi:cli/types;
   import wasi:cli/stdin;
@@ -389,6 +393,8 @@ fn future_write() {
     // The host takes the value after a wait.
     let result = run_sink(
         r#"
+use demo:host/sink;
+
         world w {
           import demo:host/sink;
           export demo:host/run {
@@ -415,6 +421,8 @@ fn refused() {
     // to the stream return `0`, again and again.
     let result = run_sink(
         r#"
+use demo:host/sink;
+
         world w {
           import demo:host/sink;
           export demo:host/run {
@@ -445,6 +453,8 @@ fn refused() {
 fn moved_ends() {
     // A moved end is the empty handle: releasing it again does nothing (§ 9.9)…
     let closed_twice = r#"
+use demo:host/sink;
+
         world w {
           import demo:host/sink;
           export demo:host/run {
@@ -594,6 +604,8 @@ fn unwritten_future() {
     // A `future_writer<T>` released without its value traps (§ 10.7).
     let result = run_sink(
         r#"
+use demo:host/sink;
+
         world w {
           import demo:host/sink;
           export demo:host/run {

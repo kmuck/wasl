@@ -1,6 +1,9 @@
 // Target program of WaSL v0.4 (docs/spec_v0.4, § 15.8): an HTTP service for WASI 0.3,
 // served with `weasel serve hello_http`. `GET /karim` answers `Hello, /karim!`. The
 // response is delivered with `task.return` before its body is written (§ 8.21).
+
+use wasi:http/types;
+
 world hello_http {
   import wasi:http/types;
 

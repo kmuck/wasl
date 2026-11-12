@@ -8,7 +8,7 @@ use crate::ast::{self, ExprKind, Ident, InterfaceRef, Item, UnaryOp};
 use crate::deps::Dependencies;
 use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
-use crate::source::Span;
+use crate::source::{FileId, Span};
 use crate::types::{
     AliasDef, CaseDef, DeclId, DeclKind, EndKind, FieldDef, Mutable, ResourceDef, Type, TypeDecl,
     TypeKind, Types,
@@ -83,6 +83,13 @@ struct Analyzer<'a> {
     interfaces: Vec<&'a ast::Interface>,
     globals: Vec<&'a ast::Global>,
     names: HashMap<String, TopLevel>,
+    /// The `use` items of the files (§ 6.6).
+    uses: Vec<&'a ast::UseDecl>,
+    /// The names that `use` gives to interfaces of other packages, by file (§ 6.6).
+    used: HashMap<(FileId, String), InterfaceId>,
+    /// The interfaces of other packages that the worlds and the files name: their last
+    /// name and their full name, for the hints of E0300 and E0305.
+    foreign_full: Vec<(String, String)>,
     /// The implementation of item `k` of world `w`, by `(w, k)`.
     impls: HashMap<(usize, usize), InterfaceId>,
     converter: foreign::Converter<'a>,
@@ -129,7 +136,12 @@ impl<'a> Analyzer<'a> {
         let mut globals = Vec::new();
         let mut names: HashMap<String, TopLevel> = HashMap::new();
 
+        let mut uses = Vec::new();
         for item in items {
+            if let Item::Use(u) = item {
+                uses.push(u);
+                continue;
+            }
             let name = item.name();
             if let Some(prev) = names.get(name.name.as_str()) {
                 return err(
@@ -151,6 +163,7 @@ impl<'a> Analyzer<'a> {
                     globals.push(g.as_ref());
                     TopLevel::Global
                 }
+                Item::Use(_) => unreachable!("a `use` has no top-level name"),
             };
             names.insert(name.name.clone(), entry);
         }
@@ -172,6 +185,9 @@ impl<'a> Analyzer<'a> {
             interfaces,
             globals,
             names,
+            uses,
+            used: HashMap::new(),
+            foreign_full: Vec::new(),
             impls,
             named_foreign: Vec::new(),
             foreign_names: Vec::new(),
@@ -187,9 +203,19 @@ impl<'a> Analyzer<'a> {
         })
     }
 
-    /// 2. Interfaces of other packages named by the worlds (§ 2.5, § 3.5), then the names
-    ///    code gives them (E0217).
+    /// 2. Interfaces of other packages named by the `use` items of the files and by the
+    ///    worlds (§ 2.5, § 3.5, E0215), then the names that `use` gives them, file by
+    ///    file (§ 6.6, E0217).
     fn foreign_interfaces(&mut self) -> Result<()> {
+        let mut used = Vec::new();
+        for u in &self.uses {
+            let id = foreign_interface(self.deps, &u.iface)?;
+            used.push(id);
+            if !self.named_foreign.iter().any(|(i, _)| *i == id) {
+                self.named_foreign
+                    .push((id, u.iface.namespace.span.to(u.iface.name.span)));
+            }
+        }
         for world in &self.worlds {
             for item in &world.items {
                 let InterfaceRef::Foreign(f) = &item.iface else {
@@ -201,30 +227,51 @@ impl<'a> Analyzer<'a> {
                 }
             }
         }
-        for &(id, span) in &self.named_foreign {
+        for &(id, _) in &self.named_foreign {
             let hir_id = self.converter.iface(id);
             let short = self.converter.short_name(hir_id);
             let full = self.converter.ifaces[hir_id - self.interfaces.len()].display();
-            if let Some(prev) = self.names.get(short.as_str()) {
-                let what = match prev {
-                    TopLevel::Interface(other) if *other >= self.interfaces.len() => format!(
-                        "the interface `{}`",
-                        self.converter.ifaces[*other - self.interfaces.len()].display()
-                    ),
-                    TopLevel::Interface(_) => format!("the interface `{short}` of the package"),
-                    other => format!("{} of the package", other.describe()),
+            self.foreign_full.push((short.clone(), full));
+            self.foreign_names.push((short, hir_id));
+        }
+        for (u, id) in self.uses.iter().zip(used) {
+            let hir_id = self.converter.iface(id);
+            let full = u.iface.display();
+            let name = u.name();
+            let key = (name.span.file, name.name.clone());
+            let clash = |what: String| {
+                let named = match &u.alias {
+                    Some(_) => format!("`{full} as {}`", name.name),
+                    None => format!("`{full}`"),
                 };
+                err(
+                    Code::InterfaceNameClash,
+                    name.span,
+                    format!(
+                        "{named} names the interface `{}` in this file, like {what}: code could not tell them apart; give it another name with `as`",
+                        name.name
+                    ),
+                )
+            };
+            if let Some(prev) = self.names.get(name.name.as_str()) {
+                return clash(format!("{} of the package", prev.describe()));
+            }
+            if self
+                .used
+                .iter()
+                .any(|((file, _), &i)| *file == name.span.file && i == hir_id)
+            {
                 return err(
                     Code::InterfaceNameClash,
-                    span,
-                    format!(
-                        "`{full}` is named `{short}` in code, like {what}: code could not tell them apart"
-                    ),
+                    u.iface.namespace.span.to(name.span),
+                    format!("`{full}` is already used in this file: one `use` is enough"),
                 );
             }
-            self.names
-                .insert(short.clone(), TopLevel::Interface(hir_id));
-            self.foreign_names.push((short, hir_id));
+            if let Some(&other) = self.used.get(&key) {
+                let other = self.converter.ifaces[other - self.interfaces.len()].display();
+                return clash(format!("`{other}`"));
+            }
+            self.used.insert(key, hir_id);
         }
         Ok(())
     }
@@ -485,6 +532,8 @@ impl<'a> Analyzer<'a> {
                 type_names(&alias.ty, &mut names);
                 let resolver = Resolver {
                     names: &self.names,
+                    used: &self.used,
+                    foreign: &self.foreign_full,
                     scopes: &self.scopes,
                     spelled: true,
                 };
@@ -554,6 +603,8 @@ impl<'a> Analyzer<'a> {
             let written = &self.aliases[k].ty;
             let resolver = Resolver {
                 names: &self.names,
+                used: &self.used,
+                foreign: &self.foreign_full,
                 scopes: &self.scopes,
                 spelled: false,
             };
@@ -585,6 +636,8 @@ impl<'a> Analyzer<'a> {
         self.alias_types()?;
         let resolver = Resolver {
             names: &self.names,
+            used: &self.used,
+            foreign: &self.foreign_full,
             scopes: &self.scopes,
             spelled: false,
         };
@@ -735,12 +788,12 @@ impl<'a> Analyzer<'a> {
             for (k, item) in world.items.iter().enumerate() {
                 let span = item.iface.span();
                 let (id, written) = match &item.iface {
-                    InterfaceRef::Local(name) => match self.names.get(name.name.as_str()) {
-                        Some(TopLevel::Interface(id)) if *id < self.interfaces.len() => {
-                            (*id, name.name.clone())
+                    InterfaceRef::Local(name) => match top(&self.names, &self.used, name) {
+                        Some(TopLevel::Interface(id)) if id < self.interfaces.len() => {
+                            (id, name.name.clone())
                         }
                         Some(TopLevel::Interface(id)) => {
-                            let full = self.program.interfaces[*id]
+                            let full = self.program.interfaces[id]
                                 .foreign
                                 .as_ref()
                                 .unwrap()
@@ -1133,6 +1186,8 @@ impl<'a> Analyzer<'a> {
     fn globals(&mut self) -> Result<HashMap<&'a str, hir::GlobalId>> {
         let resolver = Resolver {
             names: &self.names,
+            used: &self.used,
+            foreign: &self.foreign_full,
             scopes: &self.scopes,
             spelled: false,
         };
@@ -1193,6 +1248,8 @@ impl<'a> Analyzer<'a> {
         let mut facts = BodyFacts::default();
         let resolver = Resolver {
             names: &self.names,
+            used: &self.used,
+            foreign: &self.foreign_full,
             scopes: &self.scopes,
             spelled: false,
         };
@@ -1870,9 +1927,26 @@ fn check_boundary_types(
     Ok(())
 }
 
+/// What `name` designates at the top level of its file: a world, an interface or a global
+/// of the package, or an interface that the file uses (§ 6.1, § 6.6).
+fn top(
+    names: &HashMap<String, TopLevel>,
+    used: &HashMap<(FileId, String), InterfaceId>,
+    name: &Ident,
+) -> Option<TopLevel> {
+    names.get(name.name.as_str()).copied().or_else(|| {
+        used.get(&(name.span.file, name.name.clone()))
+            .map(|&i| TopLevel::Interface(i))
+    })
+}
+
 /// Resolves the types written in the source (§ 7.8).
 struct Resolver<'a> {
     names: &'a HashMap<String, TopLevel>,
+    /// The names that `use` gives, by file (§ 6.6).
+    used: &'a HashMap<(FileId, String), InterfaceId>,
+    /// The last and full names of the interfaces of other packages, for hints.
+    foreign: &'a [(String, String)],
     scopes: &'a [InterfaceScope],
     /// Keep the aliases of the package, as written, for the WIT (§ 7.14), rather than
     /// the types they name.
@@ -1886,7 +1960,31 @@ impl Resolver<'_> {
             .iter()
             .find(|(_, t)| matches!(t, TopLevel::Interface(i) if *i == iface))
             .map(|(n, _)| n.clone())
+            .or_else(|| {
+                let mut names: Vec<&String> = self
+                    .used
+                    .iter()
+                    .filter(|&(_, &i)| i == iface)
+                    .map(|((_, n), _)| n)
+                    .collect();
+                names.sort();
+                names.first().map(|n| n.to_string())
+            })
             .unwrap_or_default()
+    }
+
+    /// The hint for an unknown interface `name` that names an interface of another
+    /// package: the file needs a `use` (§ 6.6).
+    pub(super) fn missing_use(&self, name: &Ident) -> String {
+        match self.foreign.iter().find(|(short, _)| *short == name.name) {
+            Some((_, full)) => format!(": add `use {full};` at the top of the file"),
+            None => String::new(),
+        }
+    }
+
+    /// What `name` designates at the top level of its file (§ 6.1, § 6.6).
+    pub(super) fn top(&self, name: &Ident) -> Option<TopLevel> {
+        top(self.names, self.used, name)
     }
 
     /// The type designated by `ty`, written in interface `iface` (`None` for a global).
@@ -1958,8 +2056,8 @@ impl Resolver<'_> {
     /// not declared (`type instant = u64`).
     fn alias(&self, name: &ast::TypeName, current: Option<InterfaceId>) -> Option<&Type> {
         let iface = match &name.iface {
-            Some(iface) => match self.names.get(iface.name.as_str()) {
-                Some(TopLevel::Interface(id)) => *id,
+            Some(iface) => match self.top(iface) {
+                Some(TopLevel::Interface(id)) => id,
                 _ => return None,
             },
             None => current?,
@@ -1970,8 +2068,8 @@ impl Resolver<'_> {
     /// The alias of the package named `name` (§ 7.14), by its index in [`Types::aliases`].
     fn alias_id(&self, name: &ast::TypeName, current: Option<InterfaceId>) -> Option<usize> {
         let iface = match &name.iface {
-            Some(iface) => match self.names.get(iface.name.as_str()) {
-                Some(TopLevel::Interface(id)) => *id,
+            Some(iface) => match self.top(iface) {
+                Some(TopLevel::Interface(id)) => id,
                 _ => return None,
             },
             None => current?,
@@ -1987,8 +2085,8 @@ impl Resolver<'_> {
     fn decl(&self, name: &ast::TypeName, current: Option<InterfaceId>) -> Result<DeclId> {
         let unknown = |message: String| err(Code::UnknownType, name.span(), message);
         let iface = match &name.iface {
-            Some(iface) => match self.names.get(iface.name.as_str()) {
-                Some(TopLevel::Interface(id)) => *id,
+            Some(iface) => match self.top(iface) {
+                Some(TopLevel::Interface(id)) => id,
                 Some(other) => {
                     return unknown(format!(
                         "`{}` is {}, not an interface",
@@ -2000,7 +2098,11 @@ impl Resolver<'_> {
                     return err(
                         Code::UnknownName,
                         iface.span,
-                        format!("unknown interface `{}`", iface.name),
+                        format!(
+                            "unknown interface `{}`{}",
+                            iface.name,
+                            self.missing_use(iface)
+                        ),
                     );
                 }
             },

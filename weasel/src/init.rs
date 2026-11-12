@@ -108,6 +108,10 @@ fn cli(world: &str) -> String {
     format!(
         r#"// A command of WASI 0.3: the world implements `wasi:cli/run`, and writes on the
 // standard output through a stream. Run it with `weasel run {world}`.
+
+use wasi:cli/types;
+use wasi:cli/stdout;
+
 world {world} {{
   import wasi:cli/types;
   import wasi:cli/stdout;
@@ -144,6 +148,9 @@ fn http(world: &str) -> String {
     format!(
         r#"// An HTTP service of WASI 0.3: the world implements `wasi:http/handler`, and answers
 // `Hello, <path>!`. Serve it with `weasel serve {world}`.
+
+use wasi:http/types;
+
 world {world} {{
   import wasi:http/types;
 

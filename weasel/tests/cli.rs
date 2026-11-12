@@ -598,7 +598,7 @@ fn imports() {
     );
     write(
         &root.join("app/src/app.wasl"),
-        "world main {\n  import demo:lib/i;\n  export calls;\n}\n\nworld plain {\n  export util;\n}\n\n\
+        "use demo:lib/i;\nworld main {\n  import demo:lib/i;\n  export calls;\n}\n\nworld plain {\n  export util;\n}\n\n\
          interface calls {\n  func twice() -> u32 {\n    return i::f() + i::f();\n  }\n}\n\n\
          interface util {\n  func one() -> u32 {\n    return 1;\n  }\n}\n",
     );
@@ -618,7 +618,7 @@ fn imports() {
     // imports are provided in turn; WASI comes from the host.
     write(
         &app.join("src/app.wasl"),
-        "world main {\n  import counter;\n  export calls;\n}\n\n\
+        "use demo:lib/i;\nworld main {\n  import counter;\n  export calls;\n}\n\n\
          world store {\n  import demo:lib/i;\n  export counter;\n}\n\n\
          interface calls {\n  func twice() -> u32 {\n    return counter::next() + counter::next();\n  }\n}\n\n\
          global n: mut u32 = 0;\n\n\
@@ -799,6 +799,11 @@ fn wasi_project(source: &str) -> TempDir {
 
 /// A command that prints its arguments, and ends as its first argument asks.
 const ARGS: &str = r#"
+use wasi:cli/types;
+use wasi:cli/stdout;
+use wasi:cli/environment;
+use wasi:cli/exit;
+
 world args {
   import wasi:cli/types;
   import wasi:cli/stdout;
@@ -885,6 +890,8 @@ fn run() {
 /// A service that answers `Hello, <path>!`, traps on `/trap` before its response and
 /// on `/late` after it, and fails on `/err`.
 const SERVICE: &str = r#"
+use wasi:http/types;
+
 world service {
   import wasi:http/types;
 

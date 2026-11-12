@@ -95,8 +95,6 @@ async func fetch(url: string) -> result<string, fetch_error> { … }
 
 ## 6.6 `use`
 
-*Specified, not available yet.*
-
 ```wasl
 use wasl:std/json;
 use wasi:cli/stdout;

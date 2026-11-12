@@ -3,6 +3,9 @@
 // function of WASI implemented in the world (§ 2.4.2, § 2.8). It writes on the standard
 // output through a stream, then waits until the standard output is done.
 
+use wasi:cli/types;
+use wasi:cli/stdout;
+
 world hello {
   import wasi:cli/types;
   import wasi:cli/stdout;

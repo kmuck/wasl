@@ -240,6 +240,8 @@ impl Runner {
 use wasmtime::AsContextMut;
 
 const PROGRAM: &str = r#"
+use demo:shop/carts;
+
 world w {
   import demo:shop/carts;
   export t;
@@ -465,7 +467,9 @@ fn handles_across_exports() {
 #[test]
 fn handle_positions() {
     let wrap = |items: &str| {
-        format!("world w {{ import demo:shop/carts; export t; }}\ninterface t {{\n{items}\n}}")
+        format!(
+            "use demo:shop/carts;\nworld w {{ import demo:shop/carts; export t; }}\ninterface t {{\n{items}\n}}"
+        )
     };
     fails(
         &wrap("record r { c: carts::cart }"),

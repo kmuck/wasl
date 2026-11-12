@@ -195,6 +195,8 @@ fn string(s: &str) -> Val {
 }
 
 const PROGRAM: &str = r#"
+use demo:host/clock;
+
 world w {
   import demo:host/clock;
   export t;
@@ -401,6 +403,8 @@ fn async_imports_of_the_package() {
 #[test]
 fn async_foreign_export() {
     let source = r#"
+use demo:host/clock;
+
 world w {
   import demo:host/clock;
   export demo:host/run {
@@ -476,7 +480,8 @@ fn errors() {
         "`g(…)` is async, and only an async function can call it: declare this function `async func`",
     );
     fails(
-        "world w { import demo:host/clock; export t; }
+        "use demo:host/clock;
+world w { import demo:host/clock; export t; }
          interface t { func f() -> u32 { return clock::sleep(1); } }",
         Code::AsyncCall,
         "`clock::sleep(…)` is async",
@@ -495,7 +500,8 @@ fn errors() {
     // Sync functions are called from anywhere.
     assert!(
         analyze(
-            "world w { import demo:host/clock; export t; }
+            "use demo:host/clock;
+world w { import demo:host/clock; export t; }
              interface t {
                async func f() -> u64 { return clock::now() + u64(g()); }
                func g() -> u32 { return 1; }
