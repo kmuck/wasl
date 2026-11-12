@@ -25,18 +25,18 @@ interface carts {
     last: mut option<line>,
 
     constructor() {
-      return cart { items: 0, amount: 0, last: option::none };
+      return cart { items: 0, amount: 0, last: option.none };
     }
 
     func add(sku: string, quantity: u32) -> result<_, cart_error> {
       if (quantity == 0) {
-        return result::err(cart_error::zero_quantity);
+        return result.err(cart_error::zero_quantity);
       }
       local price: u64 = prices::of(sku)?;
       self.items = self.items + quantity;
       self.amount = self.amount + u64(quantity) * price;
-      self.last = option::some(line { sku: sku, quantity: quantity });
-      return result::ok;
+      self.last = option.some(line { sku: sku, quantity: quantity });
+      return result.ok;
     }
 
     func total() -> u64 {
@@ -55,7 +55,7 @@ interface carts {
     static func of(sku: string, quantity: u32) -> result<cart, cart_error> {
       local c: cart = cart();
       c.add(sku, quantity)?;
-      return result::ok(c);
+      return result.ok(c);
     }
   }
 
@@ -67,12 +67,12 @@ interface prices {
   // Unit price in cents.
   func of(sku: string) -> result<u64, carts::cart_error> {
     if (sku == "pen") {
-      return result::ok(150);
+      return result.ok(150);
     }
     if (sku == "notebook") {
-      return result::ok(425);
+      return result.ok(425);
     }
-    return result::err(carts::cart_error::unknown_sku);
+    return result.err(carts::cart_error::unknown_sku);
   }
 
 }

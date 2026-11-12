@@ -24,7 +24,7 @@ pub(super) fn always_returns(stmts: &[hir::Stmt]) -> bool {
 }
 
 /// Whether an expression determines its own type (§ 8.2). Numeric literals,
-/// `option::none`, `result::…`, `[]` and lists of literals take the expected type.
+/// `option.none`, `result.…`, `[]` and lists of literals take the expected type.
 fn self_typed(e: &ast::Expr) -> bool {
     if needs_type_context(e) {
         return false;
@@ -40,7 +40,7 @@ fn self_typed(e: &ast::Expr) -> bool {
             ([head], "some") if head.name == "option" => call.args.iter().all(self_typed),
             ([head], _) if head.name == "result" => false,
             ([head], "filled") if head.name == "list" => call.args.get(1).is_some_and(self_typed),
-            // `stream::new()` and `future::new()` take `T` from the context (§ 8.21).
+            // `stream.new()` and `future.new()` take `T` from the context (§ 8.21).
             _ if is_end_new(call) => false,
             _ => true,
         },
@@ -51,7 +51,7 @@ fn self_typed(e: &ast::Expr) -> bool {
 /// What a path designates (§ 9.8).
 enum PathTarget {
     Builtin(hir::Builtin),
-    /// `option::c` or `result::c`, with `c` not yet checked.
+    /// `option.c` or `result.c`, with `c` not yet checked.
     Option(Ident),
     Result(Ident),
     /// A case of a declared enum or variant.
@@ -108,7 +108,7 @@ pub(super) struct FnCx<'a> {
     loop_depth: u32,
     /// Depth of the blocks: 1 in the top level of the body (§ 8.21).
     block_depth: u32,
-    /// Whether a `task::return` has been analyzed: after it, the result is delivered
+    /// Whether a `task.return` has been analyzed: after it, the result is delivered
     /// (E0418).
     delivered: bool,
     /// Whether the function is async: only an async function makes async calls (E0416).
@@ -118,7 +118,7 @@ pub(super) struct FnCx<'a> {
     /// The streams and futures the function uses, as readable types, with a location:
     /// each must appear in a function of every world that reaches it (E0223).
     pub(super) end_uses: Vec<(Type, Span)>,
-    /// The calls to functions that contain `task::return`, with their location (E0419).
+    /// The calls to functions that contain `task.return`, with their location (E0419).
     pub(super) entry_calls: Vec<(hir::FuncId, Span)>,
 }
 
@@ -165,7 +165,7 @@ impl<'a> FnCx<'a> {
 
     /// E0416: a call to an async function outside an async function (§ 2.8). The
     /// Component Model traps when a task that is not async would block. Also records the
-    /// calls to the functions that contain `task::return` (E0419).
+    /// calls to the functions that contain `task.return` (E0419).
     fn check_color(&mut self, func: FuncId, written: &str, span: Span) -> Result<()> {
         if self.program.funcs[func].delivers {
             self.entry_calls.push((func, span));
@@ -276,7 +276,7 @@ impl<'a> FnCx<'a> {
         Ok(stmts)
     }
 
-    /// E0418: `return e;`, `?` or a `borrow` parameter after `task::return` (§ 8.21).
+    /// E0418: `return e;`, `?` or a `borrow` parameter after `task.return` (§ 8.21).
     fn after_delivery(&self, span: Span, message: impl FnOnce() -> String) -> Result<()> {
         if self.delivered {
             return err(Code::AfterTaskReturn, span, message());
@@ -284,7 +284,7 @@ impl<'a> FnCx<'a> {
         Ok(())
     }
 
-    /// E0418: a `borrow` parameter used after `task::return` (§ 8.21). The Component
+    /// E0418: a `borrow` parameter used after `task.return` (§ 8.21). The Component
     /// Model ends the borrows of a task when it delivers its result.
     fn borrow_use(&self, ty: Type, name: &str, span: Span) -> Result<()> {
         if !matches!(self.types.kind(ty), TypeKind::Borrow(_)) {
@@ -292,33 +292,33 @@ impl<'a> FnCx<'a> {
         }
         self.after_delivery(span, || {
             format!(
-                "`{name}` is a `borrow` parameter, used after `task::return`: a borrow ends when the task delivers its result, so use `{name}` before `task::return`"
+                "`{name}` is a `borrow` parameter, used after `task.return`: a borrow ends when the task delivers its result, so use `{name}` before `task.return`"
             )
         })
     }
 
-    /// `task::return(e);` (§ 8.21): at the top level of the body of an async function
+    /// `task.return(e);` (§ 8.21): at the top level of the body of an async function
     /// with a return type, once (E0417).
     fn task_return(&mut self, value: &ast::Expr, span: Span) -> Result<hir::Stmt> {
         let place = |reason: String| err(Code::TaskReturnPlace, span, reason);
         let Some(ret) = self.ret else {
             return place(
-                "`task::return` delivers the result of the function, and this function has no return type".to_string(),
+                "`task.return` delivers the result of the function, and this function has no return type".to_string(),
             );
         };
         if !self.in_async {
             return place(
-                "`task::return` is only allowed in an async function: declare this function `async func`".to_string(),
+                "`task.return` is only allowed in an async function: declare this function `async func`".to_string(),
             );
         }
         if self.delivered {
             return place(
-                "the result is already delivered by an earlier `task::return`: a function delivers it once".to_string(),
+                "the result is already delivered by an earlier `task.return`: a function delivers it once".to_string(),
             );
         }
         if self.block_depth != 1 {
             return place(
-                "`task::return` is only allowed at the top level of the body, not inside an `if`, a `while` or a `match`, so that the result is delivered exactly once".to_string(),
+                "`task.return` is only allowed at the top level of the body, not inside an `if`, a `while` or a `match`, so that the result is delivered exactly once".to_string(),
             );
         }
         let value = self.expr(value, Some(ret))?;
@@ -351,7 +351,7 @@ impl<'a> FnCx<'a> {
                 let ty = self.resolver.resolve(self.types, written, self.iface)?;
                 super::no_borrow(self.types, ty, written.span)?;
                 // Without an initial value, a local starts at the default value of its Wasm
-                // type: zero for a scalar, null (`option::none`) for an option. The other
+                // type: zero for a scalar, null (`option.none`) for an option. The other
                 // types are non-nullable references, which have none (§ 9.4).
                 let has_default =
                     self.types.is_scalar(ty) || matches!(self.types.kind(ty), TypeKind::Option(_));
@@ -440,7 +440,7 @@ impl<'a> FnCx<'a> {
                 (None, Some(_)) if self.delivered => hir::Stmt::Return(None),
                 (Some(e), Some(ty)) => {
                     self.after_delivery(stmt.span, || {
-                        "`return` with a value after `task::return`: the result of the task is already delivered, so only `return;` can end the function".to_string()
+                        "`return` with a value after `task.return`: the result of the task is already delivered, so only `return;` can end the function".to_string()
                     })?;
                     hir::Stmt::Return(Some(self.expr(e, Some(ty))?))
                 }
@@ -464,30 +464,6 @@ impl<'a> FnCx<'a> {
                 span,
             }) => {
                 let value = self.try_(inner, *span)?;
-                if let Some(ty) = value.ty {
-                    return err(
-                        Code::IgnoredValue,
-                        stmt.span,
-                        format!(
-                            "the value of this `?` (`{}`) is ignored: use it, or write `_ =` before the statement to discard it",
-                            self.show(ty)
-                        ),
-                    );
-                }
-                hir::Stmt::Call(value)
-            }
-            StmtKind::Discard(ast::Expr {
-                kind: ExprKind::Try(inner),
-                span,
-            }) => {
-                let value = self.try_(inner, *span)?;
-                if value.ty.is_none() {
-                    return err(
-                        Code::TypeMismatch,
-                        stmt.span,
-                        "this `?` has no value, so there is nothing to discard: remove `_ =`",
-                    );
-                }
                 hir::Stmt::Call(value)
             }
             StmtKind::Call(ast::Expr {
@@ -503,42 +479,6 @@ impl<'a> FnCx<'a> {
                     );
                 }
                 let call_expr = self.call(call, target, stmt.span, None)?;
-                if let Some(ty) = call_expr.ty {
-                    let name = call_path(call);
-                    return err(
-                        Code::IgnoredValue,
-                        stmt.span,
-                        format!(
-                            "the value of `{name}(…)` (`{}`) is ignored: use it, or write `_ = {name}(…);` to discard it",
-                            self.show(ty)
-                        ),
-                    );
-                }
-                hir::Stmt::Call(call_expr)
-            }
-            StmtKind::Discard(ast::Expr {
-                kind: ExprKind::Call(call),
-                ..
-            }) => {
-                let target = self.call_target(call)?;
-                if !matches!(target, PathTarget::Func(_) | PathTarget::Builtin(_)) {
-                    return err(
-                        Code::Syntax,
-                        stmt.span,
-                        "only the value of a function call can be discarded, not a constructor",
-                    );
-                }
-                let call_expr = self.call(call, target, stmt.span, None)?;
-                if call_expr.ty.is_none() {
-                    let name = call_path(call);
-                    return err(
-                        Code::TypeMismatch,
-                        stmt.span,
-                        format!(
-                            "function `{name}` does not return a value, so there is nothing to discard: write `{name}(…);`"
-                        ),
-                    );
-                }
                 hir::Stmt::Call(call_expr)
             }
             StmtKind::Call(ast::Expr {
@@ -551,42 +491,9 @@ impl<'a> FnCx<'a> {
                 span,
             }) => {
                 let call_expr = self.method(receiver, name, args, *span)?;
-                if let Some(ty) = call_expr.ty {
-                    return err(
-                        Code::IgnoredValue,
-                        stmt.span,
-                        format!(
-                            "the value of `.{}(…)` (`{}`) is ignored: use it, or write `_ =` before the statement to discard it",
-                            name.name,
-                            self.show(ty)
-                        ),
-                    );
-                }
                 hir::Stmt::Call(call_expr)
             }
-            StmtKind::Discard(ast::Expr {
-                kind:
-                    ExprKind::Method {
-                        receiver,
-                        name,
-                        args,
-                    },
-                span,
-            }) => {
-                let call_expr = self.method(receiver, name, args, *span)?;
-                if call_expr.ty.is_none() {
-                    return err(
-                        Code::TypeMismatch,
-                        stmt.span,
-                        format!(
-                            "method `{}` does not return a value, so there is nothing to discard: remove `_ =`",
-                            name.name
-                        ),
-                    );
-                }
-                hir::Stmt::Call(call_expr)
-            }
-            StmtKind::Call(_) | StmtKind::Discard(_) => {
+            StmtKind::Call(_) => {
                 unreachable!("the parser only builds calls and `?` in call statements")
             }
         })
@@ -624,7 +531,7 @@ impl<'a> FnCx<'a> {
         let list_ty = list.value_ty();
         let TypeKind::List { elem, .. } = *self.types.kind(list_ty) else {
             let advice = if list_ty == Type::STRING {
-                ": write `string::chars(s)` or `string::bytes(s)`"
+                ": write `string.chars(s)` or `string.bytes(s)`"
             } else {
                 ""
             };
@@ -754,7 +661,7 @@ impl<'a> FnCx<'a> {
                 typed(hir::ExprKind::Tuple(values), ty)
             }
             _ if self_typed(init) => self.expr(init, None)?,
-            // `stream::new()` and `future::new()` take `T` from either position (§ 8.21).
+            // `stream.new()` and `future.new()` take `T` from either position (§ 8.21).
             ExprKind::Call(call) if is_end_new(call) && bindings.len() == 2 => {
                 let ends: Vec<(EndKind, Type)> = written
                     .iter()
@@ -848,7 +755,7 @@ impl<'a> FnCx<'a> {
     /// payload.
     fn try_(&mut self, inner: &ast::Expr, span: Span) -> Result<hir::Expr> {
         self.after_delivery(span, || {
-            "`?` after `task::return`: the result of the task is already delivered, so `?` cannot return an error; use `match`".to_string()
+            "`?` after `task.return`: the result of the task is already delivered, so `?` cannot return an error; use `match`".to_string()
         })?;
         let operand = self.expr(inner, None)?;
         let ty = operand.value_ty();
@@ -1108,6 +1015,24 @@ impl<'a> FnCx<'a> {
         let base = borrowed(self.expr(receiver, None)?);
         let ty = base.value_ty();
         let Some((decl, def)) = self.types.resource(ty) else {
+            // A built-in function is never a method (§ 5.3): `xs.len()` is `list.len(xs)`.
+            let head = match self.types.kind(ty) {
+                TypeKind::List { .. } => Some("list"),
+                _ if ty == Type::STRING => Some("string"),
+                _ => None,
+            };
+            if let Some(head) = head
+                && hir::Builtin::from_path(head, &name.name).is_some()
+            {
+                return err(
+                    Code::Syntax,
+                    name.span,
+                    format!(
+                        "a built-in function is not a method: write `{head}.{}(…)`, with the value as its first argument",
+                        name.name
+                    ),
+                );
+            }
             return err(
                 Code::UnknownMethod,
                 name.span,
@@ -1510,7 +1435,7 @@ impl<'a> FnCx<'a> {
                 return err(
                     Code::InvalidConversion,
                     target.span,
-                    "only numeric types have conversions; a number becomes a `char` with `char::from_u32`",
+                    "only numeric types have conversions; a number becomes a `char` with `char.from_u32`",
                 );
             }
         };
@@ -1961,7 +1886,7 @@ impl<'a> FnCx<'a> {
                 Code::ArgCount,
                 call.name.span,
                 format!(
-                    "`{}::{}` expects {arity} argument(s), {} given",
+                    "`{}.{}` expects {arity} argument(s), {} given",
                     call.path[0].name,
                     call.name.name,
                     call.args.len()
@@ -2008,7 +1933,7 @@ impl<'a> FnCx<'a> {
                             Code::TypeMismatch,
                             arg.span,
                             format!(
-                                "`{}` is already immutable: `list::freeze` takes a `list<mut T>`",
+                                "`{}` is already immutable: `list.freeze` takes a `list<mut T>`",
                                 self.show(ty)
                             ),
                         );
@@ -2043,7 +1968,7 @@ impl<'a> FnCx<'a> {
                     }
                 }
             }
-            B::Wrapping(_) | B::Checked(_) | B::WrappingFrom => {
+            B::Wrapping(_) | B::Checked(_) | B::WrappingFrom | B::IntToString | B::IntParse => {
                 unreachable!("functions of integer types")
             }
             B::EndNew
@@ -2070,7 +1995,7 @@ impl<'a> FnCx<'a> {
     ) -> Result<hir::Expr> {
         use hir::Builtin as B;
         let head = call.path[0].name.as_str();
-        let name = format!("{head}::{}", call.name.name);
+        let name = format!("{head}.{}", call.name.name);
         let call_span = call.path[0].span.to(call.name.span);
         if func.is_async() && !self.in_async {
             return err(
@@ -2166,7 +2091,7 @@ impl<'a> FnCx<'a> {
                 );
             }
         };
-        // `stream::write` and `stream::read` borrow their end; the others move it (§ 8.21).
+        // `stream.write` and `stream.read` borrow their end; the others move it (§ 8.21).
         let end = match func {
             B::StreamWrite | B::StreamRead => borrowed(end),
             _ => end,
@@ -2205,7 +2130,7 @@ impl<'a> FnCx<'a> {
         }
     }
 
-    /// A built-in function of an integer type `prim`: `u32::wrapping_add(a, b)`… (§ 8.17).
+    /// A built-in function of an integer type `prim`: `u32.wrapping_add(a, b)`… (§ 8.17).
     fn int_builtin(
         &mut self,
         func: hir::Builtin,
@@ -2217,7 +2142,7 @@ impl<'a> FnCx<'a> {
         use hir::{Arith, Builtin as B};
         let ty = Type::prim(prim);
         let arity = match func {
-            B::Wrapping(Arith::Neg) | B::WrappingFrom => 1,
+            B::Wrapping(Arith::Neg) | B::WrappingFrom | B::IntToString | B::IntParse => 1,
             _ => 2,
         };
         if call.args.len() != arity {
@@ -2225,7 +2150,7 @@ impl<'a> FnCx<'a> {
                 Code::ArgCount,
                 call.name.span,
                 format!(
-                    "`{}::{}` expects {arity} argument(s), {} given",
+                    "`{}.{}` expects {arity} argument(s), {} given",
                     call.path[0].name,
                     call.name.name,
                     call.args.len()
@@ -2251,13 +2176,18 @@ impl<'a> FnCx<'a> {
                         Code::InvalidConversion,
                         arg.span,
                         format!(
-                            "`{prim}::wrapping_from` takes an integer, found `{}`",
+                            "`{prim}.wrapping_from` takes an integer, found `{}`",
                             self.show(source)
                         ),
                     );
                 }
                 (vec![x], ty)
             }
+            B::IntToString => (vec![self.expr(&call.args[0], Some(ty))?], Type::STRING),
+            B::IntParse => (
+                vec![self.expr(&call.args[0], Some(Type::STRING))?],
+                self.types.intern(TypeKind::Option(ty)),
+            ),
             B::Checked(_) => {
                 let args = call
                     .args
@@ -2688,7 +2618,7 @@ impl<'a> FnCx<'a> {
 
     fn not_indexable<T>(&self, span: Span, ty: Type) -> Result<T> {
         let message = if ty == Type::STRING {
-            "strings cannot be indexed: their elements are bytes of an encoding; use `string::bytes(s)[i]` or `string::chars(s)[i]`".to_string()
+            "strings cannot be indexed: their elements are bytes of an encoding; use `string.bytes(s)[i]` or `string.chars(s)[i]`".to_string()
         } else {
             format!("type `{}` cannot be indexed: only lists can", self.show(ty))
         };
@@ -2974,7 +2904,7 @@ fn untyped_literal<T>(span: Span) -> Result<T> {
 }
 
 /// The path of a call as written, without its arguments: `save`, `store::save`.
-/// Whether the call is `stream::new()` or `future::new()`.
+/// Whether the call is `stream.new()` or `future.new()`.
 fn is_end_new(call: &ast::Call) -> bool {
     call.path.len() == 1
         && matches!(call.path[0].name.as_str(), "stream" | "future")

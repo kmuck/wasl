@@ -248,27 +248,27 @@ world w {
 interface t {
   func basket(n: u32) -> u64 {
     local c: carts::cart = carts::cart();
-    _ = c.add("pen", n);
+    c.add("pen", n);
     return c.total();
   }
 
   func checked(sku: string) -> result<u64, carts::cart_error> {
     local c: carts::cart = carts::cart();
     c.add(sku, 1)?;
-    return result::ok(c.total());
+    return result.ok(c.total());
   }
 
   func merged() -> result<u64, carts::cart_error> {
     local a: carts::cart = carts::cart::of("pen", 2)?;
     local b: carts::cart = carts::cart::of("notebook", 1)?;
     local m: carts::cart = carts::merge(a, b);
-    return result::ok(m.total() + b.total());
+    return result.ok(m.total() + b.total());
   }
 
   func temporaries() -> u64 {
-    _ = carts::cart::of("pen", 1);
-    _ = carts::find(3);
-    _ = carts::pair(5);
+    carts::cart::of("pen", 1);
+    carts::find(3);
+    carts::pair(5);
     return carts::cart().total() + carts::merge(carts::cart(), carts::cart()).total();
   }
 
@@ -313,7 +313,7 @@ interface t {
   }
 
   func pass(a: carts::cart, b: borrow<carts::cart>) -> carts::cart {
-    _ = a.add("pen", 1);
+    a.add("pen", 1);
     return carts::merge(a, b);
   }
 
@@ -339,7 +339,7 @@ interface t {
   func paired(n: u64) -> option<u64> {
     local (a: carts::cart, b: carts::cart) = carts::maybe_pair(n)?;
     local m: carts::cart = carts::merge(a, b);
-    return option::some(m.total());
+    return option.some(m.total());
   }
 
   // Each `c` replaces the cart of `a`, which is released; each `d` is released at the
@@ -357,17 +357,17 @@ interface t {
 
   func give_pair(n: u64) -> tuple<carts::cart, u32> {
     local c: carts::cart = carts::cart();
-    _ = c.add("pen", 1);
+    c.add("pen", 1);
     return tuple(c, 7);
   }
 
   func give(n: u32) -> option<carts::cart> {
     if (n == 0) {
-      return option::none;
+      return option.none;
     }
     local c: carts::cart = carts::cart();
-    _ = c.add("pen", n);
-    return option::some(c);
+    c.add("pen", n);
+    return option.some(c);
   }
 }
 "#;

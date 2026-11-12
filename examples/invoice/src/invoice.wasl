@@ -56,7 +56,7 @@ interface invoices {
         line { label: "pen", quantity: 3, unit_price: 150 },
         line { label: "notebook", quantity: 2, unit_price: 425 },
       ],
-      discount: option::some(discount::percent(10)),
+      discount: option.some(discount::percent(10)),
       delivery: delivery { email, urgent },
       status: status::draft,
     };
@@ -64,18 +64,18 @@ interface invoices {
 
   // Total in cents, after the discount.
   func total(inv: invoice) -> result<u64, invoice_error> {
-    if (string::len(inv.customer) == 0) {
-      return result::err(invoice_error::empty_customer);
+    if (string.len(inv.customer) == 0) {
+      return result.err(invoice_error::empty_customer);
     }
-    if (list::len(inv.lines) == 0) {
-      return result::err(invoice_error::no_lines);
+    if (list.len(inv.lines) == 0) {
+      return result.err(invoice_error::no_lines);
     }
     local sum: u64;
     local i: u32;
-    while (i < list::len(inv.lines)) {
+    while (i < list.len(inv.lines)) {
       local l: line = inv.lines[i];
       if (l.quantity == 0) {
-        return result::err(invoice_error::zero_quantity);
+        return result.err(invoice_error::zero_quantity);
       }
       sum = sum + u64(l.quantity) * l.unit_price;
       i = i + 1;
@@ -85,7 +85,7 @@ interface invoices {
         return pricing::apply(sum, d);
       }
       case none {
-        return result::ok(sum);
+        return result.ok(sum);
       }
     }
   }
@@ -95,7 +95,7 @@ interface invoices {
   func mark_paid(inv: invoice) -> result<invoice, invoice_error> {
     match (total(inv)) {
       case ok {
-        return result::ok(invoice {
+        return result.ok(invoice {
           number: inv.number,
           customer: inv.customer,
           lines: inv.lines,
@@ -105,7 +105,7 @@ interface invoices {
         });
       }
       case err(e) {
-        return result::err(e);
+        return result.err(e);
       }
     }
   }
@@ -135,18 +135,18 @@ interface invoices {
 
   // First letter of the customer's name.
   func initial(inv: invoice) -> option<char> {
-    local chars: list<char> = string::chars(inv.customer);
-    if (list::len(chars) == 0) {
-      return option::none;
+    local chars: list<char> = string.chars(inv.customer);
+    if (list.len(chars) == 0) {
+      return option.none;
     }
-    return option::some(chars[0]);
+    return option.some(chars[0]);
   }
 
   // Number of invoices, and sum of the totals that are valid.
   func stats(all: list<invoice>) -> tuple<u32, u64> {
     local sum: u64;
     local i: u32;
-    while (i < list::len(all)) {
+    while (i < list.len(all)) {
       match (total(all[i])) {
         case ok(t) {
           sum = sum + t;
@@ -156,24 +156,24 @@ interface invoices {
       }
       i = i + 1;
     }
-    return tuple(list::len(all), sum);
+    return tuple(list.len(all), sum);
   }
 
   func find(all: list<invoice>, customer: string) -> option<invoice> {
     local i: u32;
-    while (i < list::len(all)) {
+    while (i < list.len(all)) {
       if (all[i].customer == customer) {
-        return option::some(all[i]);
+        return option.some(all[i]);
       }
       i = i + 1;
     }
-    return option::none;
+    return option.none;
   }
 
   func count_unpaid(all: list<invoice>) -> u32 {
     local count: u32;
     local i: u32;
-    while (i < list::len(all)) {
+    while (i < list.len(all)) {
       if (all[i].status != status::paid) {
         count = count + 1;
       }
@@ -191,15 +191,15 @@ interface pricing {
     match (d) {
       case percent(p) {
         if (p > 100) {
-          return result::err(invoices::invoice_error::discount_too_large);
+          return result.err(invoices::invoice_error::discount_too_large);
         }
-        return result::ok(sum - sum * u64(p) / 100);
+        return result.ok(sum - sum * u64(p) / 100);
       }
       case fixed(amount) {
         if (amount > sum) {
-          return result::err(invoices::invoice_error::discount_too_large);
+          return result.err(invoices::invoice_error::discount_too_large);
         }
-        return result::ok(sum - amount);
+        return result.ok(sum - amount);
       }
     }
   }
@@ -217,14 +217,14 @@ interface text {
       count = count + 1;
       rest = rest / 10;
     }
-    local bytes: list<mut u8> = list::filled(count, 0);
+    local bytes: list<mut u8> = list.filled(count, 0);
     rest = n;
     while (count > 0) {
       count = count - 1;
       bytes[count] = u8(rest % 10) + 48;
       rest = rest / 10;
     }
-    match (string::from_bytes(bytes)) {
+    match (string.from_bytes(bytes)) {
       case some(s) {
         return s;
       }

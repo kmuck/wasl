@@ -1253,7 +1253,7 @@ struct FuncGen<'g, 'a> {
     owners: Vec<Vec<u32>>,
     /// The number of blocks open at the start of each enclosing loop body.
     loops: Vec<usize>,
-    /// For a function that delivers its result (§ 8.21): its `task::return` helper,
+    /// For a function that delivers its result (§ 8.21): its `task.return` helper,
     /// and the parameters that are borrowed handles, with their `resource.drop`.
     deliver: Option<(u32, Vec<(u32, u32)>)>,
 }
@@ -1578,7 +1578,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
         self.emit(Instruction::Return);
     }
 
-    /// `task::return` of the value on the stack (§ 8.21): the borrowed handles are given
+    /// `task.return` of the value on the stack (§ 8.21): the borrowed handles are given
     /// back first, as the Component Model requires, then the value is delivered.
     fn deliver(&mut self) {
         let (helper, borrows) = self.deliver.clone().expect("a function that delivers");
@@ -1910,7 +1910,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             }
             ExprKind::None => {
                 let TypeKind::Option(inner) = self.types().kind(e.value_ty()) else {
-                    unreachable!("option::none is an option")
+                    unreachable!("option.none is an option")
                 };
                 let index = self.cx.option_heap(*inner);
                 self.emit(Instruction::RefNull(HeapType::Concrete(index)));
@@ -1992,7 +1992,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 return;
             }
             Builtin::Checked(op) => {
-                // `option::none` on overflow, `option::some(r)` otherwise.
+                // `option.none` on overflow, `option.some(r)` otherwise.
                 let int = args[0].value_ty();
                 self.expr(&args[0]);
                 self.expr(&args[1]);
@@ -2009,6 +2009,32 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             Builtin::WrappingFrom => {
                 self.expr(&args[0]);
                 self.wrap_int(args[0].value_ty(), ty, true);
+                return;
+            }
+            Builtin::IntToString => {
+                // The helper works on an `i64`: a narrower integer is extended (§ 12.8).
+                let int = args[0].value_ty();
+                self.expr(&args[0]);
+                if int.bits() < 64 {
+                    self.emit(if int.is_signed() {
+                        Instruction::I64ExtendI32S
+                    } else {
+                        Instruction::I64ExtendI32U
+                    });
+                }
+                let index = self.cx.helper(Helper::IntToString {
+                    signed: int.is_signed(),
+                });
+                self.emit(Instruction::Call(index));
+                return;
+            }
+            Builtin::IntParse => {
+                let TypeKind::Option(int) = *self.cx.types.kind(ty) else {
+                    unreachable!("`T.parse` returns an option");
+                };
+                self.expr(&args[0]);
+                let index = self.cx.helper(Helper::IntParse(int));
+                self.emit(Instruction::Call(index));
                 return;
             }
             _ => {}
@@ -2031,7 +2057,9 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             Builtin::ListFilled
             | Builtin::Wrapping(_)
             | Builtin::Checked(_)
-            | Builtin::WrappingFrom => unreachable!("generated above"),
+            | Builtin::WrappingFrom
+            | Builtin::IntToString
+            | Builtin::IntParse => unreachable!("generated above"),
             Builtin::EndNew
             | Builtin::StreamWrite
             | Builtin::StreamRead
@@ -2047,7 +2075,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
     fn end_builtin(&mut self, func: Builtin, args: &[Expr], ty: Option<Type>) {
         let helper = match func {
             Builtin::EndNew => Boundary::EndNew(ty.expect("a tuple of ends")),
-            // `stream::write` and `stream::read` borrow their end: the helper returns it
+            // `stream.write` and `stream.read` borrow their end: the helper returns it
             // after the value, `-1` once the other end has left (§ 12.12).
             Builtin::StreamWrite | Builtin::StreamRead => {
                 for arg in args {

@@ -115,7 +115,7 @@ struct BodyFacts {
     foreign_calls: Vec<Vec<(FuncId, Span)>>,
     /// Stream and future types.
     end_uses: Vec<Vec<(Type, Span)>>,
-    /// Calls to functions that contain `task::return`.
+    /// Calls to functions that contain `task.return`.
     entry_calls: Vec<Vec<(FuncId, Span)>>,
 }
 
@@ -1082,7 +1082,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// 11. Calls to entry points, world by world: a function that contains `task::return`
+    /// 11. Calls to entry points, world by world: a function that contains `task.return`
     ///     is only called by the host and other components (E0419, § 8.21).
     fn entry_calls(&self, facts: &BodyFacts, errors: &mut Vec<Diagnostic>) {
         let mut reported: Vec<Span> = Vec::new();
@@ -1103,7 +1103,7 @@ impl<'a> Analyzer<'a> {
                         Code::EntryCall,
                         span,
                         format!(
-                            "`{}::{}` calls `{}::{}`, which contains `task::return`, in the component of world `{}`: a function that delivers its result before its end is an entry point, called only by the host and other components; move the shared code into a function without `task::return`",
+                            "`{}::{}` calls `{}::{}`, which contains `task.return`, in the component of world `{}`: a function that delivers its result before its end is an entry point, called only by the host and other components; move the shared code into a function without `task.return`",
                             self.program.interfaces[caller.interface].name,
                             caller.name,
                             self.program.interfaces[iface].name,
@@ -1547,7 +1547,7 @@ fn check_boundary_types(
                     unreachable!("a mutable list")
                 };
                 format!(
-                    "`{}` appears in the WIT through the {what} `{}`, but the WIT has no mutability: use `list<{}>`, and `list::copy` for a mutable copy inside the component",
+                    "`{}` appears in the WIT through the {what} `{}`, but the WIT has no mutability: use `list<{}>`, and `list.copy` for a mutable copy inside the component",
                     types.display(list),
                     at.name,
                     types.display(*elem)
@@ -2033,7 +2033,7 @@ mod tests {
         ok("if (n < 1) { return 0; } else if (n > 2) { return 1; } else { return 2; }");
         ok("local s: s8 = -128; local t: s8 = -(5); return u32(s) + u32(t);");
         ok("local y: f64 = x * 2.0 + -1.5; return u32(y);");
-        ok("m = m + 1; v(); _ = other::o(); return other::o() + g;");
+        ok("m = m + 1; v(); other::o(); return other::o() + g;");
         ok("local c: bool = n > 1 && !b || x == 2.0; return 1 + 2 * 3;");
         ok("while (true) { if (b) { break; } else { continue; } } return n << 2 & 255;");
         ok("n = 5; return n;");
@@ -2041,24 +2041,47 @@ mod tests {
 
     #[test]
     fn integer_functions() {
-        ok("return u32::wrapping_add(n, 1) + u32::wrapping_mul(2, 3) - u32::wrapping_sub(n, n);");
-        ok("local s: s8 = s8::wrapping_neg(-128); return u32::wrapping_from(s);");
+        ok("return u32.wrapping_add(n, 1) + u32.wrapping_mul(2, 3) - u32.wrapping_sub(n, n);");
+        ok("local s: s8 = s8.wrapping_neg(-128); return u32.wrapping_from(s);");
         ok(
-            "local o: option<u64> = u64::checked_mul(u64(n), 3); m = u32::wrapping_from(m); return n;",
+            "local o: option<u64> = u64.checked_mul(u64(n), 3); m = u32.wrapping_from(m); return n;",
         );
-        ok("_ = u8::wrapping_add(1, 2); return 0;");
-        fails("return u32::wrapping_neg(n);", Code::UnknownFunc);
-        fails("return u32::saturating_add(n, 1);", Code::UnknownFunc);
-        fails("return u32::wrapping_add(n);", Code::ArgCount);
-        fails("return u32::wrapping_add(n, 1.5);", Code::TypeMismatch);
+        ok("u8.wrapping_add(1, 2); return 0;");
+        fails("return u32.wrapping_neg(n);", Code::UnknownFunc);
+        fails("return u32.saturating_add(n, 1);", Code::UnknownFunc);
+        ok(
+            "local t: string = u32.to_string(n) + s8.to_string(-1); local o: option<u32> = u32.parse(t); return n;",
+        );
         fails(
-            "local s: s8 = s8::wrapping_add(n, 1); return 0;",
+            "local t: string = u32.to_string(b); return n;",
             Code::TypeMismatch,
         );
-        fails("return u32::checked_add(n, 1);", Code::TypeMismatch);
-        fails("return u32::wrapping_from(300);", Code::UntypedLiteral);
-        fails("return u32::wrapping_from(x);", Code::InvalidConversion);
-        fails("return u32::wrapping_from(b);", Code::InvalidConversion);
+        fails(
+            "local t: string = u32.to_string(n, 10); return n;",
+            Code::ArgCount,
+        );
+        fails(
+            "local o: option<u64> = u32.parse(\"1\"); return n;",
+            Code::TypeMismatch,
+        );
+        fails(
+            "local o: option<u32> = u32.parse(n); return n;",
+            Code::TypeMismatch,
+        );
+        fails(
+            "local t: string = f64.to_string(1.0); return n;",
+            Code::Syntax,
+        );
+        fails("return u32.wrapping_add(n);", Code::ArgCount);
+        fails("return u32.wrapping_add(n, 1.5);", Code::TypeMismatch);
+        fails(
+            "local s: s8 = s8.wrapping_add(n, 1); return 0;",
+            Code::TypeMismatch,
+        );
+        fails("return u32.checked_add(n, 1);", Code::TypeMismatch);
+        fails("return u32.wrapping_from(300);", Code::UntypedLiteral);
+        fails("return u32.wrapping_from(x);", Code::InvalidConversion);
+        fails("return u32.wrapping_from(b);", Code::InvalidConversion);
     }
 
     #[test]

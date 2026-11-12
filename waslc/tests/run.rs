@@ -45,26 +45,26 @@ interface t {
   func neg_s64(a: s64) -> s64 { return -a; }
 
   // Explicit wrapping and checked arithmetic
-  func wrapping_add_u8(a: u8, b: u8) -> u8 { return u8::wrapping_add(a, b); }
-  func wrapping_sub_u32(a: u32, b: u32) -> u32 { return u32::wrapping_sub(a, b); }
-  func wrapping_mul_u16(a: u16, b: u16) -> u16 { return u16::wrapping_mul(a, b); }
-  func wrapping_add_s64(a: s64, b: s64) -> s64 { return s64::wrapping_add(a, b); }
-  func wrapping_neg_s8(a: s8) -> s8 { return s8::wrapping_neg(a); }
-  func wrapping_literals() -> u32 { return u32::wrapping_add(4294967295, 2); }
+  func wrapping_add_u8(a: u8, b: u8) -> u8 { return u8.wrapping_add(a, b); }
+  func wrapping_sub_u32(a: u32, b: u32) -> u32 { return u32.wrapping_sub(a, b); }
+  func wrapping_mul_u16(a: u16, b: u16) -> u16 { return u16.wrapping_mul(a, b); }
+  func wrapping_add_s64(a: s64, b: s64) -> s64 { return s64.wrapping_add(a, b); }
+  func wrapping_neg_s8(a: s8) -> s8 { return s8.wrapping_neg(a); }
+  func wrapping_literals() -> u32 { return u32.wrapping_add(4294967295, 2); }
   func hash(s: string) -> u32 {
-    local bytes: list<u8> = string::bytes(s);
+    local bytes: list<u8> = string.bytes(s);
     local h: u32 = 5381;
     local i: u32;
-    while (i < list::len(bytes)) {
-      h = u32::wrapping_add(u32::wrapping_mul(h, 33), u32(bytes[i]));
+    while (i < list.len(bytes)) {
+      h = u32.wrapping_add(u32.wrapping_mul(h, 33), u32(bytes[i]));
       i = i + 1;
     }
     return h;
   }
-  func checked_add_u8(a: u8, b: u8) -> option<u8> { return u8::checked_add(a, b); }
-  func checked_sub_s32(a: s32, b: s32) -> option<s32> { return s32::checked_sub(a, b); }
-  func checked_mul_u64(a: u64, b: u64) -> option<u64> { return u64::checked_mul(a, b); }
-  func checked_mul_s64(a: s64, b: s64) -> option<s64> { return s64::checked_mul(a, b); }
+  func checked_add_u8(a: u8, b: u8) -> option<u8> { return u8.checked_add(a, b); }
+  func checked_sub_s32(a: s32, b: s32) -> option<s32> { return s32.checked_sub(a, b); }
+  func checked_mul_u64(a: u64, b: u64) -> option<u64> { return u64.checked_mul(a, b); }
+  func checked_mul_s64(a: s64, b: s64) -> option<s64> { return s64.checked_mul(a, b); }
 
   // Division and remainder
   func div_s32(a: s32, b: s32) -> s32 { return a / b; }
@@ -85,10 +85,10 @@ interface t {
   func nan_ne(x: f64) -> bool { return x != x; }
 
   // Conversions
-  func u8_wrapping_from_u32(x: u32) -> u8 { return u8::wrapping_from(x); }
-  func s8_wrapping_from_u8(x: u8) -> s8 { return s8::wrapping_from(x); }
-  func u32_wrapping_from_s32(x: s32) -> u32 { return u32::wrapping_from(x); }
-  func u16_wrapping_from_s64(x: s64) -> u16 { return u16::wrapping_from(x); }
+  func u8_wrapping_from_u32(x: u32) -> u8 { return u8.wrapping_from(x); }
+  func s8_wrapping_from_u8(x: u8) -> s8 { return s8.wrapping_from(x); }
+  func u32_wrapping_from_s32(x: s32) -> u32 { return u32.wrapping_from(x); }
+  func u16_wrapping_from_s64(x: s64) -> u16 { return u16.wrapping_from(x); }
   func u8_of_u32(x: u32) -> u8 { return u8(x); }
   func s16_of_s64(x: s64) -> s16 { return s16(x); }
   func s32_of_u32(x: u32) -> s32 { return s32(x); }
@@ -204,18 +204,44 @@ interface t {
   }
   func calls() -> u32 {
     reset();
-    _ = incr();
-    _ = incr();
+    incr();
+    incr();
     return counter;
   }
 
   func get_big() -> u64 { return big; }
   func get_neg() -> s8 { return neg; }
   func from_util() -> u32 { return util::seven(); }
+
+  // Decimal form of integers
+  func u8_to_string(n: u8) -> string { return u8.to_string(n); }
+  func u8_parse(s: string) -> option<u8> { return u8.parse(s); }
+  func s8_to_string(n: s8) -> string { return s8.to_string(n); }
+  func s8_parse(s: string) -> option<s8> { return s8.parse(s); }
+  func u16_to_string(n: u16) -> string { return u16.to_string(n); }
+  func u16_parse(s: string) -> option<u16> { return u16.parse(s); }
+  func s16_to_string(n: s16) -> string { return s16.to_string(n); }
+  func s16_parse(s: string) -> option<s16> { return s16.parse(s); }
+  func u32_to_string(n: u32) -> string { return u32.to_string(n); }
+  func u32_parse(s: string) -> option<u32> { return u32.parse(s); }
+  func s32_to_string(n: s32) -> string { return s32.to_string(n); }
+  func s32_parse(s: string) -> option<s32> { return s32.parse(s); }
+  func u64_to_string(n: u64) -> string { return u64.to_string(n); }
+  func u64_parse(s: string) -> option<u64> { return u64.parse(s); }
+  func s64_to_string(n: s64) -> string { return s64.to_string(n); }
+  func s64_parse(s: string) -> option<s64> { return s64.parse(s); }
+  func literals_to_string() -> string { return s64.to_string(-9223372036854775808) + " " + u8.to_string(7); }
+  func round_trip(n: s32) -> bool {
+    match (s32.parse(s32.to_string(n))) {
+      case some(m) { return m == n; }
+      case none { return false; }
+    }
+  }
 }
 
 interface util {
   func seven() -> u32 { return 7; }
+
 }
 "#;
 
@@ -574,4 +600,92 @@ fn globals_and_state() {
     assert_eq!(runner.call("calls", &[]), U32(2));
     assert_eq!(runner.call("incr", &[]), U32(3));
     assert_eq!(runner.call("incr", &[]), U32(4));
+}
+
+#[test]
+fn integers_to_string() {
+    let text = |name: &str, arg: Val| match call(name, &[arg]) {
+        Val::String(s) => s,
+        other => panic!("{other:?}"),
+    };
+    for n in [0u8, 7, 10, 99, 100, 255] {
+        assert_eq!(text("u8-to-string", Val::U8(n)), n.to_string());
+    }
+    for n in [0i8, 1, -1, 127, -128] {
+        assert_eq!(text("s8-to-string", Val::S8(n)), n.to_string());
+    }
+    for n in [0u16, 65535] {
+        assert_eq!(text("u16-to-string", Val::U16(n)), n.to_string());
+    }
+    for n in [-32768i16, 32767, -10] {
+        assert_eq!(text("s16-to-string", Val::S16(n)), n.to_string());
+    }
+    for n in [0u32, 1205, u32::MAX] {
+        assert_eq!(text("u32-to-string", Val::U32(n)), n.to_string());
+    }
+    for n in [0i32, -1, i32::MIN, i32::MAX] {
+        assert_eq!(text("s32-to-string", Val::S32(n)), n.to_string());
+    }
+    for n in [0u64, 10_000_000_000, u64::MAX] {
+        assert_eq!(text("u64-to-string", Val::U64(n)), n.to_string());
+    }
+    for n in [0i64, -1, i64::MIN, i64::MAX] {
+        assert_eq!(text("s64-to-string", Val::S64(n)), n.to_string());
+    }
+    assert_eq!(
+        call("literals-to-string", &[]),
+        Val::String("-9223372036854775808 7".into())
+    );
+    for n in [0, -1, 42, i32::MIN, i32::MAX] {
+        assert_eq!(call("round-trip", &[Val::S32(n)]), Val::Bool(true));
+    }
+}
+
+#[test]
+fn integers_parse() {
+    let parse = |name: &str, text: &str| match call(name, &[Val::String(text.into())]) {
+        Val::Option(v) => v.map(|v| *v),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(parse("u8-parse", "0"), Some(Val::U8(0)));
+    assert_eq!(parse("u8-parse", "255"), Some(Val::U8(255)));
+    assert_eq!(parse("u8-parse", "256"), None);
+    assert_eq!(parse("u8-parse", "-1"), None);
+    assert_eq!(parse("s8-parse", "-128"), Some(Val::S8(-128)));
+    assert_eq!(parse("s8-parse", "127"), Some(Val::S8(127)));
+    assert_eq!(parse("s8-parse", "128"), None);
+    assert_eq!(parse("s8-parse", "-129"), None);
+    assert_eq!(parse("u16-parse", "65535"), Some(Val::U16(65535)));
+    assert_eq!(parse("u16-parse", "65536"), None);
+    assert_eq!(parse("s16-parse", "-32768"), Some(Val::S16(-32768)));
+    assert_eq!(parse("s16-parse", "32768"), None);
+    assert_eq!(parse("u32-parse", "4294967295"), Some(Val::U32(u32::MAX)));
+    assert_eq!(parse("u32-parse", "4294967296"), None);
+    assert_eq!(parse("s32-parse", "-2147483648"), Some(Val::S32(i32::MIN)));
+    assert_eq!(parse("s32-parse", "2147483648"), None);
+    assert_eq!(
+        parse("u64-parse", "18446744073709551615"),
+        Some(Val::U64(u64::MAX))
+    );
+    assert_eq!(parse("u64-parse", "18446744073709551616"), None);
+    assert_eq!(parse("u64-parse", "99999999999999999999999"), None);
+    assert_eq!(
+        parse("s64-parse", "-9223372036854775808"),
+        Some(Val::S64(i64::MIN))
+    );
+    assert_eq!(
+        parse("s64-parse", "9223372036854775807"),
+        Some(Val::S64(i64::MAX))
+    );
+    assert_eq!(parse("s64-parse", "9223372036854775808"), None);
+    assert_eq!(parse("s64-parse", "-9223372036854775809"), None);
+    // Only what `to_string` writes: no sign `+`, leading zero, space or other character.
+    for text in [
+        "", "-", "+1", "01", "00", "-0", "1 ", " 1", "1.0", "1_000", "0x10", "١",
+    ] {
+        assert_eq!(parse("s32-parse", text), None, "{text:?}");
+        assert_eq!(parse("u64-parse", text), None, "{text:?}");
+    }
+    assert_eq!(parse("s32-parse", "0"), Some(Val::S32(0)));
+    assert_eq!(parse("s32-parse", "-7"), Some(Val::S32(-7)));
 }

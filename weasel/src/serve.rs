@@ -187,7 +187,7 @@ impl Server {
 /// Prints the error of a request on standard error.
 fn report(label: &str, error: &wasmtime::Error) {
     match error.downcast_ref::<ErrorCode>() {
-        // `handle` returned `result::err(e)`.
+        // `handle` returned `result.err(e)`.
         Some(code) => eprintln!(
             "error: request `{label}` failed: {}",
             wasmtime_wasi_http::Error::from(code.clone())

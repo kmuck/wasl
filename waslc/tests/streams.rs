@@ -161,7 +161,7 @@ fn hello_wit() {
         .unwrap()
         .wit()
         .unwrap();
-    let spec = include_str!("../../docs/spec_v0.4/15-examples.md");
+    let spec = include_str!("../../docs/spec_v0.5/15-examples.md");
     let section = &spec[spec.find("## 15.7").unwrap()..];
     let start = section.find("package example:hello@0.1.0;").unwrap();
     let end = start + section[start..].find("```").unwrap();
@@ -175,7 +175,7 @@ fn hello_wit() {
 }
 
 /// Copies the standard input to the standard output, four bytes at a time: reads until
-/// the end of the stream, which `stream::read` reports again after it.
+/// the end of the stream, which `stream.read` reports again after it.
 const ECHO: &str = r#"
 world echo {
   import wasi:cli/types;
@@ -185,43 +185,43 @@ world echo {
   export wasi:cli/run {
     async func run() -> result {
       local (input: stream<u8>, read_done: future<result<_, types::error_code>>) = stdin::read_via_stream();
-      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();
       local write_done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
       local total: u32 = 0;
       local reading: bool = true;
       while (reading) {
-        match (stream::read(input, 4)) {
+        match (stream.read(input, 4)) {
           case some(bytes) {
-            if (list::len(bytes) > 4) {
-              return result::err;
+            if (list.len(bytes) > 4) {
+              return result.err;
             }
-            total = total + stream::write(tx, bytes);
+            total = total + stream.write(tx, bytes);
           }
           case none {
             reading = false;
           }
         }
       }
-      match (stream::read(input, 4)) {
+      match (stream.read(input, 4)) {
         case some {
-          return result::err;
+          return result.err;
         }
         case none { }
       }
-      _ = stream::write(tx, text::digits(total));
-      stream::close(tx);
-      match (future::read(read_done)) {
+      stream.write(tx, text::digits(total));
+      stream.close(tx);
+      match (future.read(read_done)) {
         case ok { }
         case err {
-          return result::err;
+          return result.err;
         }
       }
-      match (future::read(write_done)) {
+      match (future.read(write_done)) {
         case ok {
-          return result::ok;
+          return result.ok;
         }
         case err {
-          return result::err;
+          return result.err;
         }
       }
     }
@@ -233,18 +233,18 @@ interface text {
     if (n < 10) {
       return [u8(n) + 48];
     }
-    return list::freeze(text::concat(text::digits(n / 10), [u8(n % 10) + 48]));
+    return list.freeze(text::concat(text::digits(n / 10), [u8(n % 10) + 48]));
   }
 
   func concat(a: list<u8>, b: list<u8>) -> list<mut u8> {
-    local out: list<mut u8> = list::filled(list::len(a) + list::len(b), 0);
+    local out: list<mut u8> = list.filled(list.len(a) + list.len(b), 0);
     local i: u32 = 0;
-    while (i < list::len(a)) {
+    while (i < list.len(a)) {
       out[i] = a[i];
       i = i + 1;
     }
-    while (i < list::len(out)) {
-      out[i] = b[i - list::len(a)];
+    while (i < list.len(out)) {
+      out[i] = b[i - list.len(a)];
       i = i + 1;
     }
     return out;
@@ -393,15 +393,15 @@ fn future_write() {
           import demo:host/sink;
           export demo:host/run {
             async func run() -> result {
-              local (rx: future<u32>, tx: future_writer<u32>) = future::new();
+              local (rx: future<u32>, tx: future_writer<u32>) = future.new();
               sink::take(rx);
-              if (!future::write(tx, 7)) {
-                return result::err;
+              if (!future.write(tx, 7)) {
+                return result.err;
               }
               if (sink::taken() != 7) {
-                return result::err;
+                return result.err;
               }
-              return result::ok;
+              return result.ok;
             }
           }
         }"#,
@@ -411,7 +411,7 @@ fn future_write() {
 
 #[test]
 fn refused() {
-    // The host drops the readable ends: `future::write` returns `false`, and the writes
+    // The host drops the readable ends: `future.write` returns `false`, and the writes
     // to the stream return `0`, again and again.
     let result = run_sink(
         r#"
@@ -419,21 +419,21 @@ fn refused() {
           import demo:host/sink;
           export demo:host/run {
             async func run() -> result {
-              local (rx: future<u32>, tx: future_writer<u32>) = future::new();
+              local (rx: future<u32>, tx: future_writer<u32>) = future.new();
               sink::refuse(rx);
-              if (future::write(tx, 7)) {
-                return result::err;
+              if (future.write(tx, 7)) {
+                return result.err;
               }
-              local (s: stream<u8>, w: stream_writer<u8>) = stream::new();
+              local (s: stream<u8>, w: stream_writer<u8>) = stream.new();
               sink::refuse_stream(s);
-              if (stream::write(w, [1, 2, 3]) != 0) {
-                return result::err;
+              if (stream.write(w, [1, 2, 3]) != 0) {
+                return result.err;
               }
-              if (stream::write(w, [4]) != 0) {
-                return result::err;
+              if (stream.write(w, [4]) != 0) {
+                return result.err;
               }
-              stream::close(w);
-              return result::ok;
+              stream.close(w);
+              return result.ok;
             }
           }
         }"#,
@@ -449,19 +449,19 @@ fn moved_ends() {
           import demo:host/sink;
           export demo:host/run {
             async func run() -> result {
-              local (s: stream<u8>, w: stream_writer<u8>) = stream::new();
+              local (s: stream<u8>, w: stream_writer<u8>) = stream.new();
               sink::refuse_stream(s);
-              stream::close(w);
-              stream::close(w);
-              return result::ok;
+              stream.close(w);
+              stream.close(w);
+              return result.ok;
             }
           }
         }"#;
     assert_eq!(run_sink(closed_twice).unwrap(), Val::Result(Ok(None)));
     // … and using it traps.
     let written_after_close = closed_twice.replace(
-        "stream::close(w);\n              stream::close(w);",
-        "stream::close(w);\n              _ = stream::write(w, [1]);",
+        "stream.close(w);\n              stream.close(w);",
+        "stream.close(w);\n              stream.write(w, [1]);",
     );
     assert_ne!(written_after_close, closed_twice);
     assert!(run_sink(&written_after_close).is_err());
@@ -477,7 +477,7 @@ fn program(body: &str, funcs: &str) -> String {
            export wasi:cli/run {{
              async func run() -> result {{
                {body}
-               return result::ok;
+               return result.ok;
              }}
            }}
          }}
@@ -489,11 +489,11 @@ fn program(body: &str, funcs: &str) -> String {
 
 #[test]
 fn errors() {
-    let new = "local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();";
+    let new = "local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();";
     // E0223: no function of the world carries a `stream<string>`.
     fails(
         &program(
-            "local (rx: stream<string>, tx: stream_writer<string>) = stream::new();",
+            "local (rx: stream<string>, tx: stream_writer<string>) = stream.new();",
             "",
         ),
         Code::UncarriedEnd,
@@ -502,7 +502,7 @@ fn errors() {
     // E0220: a tuple of ends is destructured at once.
     fails(
         &program(
-            "local p: tuple<stream<u8>, stream_writer<u8>> = stream::new();",
+            "local p: tuple<stream<u8>, stream_writer<u8>> = stream.new();",
             "",
         ),
         Code::HandlePosition,
@@ -516,50 +516,50 @@ fn errors() {
     );
     // E0408: the type of the ends comes from the context.
     fails(
-        &program("_ = stream::new();", ""),
+        &program("stream.new();", ""),
         Code::CannotInfer,
-        "cannot infer the type of `stream::new()`",
+        "cannot infer the type of `stream.new()`",
     );
     fails(
-        &program("stream::new();", ""),
+        &program("stream.new();", ""),
         Code::CannotInfer,
         "destructure it with the types of the ends",
     );
     // E0101: a call waits by itself.
     fails(
-        &program(&format!("{new} _ = stream::write(tx, [1]).await;"), ""),
+        &program(&format!("{new} stream.write(tx, [1]).await;"), ""),
         Code::Await,
         "remove `await`",
     );
     fails(
         &program(
-            "local (rx: stream<u8>, tx: stream_writer<u8>) = future::new();",
+            "local (rx: stream<u8>, tx: stream_writer<u8>) = future.new();",
             "",
         ),
         Code::TypeMismatch,
-        "`future::new()` returns a `tuple<future<T>, future_writer<T>>`",
+        "`future.new()` returns a `tuple<future<T>, future_writer<T>>`",
     );
     fails(
-        &program("local (body: stream<u8>) = stream::new();", ""),
+        &program("local (body: stream<u8>) = stream.new();", ""),
         Code::TypeMismatch,
         "",
     );
     // E0400: the ends must agree.
     fails(
         &program(
-            "local (rx: stream<u8>, tx: stream_writer<u32>) = stream::new();",
+            "local (rx: stream<u8>, tx: stream_writer<u32>) = stream.new();",
             "",
         ),
         Code::TypeMismatch,
-        "but `stream::new()` returns a `tuple<stream<T>, stream_writer<T>>`",
+        "but `stream.new()` returns a `tuple<stream<T>, stream_writer<T>>`",
     );
     fails(
-        &program(&format!("{new} _ = stream::write(rx, [1]);"), ""),
+        &program(&format!("{new} stream.write(rx, [1]);"), ""),
         Code::TypeMismatch,
-        "`stream::write` takes a `stream_writer<T>`",
+        "`stream.write` takes a `stream_writer<T>`",
     );
     fails(
-        &program(&format!("{new} _ = stream::write(tx, [\"a\"]);"), ""),
+        &program(&format!("{new} stream.write(tx, [\"a\"]);"), ""),
         Code::TypeMismatch,
         "expected `list<u8>`, found `list<string>`",
     );
@@ -567,23 +567,23 @@ fn errors() {
     fails(
         &program(
             "",
-            "func f(tx: stream_writer<u8>) -> u32 { return stream::write(tx, [1]); }",
+            "func f(tx: stream_writer<u8>) -> u32 { return stream.write(tx, [1]); }",
         ),
         Code::AsyncCall,
-        "`stream::write(…)` is async",
+        "`stream.write(…)` is async",
     );
     fails(
         &program(
             "",
-            "func f(rx: future<u8>) -> u8 { return future::read(rx); }",
+            "func f(rx: future<u8>) -> u8 { return future.read(rx); }",
         ),
         Code::AsyncCall,
-        "`future::read(…)` is async",
+        "`future.read(…)` is async",
     );
     // E0222: a writable end never crosses the boundary.
     fails(
         "world w { export t; }
-         interface t { func f(tx: stream_writer<u8>) { stream::close(tx); } }",
+         interface t { func f(tx: stream_writer<u8>) { stream.close(tx); } }",
         Code::WriterInWit,
         "give the other component a `stream<u8>`",
     );
@@ -598,9 +598,9 @@ fn unwritten_future() {
           import demo:host/sink;
           export demo:host/run {
             async func run() -> result {
-              local (rx: future<u32>, tx: future_writer<u32>) = future::new();
+              local (rx: future<u32>, tx: future_writer<u32>) = future.new();
               sink::take(rx);
-              return result::ok;
+              return result.ok;
             }
           }
         }"#,

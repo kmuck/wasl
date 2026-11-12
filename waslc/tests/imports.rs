@@ -229,7 +229,7 @@ interface t {
   func write_twice(text: string) -> result<u32, string> {
     local n: u32 = log::write(log::entry { level: log::level::info, text: text, tags: [] })?;
     local m: u32 = log::write(log::entry { level: log::level::info, text: text + text, tags: [] })?;
-    return result::ok(n + m);
+    return result.ok(n + m);
   }
 
   func add(a: u32, b: u32) -> u32 { return log::add(a, b); }
@@ -239,8 +239,8 @@ interface t {
     return p.1 + "/" + log::echo(p.1);
   }
   func maybe(s: string) -> u32 {
-    local a: option<u32> = log::maybe(option::some(s));
-    local b: option<u32> = log::maybe(option::none);
+    local a: option<u32> = log::maybe(option.some(s));
+    local b: option<u32> = log::maybe(option.none);
     match (a) {
       case some(n) {
         match (b) {
@@ -351,7 +351,7 @@ fn same_package_imports() {
           record account { name: string, balance: u64 }
           func get(name: string) -> account {
             calls = calls + 1;
-            return account { name: name, balance: 100 + u64(string::len(name)) - 3 };
+            return account { name: name, balance: 100 + u64(string.len(name)) - 3 };
           }
           func count() -> u32 { return calls; }
         }

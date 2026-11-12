@@ -300,44 +300,30 @@ fn error_propagation_errors() {
     let cases: &[(&str, &str, Code)] = &[
         (
             "-> option<u32>",
-            "local y: u32 = n?; return option::none;",
+            "local y: u32 = n?; return option.none;",
             Code::TryOperand,
         ),
-        ("", "_ = r()?;", Code::TryReturn),
+        ("", "r()?;", Code::TryReturn),
         ("-> u32", "return r()?;", Code::TryReturn),
         (
             "-> option<u32>",
-            "return option::some(r()?);",
+            "return option.some(r()?);",
             Code::TryReturn,
         ),
         (
             "-> result<u32, s8>",
-            "return result::ok(r()?);",
+            "return result.ok(r()?);",
             Code::TryReturn,
         ),
-        (
-            "-> result<u32>",
-            "return result::ok(r()?);",
-            Code::TryReturn,
-        ),
+        ("-> result<u32>", "return result.ok(r()?);", Code::TryReturn),
         (
             "-> result<u32, e>",
-            "return result::ok(o()?);",
+            "return result.ok(o()?);",
             Code::TryReturn,
         ),
         (
             "-> result<u32, e>",
-            "r()?; return result::ok(1);",
-            Code::IgnoredValue,
-        ),
-        (
-            "-> result<u32, e>",
-            "_ = u()?; return result::ok(1);",
-            Code::TypeMismatch,
-        ),
-        (
-            "-> result<u32, e>",
-            "local y: u32 = u()?; return result::ok(y);",
+            "local y: u32 = u()?; return result.ok(y);",
             Code::TypeMismatch,
         ),
         ("-> result<u32, e>", "return r()?;", Code::TypeMismatch),
@@ -351,9 +337,9 @@ fn error_propagation_errors() {
         let program = format!(
             "interface t {{
                enum e {{ a, b }}
-               func r() -> result<u32, e> {{ return result::ok(1); }}
-               func u() -> result<_, e> {{ return result::ok; }}
-               func o() -> option<u32> {{ return option::none; }}
+               func r() -> result<u32, e> {{ return result.ok(1); }}
+               func u() -> result<_, e> {{ return result.ok; }}
+               func o() -> option<u32> {{ return option.none; }}
                func f(n: u32) {ret} {{ {body} }}
              }}"
         );
@@ -367,7 +353,7 @@ fn error_propagation_errors() {
     let global = analyze_files(&[(
         "src/t.wasl",
         "global g: u32 = t::r()?;
-         interface t { func r() -> result<u32> { return result::ok(1); } }",
+         interface t { func r() -> result<u32> { return result.ok(1); } }",
     )])
     .err()
     .unwrap();
@@ -448,7 +434,7 @@ fn mutable_types_stay_inside() {
     // that no exported function uses.
     let ok = [
         "func f(p: shared::point) -> u32 { return p.x; }",
-        "func f(xs: list<u8>) -> u32 { local ys: list<mut u8> = list::copy(xs); ys[0] = 2; return list::len(ys); }",
+        "func f(xs: list<u8>) -> u32 { local ys: list<mut u8> = list.copy(xs); ys[0] = 2; return list.len(ys); }",
         "record r { a: list<list<u8>> } func f(x: r) -> r { return x; }",
     ];
     for exported in ok {
@@ -475,7 +461,7 @@ fn mutable_types_stay_inside() {
             "`list<mut s8>`",
         ),
         (
-            "record r { a: u32 } func f() -> result<list<r>, list<mut r>> { return result::ok([]); }",
+            "record r { a: u32 } func f() -> result<list<r>, list<mut r>> { return result.ok([]); }",
             "`list<mut api::r>`",
         ),
     ];
@@ -503,7 +489,7 @@ fn invoice_example() {
         Err(e) => panic!("{}", e.display(&sources)),
     };
     let wit = analysis.wit().unwrap();
-    let spec = include_str!("../../docs/spec_v0.4/15-examples.md");
+    let spec = include_str!("../../docs/spec_v0.5/15-examples.md");
     let start = spec.find("package example:invoice@0.1.0;").unwrap();
     let end = start + spec[start..].find("```").unwrap();
     // The printer separates functions with blank lines; the specification does not.
@@ -548,16 +534,16 @@ fn invalid_v2_programs() {
             "match (inv.discount) { case none(x) { } case some { } }",
             Code::Payload,
         ),
-        ("local d: u8 = option::none;", Code::TypeMismatch),
+        ("local d: u8 = option.none;", Code::TypeMismatch),
         ("local s: string = 1;", Code::TypeMismatch),
         ("local c: char = 65;", Code::TypeMismatch),
         ("local s: status = 1.5;", Code::TypeMismatch),
         (
-            "match (option::none) { case none { } else { } }",
+            "match (option.none) { case none { } else { } }",
             Code::CannotInfer,
         ),
-        ("local m: u32 = list::len([]);", Code::CannotInfer),
-        ("local m: u32 = list::len([1, 2]);", Code::CannotInfer),
+        ("local m: u32 = list.len([]);", Code::CannotInfer),
+        ("local m: u32 = list.len([1, 2]);", Code::CannotInfer),
         ("local s: string;", Code::Uninitialized),
         ("local m: line;", Code::Uninitialized),
         ("local t: tuple<u32, u32>;", Code::Uninitialized),
@@ -583,11 +569,11 @@ fn invalid_v2_programs() {
         ("if (inv.customer < \"M\") { }", Code::InvalidOperator),
         ("local c: u8 = inv.customer[0];", Code::InvalidOperator),
         (
-            "local xs: list<mut u8> = string::bytes(inv.customer);",
+            "local xs: list<mut u8> = string.bytes(inv.customer);",
             Code::TypeMismatch,
         ),
         (
-            "local xs: list<u8> = list::freeze(string::bytes(inv.customer));",
+            "local xs: list<u8> = list.freeze(string.bytes(inv.customer));",
             Code::TypeMismatch,
         ),
         ("local c: char = '';", Code::InvalidCharLiteral),
@@ -607,41 +593,39 @@ fn invalid_v2_programs() {
             Code::TypeMismatch,
         ),
         ("local t: u32 = tuple(n, n).2;", Code::UnknownField),
-        ("local r: result<u32, status> = result::ok;", Code::Payload),
-        ("local r: result<_, status> = result::ok(1);", Code::Payload),
-        ("local o: option<u32> = option::some;", Code::Payload),
-        (
-            "local o: option<u32> = option::maybe(1);",
-            Code::UnknownCase,
-        ),
-        ("result::ok(1);", Code::Syntax),
-        ("_ = result::ok(1);", Code::Syntax),
-        ("_ = n;", Code::Syntax),
-        ("string::len(inv.customer);", Code::IgnoredValue),
-        ("total(inv);", Code::IgnoredValue),
-        ("_ = probe(inv, other, s, n, l);", Code::TypeMismatch),
+        ("local r: result<u32, status> = result.ok;", Code::Payload),
+        ("local r: result<_, status> = result.ok(1);", Code::Payload),
+        ("local o: option<u32> = option.some;", Code::Payload),
+        ("local o: option<u32> = option.maybe(1);", Code::UnknownCase),
+        ("result.ok(1);", Code::Syntax),
+        ("n;", Code::Syntax),
+        ("_ = total(inv);", Code::Syntax),
+        ("local m: u32 = list::len(d);", Code::Syntax),
+        ("local o: option<u32> = option::none;", Code::Syntax),
+        ("local m: u32 = u32::wrapping_add(n, 1);", Code::Syntax),
+        ("local m: u32 = d.len();", Code::Syntax),
         ("inv.status = status::paid;", Code::AssignReadOnly),
         ("local m: u32 = invoices::status;", Code::UnknownCase),
         (
-            "local m: u32 = string::nope(inv.customer);",
+            "local m: u32 = string.nope(inv.customer);",
             Code::UnknownFunc,
         ),
-        ("local m: u32 = string::len;", Code::UnknownName),
+        ("local m: u32 = string.len;", Code::UnknownName),
         (
-            "local m: u32 = string::len(inv.customer, n);",
+            "local m: u32 = string.len(inv.customer, n);",
             Code::ArgCount,
         ),
         (
             "local t: discount = discount::percent(1, 2);",
             Code::ArgCount,
         ),
-        ("local m: list<u8> = list::copy(d);", Code::TypeMismatch),
+        ("local m: list<u8> = list.copy(d);", Code::TypeMismatch),
     ];
     for (body, code) in cases {
         let program = INVOICE.replace(
             "  func sample() -> invoice {",
             &format!(
-                "  func probe(inv: invoice, other: invoice, s: status, n: u32, l: line) {{\n    local d: list<mut u8> = list::filled(4, 0);\n    {body}\n  }}\n\n  func sample() -> invoice {{"
+                "  func probe(inv: invoice, other: invoice, s: status, n: u32, l: line) {{\n    local d: list<mut u8> = list.filled(4, 0);\n    {body}\n  }}\n\n  func sample() -> invoice {{"
             ),
         );
         let sources = sources(&[("src/invoice.wasl", &program)]);
@@ -662,7 +646,7 @@ fn invalid_v2_programs() {
             Code::UnknownType,
         ),
         (
-            "interface p { func f() -> list<u8> { local d: list<mut u8> = list::filled(3, 0); return d; } }",
+            "interface p { func f() -> list<u8> { local d: list<mut u8> = list.filled(3, 0); return d; } }",
             Code::TypeMismatch,
         ),
     ];
@@ -684,27 +668,27 @@ fn valid_v2_bodies() {
         "local t: tuple<u32, list<char>> = tuple(1, ['a']); local u: char = t.1[0];",
         "local x: tuple<u32, string> = tuple(n, \"a\"); local y: string = x.1 + inv.customer;",
         "local f: delivery = delivery { email, urgent } | inv.delivery & delivery { }; if (f == delivery { } || f.paper) { }",
-        "local o: option<option<u32>> = option::some(option::none); local p: option<u32> = option::some(n);",
-        "local q: option<u32> = option::some(1);",
-        "local r: result = result::ok; local e: result<u32> = result::err; local g: result<_, status> = result::err(status::sent);",
+        "local o: option<option<u32>> = option.some(option.none); local p: option<u32> = option.some(n);",
+        "local q: option<u32> = option.some(1);",
+        "local r: result = result.ok; local e: result<u32> = result.err; local g: result<_, status> = result.err(status::sent);",
         "local v: discount = invoices::discount::fixed(1); local w: status = invoices::status::paid;",
-        "local xs: list<mut u8> = [1, 2]; xs[0] = 3; d[n] = xs[1]; local ys: list<u8> = list::freeze(xs);",
-        "local zs: list<mut string> = list::filled(n, \"\"); local ws: list<string> = list::filled(n, \"\"); local m: list<u8> = list::filled(2, 0);",
-        "local cs: list<char> = string::chars(inv.customer); local t: string = string::from_chars(cs); local b: option<string> = string::from_bytes(d);",
-        "local e: option<char> = char::from_u32(65); local k: u32 = list::len(list::copy(string::chars(inv.customer)));",
+        "local xs: list<mut u8> = [1, 2]; xs[0] = 3; d[n] = xs[1]; local ys: list<u8> = list.freeze(xs);",
+        "local zs: list<mut string> = list.filled(n, \"\"); local ws: list<string> = list.filled(n, \"\"); local m: list<u8> = list.filled(2, 0);",
+        "local cs: list<char> = string.chars(inv.customer); local t: string = string.from_chars(cs); local b: option<string> = string.from_bytes(d);",
+        "local e: option<char> = char.from_u32(65); local k: u32 = list.len(list.copy(string.chars(inv.customer)));",
         "other = inv; s = other.status;",
-        "local t: status; local o: option<line>; local f: delivery; if (t == status::draft && f == delivery { }) { o = option::some(l); }",
+        "local t: status; local o: option<line>; local f: delivery; if (t == status::draft && f == delivery { }) { o = option.some(l); }",
         "match (inv.discount) { case some(x) { match (x) { case percent(p) { n = u32(p); } case fixed { } } } case none { } }",
         "while (true) { match (s) { case draft { break; } else { continue; } } }",
-        "local g: list<list<u8>> = [[1], [], string::bytes(\"x\")];",
+        "local g: list<list<u8>> = [[1], [], string.bytes(\"x\")];",
         "local h: list<line> = [l, line { label: \"x\", quantity: 1, unit_price: 2, }];",
-        "_ = string::len(inv.customer); _ = total(inv); _ = u32::wrapping_add(n, 1);",
+        "string.len(inv.customer); total(inv); u32.wrapping_add(n, 1);",
     ];
     for body in bodies {
         let program = INVOICE.replace(
             "  func sample() -> invoice {",
             &format!(
-                "  func probe(inv: invoice, other: invoice, s: status, n: u32, l: line) {{\n    local d: list<mut u8> = list::filled(4, 0);\n    {body}\n  }}\n\n  func sample() -> invoice {{"
+                "  func probe(inv: invoice, other: invoice, s: status, n: u32, l: line) {{\n    local d: list<mut u8> = list.filled(4, 0);\n    {body}\n  }}\n\n  func sample() -> invoice {{"
             ),
         );
         let sources = sources(&[("src/invoice.wasl", &program)]);
@@ -713,10 +697,10 @@ fn valid_v2_bodies() {
         }
     }
     let globals = "global ga: invoices::line = invoices::line { label: \"item\", quantity: 1, unit_price: 0 };
-        global gb: option<invoices::discount> = option::none;
+        global gb: option<invoices::discount> = option.none;
         global gc: list<tuple<char, u8>> = [tuple('a', 1)];
         global gd: invoices::delivery = invoices::delivery { paper };
-        global ge: result<invoices::discount, u8> = result::ok(invoices::discount::percent(5));
+        global ge: result<invoices::discount, u8> = result.ok(invoices::discount::percent(5));
         global gf: mut s8 = -1;";
     let program = format!("{INVOICE}\n{globals}\n");
     let sources = sources(&[("src/invoice.wasl", &program)]);

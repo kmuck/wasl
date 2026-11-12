@@ -694,43 +694,43 @@ impl Parser {
             | TokenKind::KwResult
             | TokenKind::KwStream
             | TokenKind::KwFuture
-                if *self.peek_at(1) == TokenKind::ColonColon =>
+                if self.builtin_selector() =>
             {
                 self.call_stmt(start)?
             }
-            TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
+            TokenKind::Type(ty) if ty.is_int() && self.builtin_selector() => {
                 self.call_stmt(start)?
             }
             TokenKind::KwTask => {
                 self.bump();
-                self.expect(&TokenKind::ColonColon, "`::` (`task::return(e);`)")?;
+                if *self.peek() == TokenKind::ColonColon {
+                    return err(
+                        Code::Syntax,
+                        self.span(),
+                        "a built-in function is written with a `.`: `task.return(e);`; `::` is only for names declared in code",
+                    );
+                }
+                self.expect(&TokenKind::Dot, "`.` (`task.return(e);`)")?;
                 if *self.peek() != TokenKind::Return {
                     return err(
                         Code::Syntax,
                         self.span(),
-                        "the only function of `task` is `task::return(e);`, which delivers the result of the task (§ 8.21)",
+                        "the only function of `task` is `task.return(e);`, which delivers the result of the task (§ 8.21)",
                     );
                 }
                 self.bump();
-                self.expect(&TokenKind::LParen, "`(` (`task::return(e);`)")?;
+                self.expect(&TokenKind::LParen, "`(` (`task.return(e);`)")?;
                 let value = self.expr()?;
                 self.expect(&TokenKind::RParen, "`)`")?;
                 self.expect(&TokenKind::Semi, "`;`")?;
                 StmtKind::TaskReturn(value)
             }
             TokenKind::Underscore => {
-                self.bump();
-                self.expect(
-                    &TokenKind::Eq,
-                    "`=` (`_ = f(…);` discards the value of a call)",
-                )?;
-                let value_start = self.span();
-                let value = self.call_expr(
-                    value_start,
-                    "only the value of a function call can be discarded: `_ = f(…);`",
-                )?;
-                self.expect(&TokenKind::Semi, "`;`")?;
-                StmtKind::Discard(value)
+                return err(
+                    Code::Syntax,
+                    start,
+                    "there is no `_ =`: a call statement discards its value, write `f(…);` (§ 9.6)",
+                );
             }
             TokenKind::RBrace | TokenKind::Eof => return Err(self.unexpected("a statement")),
             _ => {
@@ -888,6 +888,12 @@ impl Parser {
         })
     }
 
+    /// Whether the token after the current one starts the name of a built-in function:
+    /// a `.`, or the `::` of 0.4, which `path_segments` rejects with the new writing.
+    fn builtin_selector(&self) -> bool {
+        matches!(self.peek_at(1), TokenKind::Dot | TokenKind::ColonColon)
+    }
+
     /// Parenthesized condition of an `if`, a `while` or a `match`.
     fn condition(&mut self, keyword: &str) -> Result<Expr> {
         self.expect(
@@ -899,9 +905,11 @@ impl Parser {
         Ok(cond)
     }
 
-    /// A name, or a path of up to three names separated by `::` (§ 5.2). The first name
-    /// may be one of the built-in types that have functions or cases.
+    /// A name, or a path of up to three names separated by `::` (§ 5.2); or the name of a
+    /// built-in type, a `.` and the name of one of its functions or constructors:
+    /// `list.len`, `option.none` (§ 5.3).
     fn path_segments(&mut self) -> Result<Vec<Ident>> {
+        let builtin = !matches!(self.peek(), TokenKind::Ident(_));
         let head = match self.peek().clone() {
             TokenKind::Ident(name) => name,
             TokenKind::KwChar => "char".to_string(),
@@ -916,6 +924,29 @@ impl Parser {
         };
         let span = self.bump().span;
         let mut segments = vec![Ident { name: head, span }];
+        if builtin {
+            if *self.peek() == TokenKind::ColonColon {
+                let head = &segments[0].name;
+                let name = match self.peek_at(1) {
+                    TokenKind::Ident(name) => name.clone(),
+                    _ => "f".to_string(),
+                };
+                return err(
+                    Code::Syntax,
+                    self.span(),
+                    format!(
+                        "a built-in function or constructor is written with a `.`: `{head}.{name}`; `::` is only for names declared in code"
+                    ),
+                );
+            }
+            if self.eat(&TokenKind::Dot) {
+                segments.push(self.ident(&format!(
+                    "the name of a built-in function of `{}`",
+                    segments[0].name
+                ))?);
+            }
+            return Ok(segments);
+        }
         while self.eat(&TokenKind::ColonColon) {
             if segments.len() == 3 {
                 return err(
@@ -1188,15 +1219,11 @@ impl Parser {
             | TokenKind::KwList
             | TokenKind::KwOption
             | TokenKind::KwResult => self.name_expr()?,
-            TokenKind::KwStream | TokenKind::KwFuture
-                if *self.peek_at(1) == TokenKind::ColonColon =>
-            {
+            TokenKind::KwStream | TokenKind::KwFuture if self.builtin_selector() => {
                 self.name_expr()?
             }
-            // `u32::wrapping_add(…)`: a built-in function of an integer type (§ 8.17).
-            TokenKind::Type(ty) if ty.is_int() && *self.peek_at(1) == TokenKind::ColonColon => {
-                self.name_expr()?
-            }
+            // `u32.wrapping_add(…)`: a built-in function of an integer type (§ 8.17).
+            TokenKind::Type(ty) if ty.is_int() && self.builtin_selector() => self.name_expr()?,
             TokenKind::Type(_) => self.conversion()?,
             TokenKind::KwTuple => {
                 self.bump();
@@ -1225,7 +1252,7 @@ impl Parser {
                 return err(
                     Code::Syntax,
                     start,
-                    "`task::return(e);` is a statement of its own and has no value (§ 8.21)",
+                    "`task.return(e);` is a statement of its own and has no value (§ 8.21)",
                 );
             }
             _ => return Err(self.unexpected("an expression")),
@@ -1416,16 +1443,16 @@ mod tests {
                func f(t: tuple<u32, u32>, r: result<u8>) -> result<list<u8>, e> {
                  local xs: list<mut u8>= [1, 2, 3,];
                  xs[0] = t.0 + t.1;
-                 rows[i].cells[j] = string::len(\"a\") + u32('a');
+                 rows[i].cells[j] = string.len(\"a\") + u32('a');
                  local d: f = f { x, y } | f { };
                  local m: bool = d.x && a.b[0].c.0.1;
-                 string::len(s);
+                 string.len(s);
                  match (v::q) {
-                   case p(x) { return result::ok(list::freeze(x)); }
+                   case p(x) { return result.ok(list.freeze(x)); }
                    case q { }
                    else { break; }
                  }
-                 return result::err(e::a);
+                 return result.err(e::a);
                }
              }",
         )
@@ -1459,8 +1486,8 @@ mod tests {
         syntax_error("local t: u32 = tuple();");
         syntax_error("local x: u32 = a::b::c::d;");
         syntax_error("local x: u32 = f(1,);");
-        syntax_error("local x: result<_> = result::ok;");
-        syntax_error("option::none;");
+        syntax_error("local x: result<_> = result.ok;");
+        syntax_error("option.none;");
         for decl in [
             "record r { }",
             "enum e { }",

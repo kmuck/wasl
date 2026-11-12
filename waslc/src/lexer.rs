@@ -51,7 +51,7 @@ pub enum TokenKind {
     Match,
     Case,
     Async,
-    /// `task`, whose only function is `task::return` (§ 8.21).
+    /// `task`, whose only function is `task.return` (§ 8.21).
     KwTask,
 
     // Built-in type names other than primitive types

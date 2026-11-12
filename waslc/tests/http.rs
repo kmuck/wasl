@@ -65,7 +65,7 @@ fn hello_http() {
 fn hello_http_wit() {
     // The WIT of § 15.8.
     let wit = analyze(HELLO_HTTP).unwrap().wit().unwrap();
-    let spec = include_str!("../../docs/spec_v0.4/15-examples.md");
+    let spec = include_str!("../../docs/spec_v0.5/15-examples.md");
     let section = &spec[spec.find("## 15.8").unwrap()..];
     let start = section.find("package example:hello-http@0.1.0;").unwrap();
     let end = start + section[start..].find("```").unwrap();
@@ -89,19 +89,19 @@ world schemes {
           match (scheme) {
             case http { }
             case https {
-              return result::err(types::error_code::tls_protocol_error);
+              return result.err(types::error_code::tls_protocol_error);
             }
             case other(name) {
-              return result::err(types::error_code::dns_error(
-                types::dns_error_payload { rcode: option::some(name), info_code: option::none }));
+              return result.err(types::error_code::dns_error(
+                types::dns_error_payload { rcode: option.some(name), info_code: option.none }));
             }
           }
         }
         case none {
-          return result::err(types::error_code::dns_timeout);
+          return result.err(types::error_code::dns_timeout);
         }
       }
-      return result::err(types::error_code::http_request_uri_invalid);
+      return result.err(types::error_code::http_request_uri_invalid);
     }
   }
   export uses;
@@ -109,7 +109,7 @@ world schemes {
 
 interface uses {
   func payload(code: u16) -> types::dns_error_payload {
-    return types::dns_error_payload { rcode: option::none, info_code: option::some(code) };
+    return types::dns_error_payload { rcode: option.none, info_code: option.some(code) };
   }
 }
 "#;
@@ -138,34 +138,34 @@ fn uppercase_names() {
 
 #[test]
 fn invalid_handlers() {
-    // The lines of § 15.9 on `task::return`, in `handle`.
-    let delivery = "task::return(result::ok(response));";
-    let close = "stream::close(body_tx);";
+    // The lines of § 15.9 on `task.return`, in `handle`.
+    let delivery = "task.return(result.ok(response));";
+    let close = "stream.close(body_tx);";
     let cases = [
         (
             delivery,
-            "if (path == \"/\") { task::return(result::ok(response)); }",
+            "if (path == \"/\") { task.return(result.ok(response)); }",
             Code::TaskReturnPlace,
         ),
         (
             delivery,
-            "task::return(result::ok(response));\n task::return(result::err(types::error_code::internal_error(option::none)));",
+            "task.return(result.ok(response));\n task.return(result.err(types::error_code::internal_error(option.none)));",
             Code::TaskReturnPlace,
         ),
         (
             close,
-            "stream::close(body_tx);\n return result::err(types::error_code::internal_error(option::none));",
+            "stream.close(body_tx);\n return result.err(types::error_code::internal_error(option.none));",
             Code::AfterTaskReturn,
         ),
         (
             close,
-            "stream::close(body_tx);\n local d: u32 = uses::digits(path)?;",
+            "stream.close(body_tx);\n local d: u32 = uses::digits(path)?;",
             Code::AfterTaskReturn,
         ),
     ];
     for (line, replacement, code) in cases {
         let source = HELLO_HTTP.replace(line, replacement)
-            + "interface uses { func digits(s: string) -> result<u32, types::error_code> { return result::ok(0); } }";
+            + "interface uses { func digits(s: string) -> result<u32, types::error_code> { return result.ok(0); } }";
         assert_ne!(source, HELLO_HTTP);
         match analyze(&source) {
             Ok(_) => panic!("accepted: {replacement}"),

@@ -233,7 +233,7 @@ pub struct FuncDef {
     pub kind: FuncKind,
     /// `async func` (§ 2.8): its calls may wait, and only an async function calls it.
     pub is_async: bool,
-    /// Its body contains `task::return` (§ 8.21): an entry point, which delivers its
+    /// Its body contains `task.return` (§ 8.21): an entry point, which delivers its
     /// result with `task.return` and goes on running. Its core function has no result.
     pub delivers: bool,
     pub interface: InterfaceId,
@@ -293,7 +293,7 @@ pub enum Stmt {
     Break,
     Continue,
     Return(Option<Expr>),
-    /// `task::return(e);` (§ 8.21), at the top level of the body of a function that
+    /// `task.return(e);` (§ 8.21), at the top level of the body of a function that
     /// [delivers](FuncDef::delivers) its result.
     TaskReturn(Expr),
     /// Function call used as a statement; its result, if any, is discarded.
@@ -378,9 +378,9 @@ pub enum ExprKind {
         case: u32,
         payload: Option<Box<Expr>>,
     },
-    /// `option::some(x)`.
+    /// `option.some(x)`.
     Some(Box<Expr>),
-    /// `option::none`.
+    /// `option.none`.
     None,
     /// Field of a record.
     Field {
@@ -432,22 +432,26 @@ pub enum Builtin {
     /// `T::wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`: the result
     /// modulo 2ⁿ (§ 10.2).
     Wrapping(Arith),
-    /// `T::checked_add`, `checked_sub`, `checked_mul`: `option::none` on overflow.
+    /// `T::checked_add`, `checked_sub`, `checked_mul`: `option.none` on overflow.
     Checked(Arith),
-    /// `T::wrapping_from(x)`: the low-order bits of the integer `x`.
+    /// `T.wrapping_from(x)`: the low-order bits of the integer `x`.
     WrappingFrom,
-    /// `stream::new()` or `future::new()` (§ 8.21): the tuple of the readable end and the
+    /// `T.to_string(n)`: the decimal form of the integer `n`.
+    IntToString,
+    /// `T.parse(s)`: the integer written in decimal in `s`, or `option.none`.
+    IntParse,
+    /// `stream.new()` or `future.new()` (§ 8.21): the tuple of the readable end and the
     /// writable end of a new stream or future, given by the type of the expression.
     EndNew,
-    /// `stream::write(tx, xs)`: borrows `tx`, writes every element, returns their count.
+    /// `stream.write(tx, xs)`: borrows `tx`, writes every element, returns their count.
     StreamWrite,
-    /// `stream::read(rx, n)`: borrows `rx`, reads 1 to `n` elements, or `none` at the end.
+    /// `stream.read(rx, n)`: borrows `rx`, reads 1 to `n` elements, or `none` at the end.
     StreamRead,
-    /// `stream::close(tx)`: moves `tx` and releases it.
+    /// `stream.close(tx)`: moves `tx` and releases it.
     StreamClose,
-    /// `future::write(tx, v)`: moves `tx`, gives `v` to the reader.
+    /// `future.write(tx, v)`: moves `tx`, gives `v` to the reader.
     FutureWrite,
-    /// `future::read(rx)`: moves `rx`, returns the value of the future.
+    /// `future.read(rx)`: moves `rx`, returns the value of the future.
     FutureRead,
 }
 
@@ -499,6 +503,8 @@ impl Builtin {
                 "checked_add" => Builtin::Checked(Arith::Add),
                 "checked_sub" => Builtin::Checked(Arith::Sub),
                 "checked_mul" => Builtin::Checked(Arith::Mul),
+                "to_string" => Builtin::IntToString,
+                "parse" => Builtin::IntParse,
                 _ => return None,
             });
         }

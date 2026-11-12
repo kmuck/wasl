@@ -174,7 +174,7 @@ fn errors() {
     );
     fails(
         "world w { export wasi:cli/run {
-           func run() -> result { return result::ok; }
+           func run() -> result { return result.ok; }
            func other() { }
          } }",
         Code::ForeignExport,
@@ -187,8 +187,8 @@ fn errors() {
     );
     fails(
         "world w {
-           export wasi:cli/run { func run() -> result { return result::ok; } }
-           export wasi:cli/run { func run() -> result { return result::ok; } }
+           export wasi:cli/run { func run() -> result { return result.ok; } }
+           export wasi:cli/run { func run() -> result { return result.ok; } }
          }",
         Code::DuplicateExport,
         "already exported",
@@ -196,7 +196,7 @@ fn errors() {
     fails(
         "world w {
            import wasi:cli/run;
-           export wasi:cli/run { func run() -> result { return result::ok; } }
+           export wasi:cli/run { func run() -> result { return result.ok; } }
          }",
         Code::DuplicateImport,
         "so it cannot export it",
@@ -208,9 +208,9 @@ fn errors() {
     assert!(
         analyze(
             "world w { export wasi:cli/run {
-               func run() -> result { if (m::two() == 2) { return result::ok; } return result::err; }
+               func run() -> result { if (m::two() == 2) { return result.ok; } return result.err; }
              } }
-             world v { export wasi:cli/run { func run() -> result { return result::err; } } }
+             world v { export wasi:cli/run { func run() -> result { return result.err; } } }
              interface m { func two() -> u32 { return 2; } }"
         )
         .is_ok()

@@ -182,7 +182,7 @@ pub(super) fn end_new(cx: &mut ModuleCx, ty: Type) -> (Vec<ValType>, Vec<ValType
     g.finish(vec![ref_type(tuple, false)])
 }
 
-/// `(tx, xs) -> (count, tx)`: `stream::write` (§ 12.12). Lowers the elements of `xs`, then
+/// `(tx, xs) -> (count, tx)`: `stream.write` (§ 12.12). Lowers the elements of `xs`, then
 /// writes until the reader has taken them all, waiting when the write is blocked. When
 /// the reader has left, the end is released and becomes `-1`, and the writes stop.
 pub(super) fn stream_write(
@@ -260,7 +260,7 @@ pub(super) fn stream_write(
     g.finish(vec![ValType::I32, ValType::I32])
 }
 
-/// `(rx, n) -> (option<list<T>>, rx)`: `stream::read` (§ 12.12). Reads at most `n`
+/// `(rx, n) -> (option<list<T>>, rx)`: `stream.read` (§ 12.12). Reads at most `n`
 /// elements, waiting when the read is blocked; `none` when the writer has left and
 /// nothing came, after which the end is `-1` and every read returns `none`.
 pub(super) fn stream_read(
@@ -334,7 +334,7 @@ pub(super) fn stream_read(
     g.finish(vec![value, ValType::I32])
 }
 
-/// `(tx, v) -> bool`: `future::write` (§ 12.12). Lowers `v`, writes it, waits when the
+/// `(tx, v) -> bool`: `future.write` (§ 12.12). Lowers `v`, writes it, waits when the
 /// write is blocked, and releases the end. `false` when the reader has left: the handles
 /// of `v` are then released.
 pub(super) fn future_write(
@@ -372,7 +372,7 @@ pub(super) fn future_write(
     g.finish(vec![ValType::I32])
 }
 
-/// `(rx) -> T`: `future::read` (§ 12.12). Reads the value, waiting when the read is
+/// `(rx) -> T`: `future.read` (§ 12.12). Reads the value, waiting when the read is
 /// blocked, and releases the end. A future whose writer has left without a value has
 /// trapped in the writer; here it is `unreachable`.
 pub(super) fn future_read(cx: &mut ModuleCx, elem: Type) -> (Vec<ValType>, Vec<ValType>, Function) {
