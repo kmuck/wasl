@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Structural equality (§ 8.3): `==` and `!=` compare records, tuples, lists, variants, options and results by their contents, `point { x: 1, y: 2 } == p`. The compiler generates one comparison function per compared type, which stops at the first difference; floats inside compare like floats, so a NaN is never equal. A type that contains a `mut` field, a `list<mut T>`, a resource, a handle or a writable end has no `==` (E0403).
 - Doc comments (§ 4.2): `///` before a world, an interface, a function, a type, an alias, a field, a case, a flag or an item of a resource is copied into the generated WIT, line for line (§ 13.1), so that editors and bindings generators show it. A `///` followed by another comment, inside a body, or written `////` is an ordinary comment.
 - Type aliases (§ 7.14): `type price = u64;` in an interface names a type without making a new one, so a `price` is a `u64` without conversion. The WIT declares the alias and keeps its name in signatures and fields, `total: func(lines: lines) -> price;`. An alias that names itself, `type a = list<a>;`, is the new error E0225. `type`, reserved until now, is a keyword.
 - Bodies without braces (§ 5.3): after `if`, `else`, `while` and `for`, a single simple statement can replace the block, an assignment, `break`, `continue`, `return` or a call: `if (n == 0) return 1;`. A `local`, an `if`, a loop, a `match` or `task.return` still needs braces (E0100), so an `else` always belongs to the nearest `if`.
