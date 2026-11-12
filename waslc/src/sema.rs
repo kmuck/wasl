@@ -70,6 +70,7 @@ pub fn analyze(
     a.unimported_calls(&facts, errors);
     a.uncarried_ends(&facts, errors);
     a.entry_calls(&facts, errors);
+    a.test_world();
     a.program.types = a.types;
     Ok(a.program)
 }
@@ -87,6 +88,8 @@ struct Analyzer<'a> {
     uses: Vec<&'a ast::UseDecl>,
     /// The interfaces of the standard library, by name (§ 3.5).
     library: Vec<(String, InterfaceId)>,
+    /// The interfaces of the test files (§ 3.6).
+    tests: Vec<InterfaceId>,
     /// The names that `use` gives to interfaces of other packages, by file (§ 6.6).
     used: HashMap<(FileId, String), InterfaceId>,
     /// The interfaces of other packages that the worlds and the files name: their last
@@ -140,6 +143,7 @@ impl<'a> Analyzer<'a> {
 
         let mut uses = Vec::new();
         let mut library = Vec::new();
+        let mut tests = Vec::new();
         for item in items {
             if let Item::Use(u) = item {
                 uses.push(u);
@@ -152,6 +156,32 @@ impl<'a> Analyzer<'a> {
                 if let Item::Interface(i) = item {
                     interfaces.push(i);
                     library.push((name.name.clone(), interfaces.len() - 1));
+                }
+                continue;
+            }
+            // The interfaces of the test files are only seen by the test files (§ 3.6).
+            if name.span.file.is_test() {
+                match item {
+                    Item::Interface(i) => {
+                        interfaces.push(i);
+                        tests.push(interfaces.len() - 1);
+                    }
+                    Item::World(_) | Item::Global(_) => {
+                        let what = if matches!(item, Item::World(_)) {
+                            "a world"
+                        } else {
+                            "a global"
+                        };
+                        return err(
+                            Code::TestFileItem,
+                            name.span,
+                            format!(
+                                "`{}` is {what}, but a test file only declares interfaces: declare it in `src/`",
+                                name.name
+                            ),
+                        );
+                    }
+                    Item::Use(_) => unreachable!("a `use` has no top-level name"),
                 }
                 continue;
             }
@@ -179,6 +209,25 @@ impl<'a> Analyzer<'a> {
             };
             names.insert(name.name.clone(), entry);
         }
+        // A test interface has a name of its own, in the package and in the tests.
+        for (k, &t) in tests.iter().enumerate() {
+            let name = &interfaces[t].name;
+            let prev = match names.get(name.name.as_str()) {
+                Some(prev) => prev.describe(),
+                None if tests[..k]
+                    .iter()
+                    .any(|&o| interfaces[o].name.name == name.name) =>
+                {
+                    "an interface of the tests"
+                }
+                None => continue,
+            };
+            return err(
+                Code::DuplicateItem,
+                name.span,
+                format!("`{}` is already declared as {prev}", name.name),
+            );
+        }
         // The implementations of interfaces of other packages in worlds (§ 2.4.2) are
         // interfaces of the package without a top-level name.
         let mut impls: HashMap<(usize, usize), InterfaceId> = HashMap::new();
@@ -199,6 +248,7 @@ impl<'a> Analyzer<'a> {
             names,
             uses,
             library,
+            tests,
             used: HashMap::new(),
             foreign_full: Vec::new(),
             impls,
@@ -224,6 +274,25 @@ impl<'a> Analyzer<'a> {
         for (id, _) in crate::source::library() {
             for (name, iface) in &self.library {
                 self.used.insert((*id, name.clone()), *iface);
+            }
+        }
+        // The test files name the interfaces of the tests.
+        let test_files: Vec<FileId> = {
+            let mut files: Vec<FileId> = self
+                .tests
+                .iter()
+                .map(|&t| self.interfaces[t].name.span.file)
+                .chain(self.uses.iter().map(|u| u.name().span.file))
+                .filter(|f| f.is_test())
+                .collect();
+            files.sort_by_key(|f| f.0);
+            files.dedup();
+            files
+        };
+        for &file in &test_files {
+            for &t in &self.tests {
+                self.used
+                    .insert((file, self.interfaces[t].name.name.clone()), t);
             }
         }
         let mut used = Vec::new();
@@ -312,10 +381,14 @@ impl<'a> Analyzer<'a> {
             }
             if let Some(&other) = self.used.get(&key) {
                 let other = match self.library.iter().find(|(_, i)| *i == other) {
-                    Some((n, _)) => format!("wasl:std/{n}"),
-                    None => self.converter.ifaces[other - self.interfaces.len()].display(),
+                    Some((n, _)) => format!("`wasl:std/{n}`"),
+                    None if self.tests.contains(&other) => "an interface of the tests".to_string(),
+                    None => format!(
+                        "`{}`",
+                        self.converter.ifaces[other - self.interfaces.len()].display()
+                    ),
                 };
-                return clash(format!("`{other}`"));
+                return clash(other);
             }
             self.used.insert(key, hir_id);
         }
@@ -1389,6 +1462,90 @@ impl<'a> Analyzer<'a> {
             }
         }
         facts
+    }
+
+    /// The world that runs the tests (§ 3.6, § 14.2): it exports an interface with one
+    /// function per test, which calls it, and imports the interfaces of other packages
+    /// that the tests reach.
+    fn test_world(&mut self) {
+        if self.tests.is_empty() {
+            return;
+        }
+        let ret = self.types.intern(TypeKind::Result {
+            ok: None,
+            err: Some(Type::STRING),
+        });
+        let iface = self.program.interfaces.len();
+        let mut funcs = Vec::new();
+        for &t in &self.tests {
+            for &f in &self.program.interfaces[t].funcs {
+                let func = &self.program.funcs[f];
+                if func.kind != hir::FuncKind::Free
+                    || !func.params.is_empty()
+                    || func.ret != Some(ret)
+                {
+                    continue;
+                }
+                let name = format!("{}::{}", self.program.interfaces[t].name, func.name);
+                let runner = hir::FuncDef {
+                    name: format!("t{}", funcs.len()),
+                    wit: None,
+                    kind: hir::FuncKind::Free,
+                    is_async: func.is_async,
+                    delivers: false,
+                    interface: iface,
+                    params: Vec::new(),
+                    ret: Some(ret),
+                    locals: Vec::new(),
+                    body: vec![hir::Stmt::Return(Some(hir::Expr {
+                        kind: hir::ExprKind::Call {
+                            func: f,
+                            args: Vec::new(),
+                        },
+                        ty: Some(ret),
+                    }))],
+                };
+                funcs.push((name, runner));
+            }
+        }
+        let first = self.program.funcs.len();
+        let mut ids = Vec::new();
+        for (k, (name, runner)) in funcs.into_iter().enumerate() {
+            self.program.funcs.push(runner);
+            self.program.tests.push(hir::Test {
+                name,
+                runner: first + k,
+            });
+            ids.push(first + k);
+        }
+        self.program.interfaces.push(hir::InterfaceDef {
+            name: hir::TEST_INTERFACE.to_string(),
+            funcs: ids,
+            types: Vec::new(),
+            aliases: Vec::new(),
+            foreign: None,
+            implements: None,
+        });
+        self.program.worlds.push(hir::WorldDef {
+            name: hir::TEST_WORLD.to_string(),
+            exports: vec![iface],
+            imports: Vec::new(),
+            items: vec![(false, iface)],
+        });
+        let world = self.program.worlds.len() - 1;
+        let (_, called) = self.program.reach(world);
+        let mut imports: Vec<InterfaceId> = Vec::new();
+        for f in called {
+            let i = self.program.funcs[f].interface;
+            if !imports.contains(&i) {
+                imports.push(i);
+            }
+        }
+        imports.sort();
+        let world = &mut self.program.worlds[world];
+        world.items = imports.iter().map(|&i| (true, i)).collect();
+        world.items.push((false, iface));
+        world.imports = imports;
     }
 
     /// 9. Calls to interfaces of other packages, world by world (E0221).

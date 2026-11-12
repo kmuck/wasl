@@ -102,8 +102,6 @@ Libraries other than `wasl:std`, written by users, come later ([ROADMAP.md](../.
 
 ## 3.6 Tests
 
-*Specified, not available yet.*
-
 The files of `tests/`, and of its sub-directories, whose name ends with `.wasl`, are **test files**. They follow the rules of § 3.3, and are analyzed with the package only by `weasel test` (§ 14.2): `weasel build` and `weasel check` ignore them.
 
 ```wasl
@@ -134,4 +132,6 @@ interface shop_test {
 - A **test** is a function of an interface of a test file that has no parameter and returns `result<_, string>`, async or not. `ok` passes; `err(message)` fails with the message; a trap fails with the trap. The other functions of the test interfaces are helpers.
 - Each test runs in a **new instance**: the globals start from their initial value, and a test cannot see what another one did.
 - The name of a test is its path: `shop_test::total_of_two_lines`.
+- A test interface has a name of its own: the name of an item of the package, or of another test interface, is an error (E0201). A test file names the interfaces of other packages with `use` (§ 6.6), like a source file.
+- The tests run in a world that `weasel` builds for them (§ 14.2), which is not part of the package: `weasel wit` does not show it.
 - A test that calls a function of an interface of another package, through an imported interface, needs that interface at run time: in 0.5, only the interfaces of WASI that `weasel` provides (§ 14.6) can be called from a test.

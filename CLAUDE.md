@@ -55,7 +55,7 @@ ROADMAP.md      versions 0.1 → 1.0, each with a target program
 CHANGELOG.md    Keep a Changelog, with the versioning rules
 docs/spec_vX.Y  the specification of each version, one frozen folder per release
 waslc/          the compiler, a Rust library (lexer → parser → sema → HIR → codegen / wit → component)
-weasel/         the build tool, a Rust executable (init, build, check, wit, call, run, serve, clean), runs components with wasmtime
+weasel/         the build tool, a Rust executable (init, build, check, wit, call, run, serve, test, clean), runs components with wasmtime
 examples/       the target programs of each version (calc for 0.1, invoice for 0.2, catalog + checkout and hello for 0.3, hello for WASI 0.3 and hello-http for 0.4, shop for 0.5), run in CI
 ```
 

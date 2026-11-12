@@ -10,10 +10,18 @@ pub struct FileId(pub u32);
 /// [`SourceMap`] of the package, and every map shows them.
 const LIBRARY: u32 = 1 << 31;
 
+/// The bit set in the ids of the test files of the package (§ 3.6).
+const TEST: u32 = 1 << 30;
+
 impl FileId {
     /// Whether the file belongs to the standard library `wasl:std`.
     pub fn is_library(self) -> bool {
         self.0 >= LIBRARY
+    }
+
+    /// Whether the file is a test file of the package, from `tests/` (§ 3.6).
+    pub fn is_test(self) -> bool {
+        !self.is_library() && self.0 & TEST != 0
     }
 }
 
@@ -98,23 +106,39 @@ impl SourceFile {
 #[derive(Default)]
 pub struct SourceMap {
     files: Vec<SourceFile>,
+    /// The id of each file, in the order they were added.
+    ids: Vec<FileId>,
 }
 
 impl SourceMap {
+    /// Adds a source file of the package, from `src/` (§ 3.3).
     pub fn add(&mut self, path: PathBuf, text: String) -> FileId {
+        self.push(path, text, 0)
+    }
+
+    /// Adds a test file of the package, from `tests/` (§ 3.6). [`crate::analyze`]
+    /// analyzes it with the package, and [`crate::Analysis::build_tests`] builds its tests.
+    pub fn add_test(&mut self, path: PathBuf, text: String) -> FileId {
+        self.push(path, text, TEST)
+    }
+
+    fn push(&mut self, path: PathBuf, text: String, bit: u32) -> FileId {
         self.files.push(SourceFile::new(path, text));
-        FileId(self.files.len() as u32 - 1)
+        let id = FileId((self.files.len() as u32 - 1) | bit);
+        self.ids.push(id);
+        id
     }
 
     pub fn get(&self, id: FileId) -> &SourceFile {
         if id.is_library() {
             return &library()[(id.0 - LIBRARY) as usize].1;
         }
-        &self.files[id.0 as usize]
+        &self.files[(id.0 & !TEST) as usize]
     }
 
+    /// The ids of the files, in the order they were added.
     pub fn ids(&self) -> impl Iterator<Item = FileId> + use<> {
-        (0..self.files.len() as u32).map(FileId)
+        self.ids.clone().into_iter()
     }
 }
 

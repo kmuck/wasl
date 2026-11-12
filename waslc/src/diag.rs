@@ -43,6 +43,7 @@ pub enum Code {
     WriterInWit,
     UncarriedEnd,
     AliasCycle,
+    TestFileItem,
     // Names
     UnknownName,
     UnknownFunc,
@@ -126,6 +127,7 @@ impl Code {
             Code::WriterInWit => "E0222",
             Code::UncarriedEnd => "E0223",
             Code::AliasCycle => "E0225",
+            Code::TestFileItem => "E0226",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",

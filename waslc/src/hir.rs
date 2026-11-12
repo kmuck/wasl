@@ -29,7 +29,26 @@ pub struct Program {
     pub spellings: HashMap<Spelling, Type>,
     /// The doc comments of the package, `///` (§ 4.2), copied into the WIT (§ 13.1).
     pub docs: HashMap<Doc, String>,
+    /// The tests of the test files (§ 3.6), in the order of the files and of the
+    /// functions. Empty without test files.
+    pub tests: Vec<Test>,
 }
+
+/// A test of a test file (§ 3.6), run through the test world: the last world of the
+/// program, [`TEST_WORLD`], which exports the interface [`TEST_INTERFACE`] of one
+/// function per test, calling it.
+#[derive(Debug, Clone)]
+pub struct Test {
+    /// Its path: `shop_test::total_of_two_lines`.
+    pub name: String,
+    /// The function of the test interface that calls it.
+    pub runner: FuncId,
+}
+
+/// The name of the world that runs the tests, and of the interface it exports: they
+/// cannot be WaSL names, so they cannot clash with the names of the package.
+pub const TEST_WORLD: &str = "wasl-test";
+pub const TEST_INTERFACE: &str = "wasl-tests";
 
 /// What a doc comment documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

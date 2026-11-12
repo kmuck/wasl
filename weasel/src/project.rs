@@ -1,4 +1,5 @@
-//! A WaSL project on disk: `wasl.toml` and the `.wasl` files under `src/`.
+//! A WaSL project on disk: `wasl.toml`, the `.wasl` files under `src/`, and the test
+//! files under `tests/`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,10 +66,7 @@ impl Project {
 
         let mut sources = SourceMap::default();
         for path in files {
-            let bytes =
-                fs::read(&path).map_err(|e| Error::new(format!("cannot read `{path}`: {e}")))?;
-            let text = String::from_utf8(bytes)
-                .map_err(|_| Error::new(format!("`{path}` is not valid UTF-8")))?;
+            let text = read_source(&path)?;
             sources.add(PathBuf::from(path), text);
         }
         Ok(Project {
@@ -77,6 +75,22 @@ impl Project {
             manifest,
             sources,
         })
+    }
+
+    /// Adds the test files of `tests/` to the sources (§ 3.6), when the directory exists.
+    pub fn add_tests(&mut self) -> Result<()> {
+        let tests = self.root.join("tests");
+        if !tests.is_dir() {
+            return Ok(());
+        }
+        let mut files = Vec::new();
+        collect_wasl_files(&tests, &mut files)?;
+        files.sort();
+        for path in files {
+            let text = read_source(&path)?;
+            self.sources.add_test(PathBuf::from(path), text);
+        }
+        Ok(())
     }
 
     /// The name of the package, `namespace:name`.
@@ -131,6 +145,12 @@ impl Project {
 /// A path as displayed in messages, with `/` separators.
 pub fn display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// Reads a source file, which must be UTF-8 (§ 4.1).
+fn read_source(path: &str) -> Result<String> {
+    let bytes = fs::read(path).map_err(|e| Error::new(format!("cannot read `{path}`: {e}")))?;
+    String::from_utf8(bytes).map_err(|_| Error::new(format!("`{path}` is not valid UTF-8")))
 }
 
 /// Collects the `.wasl` files of a directory, with `/`-separated paths.

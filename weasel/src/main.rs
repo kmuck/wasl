@@ -10,6 +10,7 @@ mod manifest;
 mod project;
 mod run;
 mod serve;
+mod test;
 
 use std::fs;
 use std::net::SocketAddr;
@@ -101,6 +102,11 @@ enum Command {
         #[arg(long, value_name = "HOST:PORT", default_value = "127.0.0.1:8080")]
         addr: SocketAddr,
     },
+    /// Run the tests of the test files (tests/)
+    Test {
+        /// Run only the tests whose name (`interface::function`) contains this text
+        filter: Option<String>,
+    },
     /// Remove the build directory
     Clean,
 }
@@ -148,6 +154,7 @@ fn run(command: Command) -> Result<ExitCode> {
             return run::run(&Project::load()?, world, args);
         }
         Command::Serve { world, addr } => serve::serve(&Project::load()?, &world, addr)?,
+        Command::Test { filter } => return test::test(&mut Project::load()?, filter.as_deref()),
         Command::Clean => {
             if Path::new(BUILD_DIR).exists() {
                 fs::remove_dir_all(BUILD_DIR)

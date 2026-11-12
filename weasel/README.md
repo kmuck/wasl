@@ -15,6 +15,7 @@ Every command except `init` must be run from the **root of a WaSL project**, the
 | `weasel call <world> <function> [args…]` | Calls a function exported by a world |
 | `weasel run <world> [args…]` | Runs a world as a command, through its export of `wasi:cli/run` |
 | `weasel serve <world> [--addr <host>:<port>]` | Serves a world over HTTP, through its export of `wasi:http/handler` |
+| `weasel test [<filter>]` | Runs the tests of `tests/`, each in a new instance |
 | `weasel clean` | Removes the `build/` directory |
 
 Run `weasel <command> --help` for the options of a command, and `weasel --version` for the version. Options have a single, long spelling: there is no `-h`, `-V` or `help` command.
@@ -85,7 +86,26 @@ curl http://127.0.0.1:8080/karim            # Hello, /karim!
 weasel serve hello_http --addr 0.0.0.0:3000
 ```
 
-The components that `call`, `run` and `serve` run get WASI 0.2 and 0.3 and `wasi:http` 0.3 from the host, without environment variables, filesystem or network: sockets are refused and outgoing HTTP requests are denied.
+### `weasel test`
+
+Analyzes the package with its test files, the `.wasl` files of `tests/`, then runs every test, each in a new instance of a component built in memory. A test is a function of a test interface with no parameter that returns `result<_, string>`; the other functions are helpers. A test file declares interfaces, which can call every interface of the package; the package cannot call them, and `build` and `check` ignore them.
+
+```sh
+weasel test                 # every test
+weasel test total           # the tests whose name contains `total`
+```
+
+```
+ok    shop_test::total_of_two_lines
+FAIL  shop_test::parses_an_empty_order: expected no line
+FAIL  shop_test::rejects_zero: trapped: integer divide by zero
+
+1 passed, 2 failed
+```
+
+The exit code is `1` when a test fails. What the tests write to their standard output goes to the standard error of `weasel`. In 0.5, a test can call the interfaces of WASI, but not those of other packages.
+
+The components that `call`, `run`, `serve` and `test` run get WASI 0.2 and 0.3 and `wasi:http` 0.3 from the host, without environment variables, filesystem or network: sockets are refused and outgoing HTTP requests are denied.
 
 ## Project layout
 
@@ -94,6 +114,7 @@ my-project/
 ├── wasl.toml        # package identity and dependencies
 ├── wkg.lock         # exact versions of the registry dependencies, written by weasel
 ├── src/             # all the `.wasl` files, in any sub-directory
+├── tests/           # the test files, run by `weasel test`
 └── build/           # produced by `weasel build`
 ```
 
@@ -115,7 +136,7 @@ The project rules are defined by the [specification](../docs/spec_v0.5/03-projec
 
 ## Output
 
-- Results (`call`, `wit`) and the output of the program of `run` are written to standard output.
+- Results (`call`, `wit`, `test`) and the output of the program of `run` are written to standard output.
 - Progress messages and errors are written to standard error.
 - Compilation errors are reported with their location and code:
 
@@ -140,6 +161,7 @@ weasel/
 │   ├── call.rs        # weasel call: function lookup, arguments, results
 │   ├── run.rs         # weasel run: commands of wasi:cli/run
 │   ├── serve.rs       # weasel serve: HTTP server, one instance per request
+│   ├── test.rs        # weasel test: runs the tests, one instance per test
 │   ├── host.rs        # wasmtime engine and host: WASI 0.2 and 0.3, wasi:http 0.3
 │   ├── compose.rs     # plugs the components that provide the imports of a world
 │   └── error.rs       # errors reported to the user
