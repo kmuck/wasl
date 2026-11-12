@@ -569,8 +569,12 @@ impl Parser {
                         bindings.push(None);
                     } else {
                         let name = self.ident("a local name or `_`")?;
-                        self.expect(&TokenKind::Colon, "`:` (the type of a local is required)")?;
-                        bindings.push(Some((name, self.ty()?)));
+                        let ty = if self.eat(&TokenKind::Colon) {
+                            Some(self.ty()?)
+                        } else {
+                            None
+                        };
+                        bindings.push(Some((name, ty)));
                     }
                     if !self.eat(&TokenKind::Comma) || *self.peek() == TokenKind::RParen {
                         break;
@@ -588,9 +592,19 @@ impl Parser {
             TokenKind::Local => {
                 self.bump();
                 let name = self.ident("a local name")?;
-                self.expect(&TokenKind::Colon, "`:` (the type of a local is required)")?;
-                let ty = self.ty()?;
-                let init = if self.eat(&TokenKind::Eq) {
+                let ty = if self.eat(&TokenKind::Colon) {
+                    Some(self.ty()?)
+                } else {
+                    None
+                };
+                let init = if ty.is_none() {
+                    // Without a type, the initial value gives it (§ 9.4).
+                    self.expect(
+                        &TokenKind::Eq,
+                        "`:` or `=` (a local needs a type or an initial value)",
+                    )?;
+                    Some(self.expr()?)
+                } else if self.eat(&TokenKind::Eq) {
                     Some(self.expr()?)
                 } else {
                     None
@@ -604,6 +618,22 @@ impl Parser {
                 let cond = self.condition("while")?;
                 let body = self.block("`{` (braces are required after `while`)")?;
                 StmtKind::While { cond, body }
+            }
+            TokenKind::For => {
+                self.bump();
+                self.expect(
+                    &TokenKind::LParen,
+                    "`(` (a `for` is written `for (x in xs) { … }`)",
+                )?;
+                let name = self.ident("the name of the element")?;
+                self.expect(
+                    &TokenKind::In,
+                    "`in` (a `for` goes through a list: `for (x in xs) { … }`)",
+                )?;
+                let list = self.expr()?;
+                self.expect(&TokenKind::RParen, "`)`")?;
+                let body = self.block("`{` (braces are required after `for`)")?;
+                StmtKind::For { name, list, body }
             }
             TokenKind::Match => StmtKind::Match(self.match_()?),
             TokenKind::Break => {
@@ -1405,7 +1435,11 @@ mod tests {
 
     #[test]
     fn errors() {
-        syntax_error("local x = 5;");
+        syntax_error("local x;");
+        syntax_error("local (a, b);");
+        syntax_error("for (x in xs) return;");
+        syntax_error("for (x: u32 in xs) { }");
+        syntax_error("for x in xs { }");
         syntax_error("if (n > 0) return n;");
         syntax_error("if n > 0 { return n; }");
         syntax_error("while n > 0 { }");

@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Locals without type (§ 8.2, § 9.4): `local x = e;` takes the type of `e`, and a literal alone is an `s32` or an `f64`; a destructuring names its positions with or without a type, `local (count, total) = stats(lines);`. A value that cannot give its type, such as `option::none` or `[]`, is E0408, and `local x;` is E0100.
+- `for (x in xs) { … }` (§ 9.10) runs its body for each element of a list, evaluated once; `break` and `continue` act on it. A value that is not a list is the new error E0420. `for` and `in` are now keywords: an identifier named `in` is E0005.
 - The [v0.5 specification](docs/spec_v0.5/README.md) describes the features of 0.5, specified but not implemented yet (§ 1.10): locals without type, `for (x in xs)`, bodies without braces, built-in functions written `list.len(xs)`, call statements that discard their value (E0413 retired), structural `==`, type aliases, `///` doc comments, `use`, functions without body and `include` of a world of a library (§ 2.4.3), the standard library `wasl:std` with `text`, `json`, `http`, `cli` and `fs` and its worlds `service` and `command` (chapter 17), and `weasel test`, `weasel fmt`, `weasel build --all`, `weasel run --dir`. New error codes E0224 to E0226 and E0420.
 - [`examples/shop`](examples/shop), the target program of 0.5: two HTTP services and a command sharing their logic, written for the v0.5 specification and not compiled yet (§ 15.10).
 

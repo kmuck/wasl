@@ -65,7 +65,8 @@ local t: string;            // E0410: a string needs an initial value
 
 ```wasl
 local n = 0;                         // s32
-local total = u64(0);                // u64
+local total = price * 2;             // the type of `price`
+local sum: u64 = 0;                  // a literal of another type keeps its written type
 local lines = invoice.lines;         // list<invoices::line>
 local found = prices::find(sku);     // option<u64>
 local none = option.none;            // E0408: nothing gives the type of the option
@@ -183,10 +184,8 @@ func checkout(items: list<item>) -> result<receipt, carts::cart_error> {
 
 ## 9.10 `for`
 
-*Specified, not available yet.*
-
 ```wasl
-local total = u64(0);
+local total: u64 = 0;
 for (line in lines) {
   if (line.quantity == 0)
     return result.err(invoice_error::zero_quantity);

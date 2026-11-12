@@ -142,7 +142,6 @@ fn first_error_follows_file_order() {
 #[test]
 fn invalid_programs() {
     let cases: &[(&str, Code)] = &[
-        ("local x = 5;", Code::Syntax),
         ("local x: u8 = 256;", Code::LiteralOutOfRange),
         ("local x: f64 = 1;", Code::TypeMismatch),
         ("local y: u64 = n;", Code::TypeMismatch),
@@ -262,7 +261,6 @@ fn destructuring_errors() {
             Code::Syntax,
             "a local name or `_`",
         ),
-        ("local (a, b) = t::pair();", Code::Syntax, "`:`"),
         ("local () = t::pair();", Code::Syntax, "a local name or `_`"),
     ];
     for (body, code, message) in cases {

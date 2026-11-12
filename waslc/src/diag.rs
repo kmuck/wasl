@@ -74,6 +74,7 @@ pub enum Code {
     TaskReturnPlace,
     AfterTaskReturn,
     EntryCall,
+    ForNotList,
     // Control flow
     AssignImmutable,
     BreakOutsideLoop,
@@ -154,6 +155,7 @@ impl Code {
             Code::TaskReturnPlace => "E0417",
             Code::AfterTaskReturn => "E0418",
             Code::EntryCall => "E0419",
+            Code::ForNotList => "E0420",
             Code::AssignImmutable => "E0500",
             Code::BreakOutsideLoop => "E0501",
             Code::MissingReturnValue => "E0502",
