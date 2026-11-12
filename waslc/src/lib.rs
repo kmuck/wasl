@@ -116,6 +116,7 @@ pub fn analyze(
     let worlds = program
         .worlds
         .iter()
+        .filter(|world| world.name != hir::TEST_WORLD)
         .map(|world| World {
             name: world.name.clone(),
             // Implementations of interfaces of other packages are not called by name.
@@ -209,6 +210,40 @@ impl Analysis {
                 },
             )
         })
+    }
+
+    /// The names of the tests of the test files (§ 3.6), `shop_test::total_of_two_lines`,
+    /// in the order of the files and of the functions. Empty when the sources have no
+    /// test file.
+    pub fn tests(&self) -> impl Iterator<Item = &str> {
+        self.program.tests.iter().map(|t| t.name.as_str())
+    }
+
+    /// Builds the component that runs the tests (§ 14.2), when the sources have test
+    /// files. It exports the interface returned with it, `example:shop/wasl-tests@0.1.0`,
+    /// whose function `t<k>` runs the test `k` of [`Analysis::tests`] and returns its
+    /// `result<_, string>`. It imports the interfaces of other packages that the tests
+    /// reach.
+    pub fn build_tests(&self) -> Result<(Vec<u8>, String)> {
+        let Some(id) = self
+            .program
+            .worlds
+            .iter()
+            .position(|w| w.name == hir::TEST_WORLD)
+        else {
+            return Err(Diagnostic::without_span(
+                Code::Internal,
+                "the sources have no test file",
+            ));
+        };
+        let iface = self.program.worlds[id].exports[0];
+        let name = self.interface_names[iface]
+            .as_ref()
+            .expect("the test interface is in the WIT")
+            .full
+            .clone();
+        let module = codegen::generate(&self.program, id, &self.interface_names)?;
+        Ok((component::build(module, &self.wit, hir::TEST_WORLD)?, name))
     }
 
     /// Builds the component of the world `world`.

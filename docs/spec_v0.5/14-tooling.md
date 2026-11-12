@@ -164,12 +164,10 @@ curl http://127.0.0.1:8080/karim
 
 ### `weasel test [<filter>]`
 
-*Specified, not available yet.*
-
 Analyzes the package with its test files (§ 3.6), then runs every test, in the order of the files (§ 3.3) and of the functions in them.
 
 - With `<filter>`, only the tests whose name (`shop_test::total_of_two_lines`) contains `<filter>` run.
-- Each test runs in a new instance of a component that `weasel` builds in memory for the tests: it exports the test interfaces, and imports what they need, composed as for `call`. Its standard output and error go to the standard error of `weasel`.
+- Each test runs in a new instance of a component that `weasel` builds in memory for the tests: it exports one function per test, which calls the test, and imports the interfaces of WASI that the tests reach (§ 3.6). Its standard output and error go to the standard error of `weasel`.
 - One line per test is printed on standard output, then a summary:
 
 ```
@@ -253,7 +251,7 @@ The following commands are planned ([ROADMAP.md](../../ROADMAP.md)):
 |---|---|
 | `weasel publish` | publish a component or a WIT package with wasm-pkg-tools, once the specification is stable |
 
-`weasel run` and `weasel serve`, planned in 0.3, are available in 0.4 (§ 14.2). Like `build`, they always take the world explicitly. `weasel build --all`, `weasel test` and `weasel fmt` are specified for 0.5 (§ 14.2).
+`weasel run` and `weasel serve`, planned in 0.3, are available in 0.4 (§ 14.2). Like `build`, they always take the world explicitly. `weasel test` is available in 0.5; `weasel build --all` and `weasel fmt` are specified for 0.5 (§ 14.2).
 
 ## 14.5 Values in `weasel call`
 

@@ -41,6 +41,8 @@ src/math.wasl:12:5: error[E0400]: mismatched types: expected `u64`, found `u32`
 
 `analyze` returns every error of the compilation (§ 11.2): one per file with a syntax error; otherwise the first error of the declarations, or one per function body. Sources must be added in a deterministic order (by convention, sorted by path), since that order decides the order of the errors.
 
+Test files (§ 3.6) are added with `SourceMap::add_test`: their interfaces are only seen by the test files, and `Analysis::tests` and `Analysis::build_tests` give the tests and the component that runs them, with one function `t<k>` per test.
+
 ## Pipeline
 
 ```
@@ -104,6 +106,7 @@ waslc/
     ├── streams.rs     # streams and futures, and programs for WASI 0.3
     ├── task_return.rs # task.return
     ├── http.rs        # the HTTP target program of 0.4 against wasi:http 0.3
+    ├── test_files.rs  # test files, and the component that runs their tests
     └── fixtures/      # WaSL sources and WIT used by the tests
 ```
 

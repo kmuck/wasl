@@ -1131,3 +1131,129 @@ fn init_templates() {
     );
     assert!(!dir.path().join("other").exists());
 }
+
+/// `weasel test` (§ 3.6, § 14.2): every test in a new instance, one line per test, the
+/// summary and the exit code.
+#[test]
+fn test_command() {
+    let dir = project(&[
+        (
+            "src/shop.wasl",
+            "
+world w { export shop; }
+
+global calls: mut u32 = 0;
+
+interface shop {
+  func total(prices: list<u64>) -> u64 {
+    calls = calls + 1;
+    local total: u64 = 0;
+    for (p in prices)
+      total = total + p;
+    return total;
+  }
+  func calls_so_far() -> u32 { return calls; }
+}
+",
+        ),
+        (
+            "tests/shop_test.wasl",
+            r#"
+interface shop_test {
+  func total_of_two() -> result<_, string> {
+    if (shop::total([1, 2]) != 3)
+      return result.err("expected 3");
+    return result.ok;
+  }
+  func fresh() -> result<_, string> {
+    shop::total([]);
+    if (shop::calls_so_far() != 1)
+      return result.err("not a new instance");
+    return result.ok;
+  }
+  func wrong() -> result<_, string> {
+    return result.err("expected 4, got " + u64.to_string(shop::total([2, 1])));
+  }
+  async func later() -> result<_, string> {
+    return result.ok;
+  }
+}
+"#,
+        ),
+        (
+            "tests/more/zero_test.wasl",
+            "
+interface zero_test {
+  func divides() -> result<_, string> {
+    local zero: u64 = 0;
+    shop::total([1 / zero]);
+    return result.ok;
+  }
+  func helper(x: u32) -> result<_, string> { return result.ok; }
+}
+",
+        ),
+    ]);
+    let dir = dir.path();
+    // In the order of the files (`tests/more/…` before `tests/shop_test.wasl`), then of
+    // the functions.
+    let run = weasel(dir, &["test"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stdout,
+        "FAIL  zero_test::divides: trapped: integer divide by zero
+ok    shop_test::total_of_two
+ok    shop_test::fresh
+FAIL  shop_test::wrong: expected 4, got 3
+ok    shop_test::later
+
+3 passed, 2 failed
+"
+    );
+    // A filter.
+    assert_eq!(
+        ok(dir, &["test", "shop_test::t"]),
+        "ok    shop_test::total_of_two\n\n1 passed\n"
+    );
+    assert_eq!(ok(dir, &["test", "nothing"]), "0 passed\n");
+    // `build` and `check` ignore the test files.
+    fs::write(dir.join("tests/broken.wasl"), "world w { }").unwrap();
+    ok(dir, &["check"]);
+    ok(dir, &["build", "w"]);
+    assert!(fails(dir, &["test"]).contains("error[E0226]"));
+    // A project without test.
+    let empty = project(&[("src/shop.wasl", "interface shop { }")]);
+    assert_eq!(ok(empty.path(), &["test"]), "0 passed\n");
+}
+
+/// A test calls WASI; what it writes goes to the standard error of `weasel`.
+#[test]
+fn test_with_wasi() {
+    let dir = wasi_project(ARGS);
+    let dir = dir.path();
+    write(
+        &dir.join("tests/print_test.wasl"),
+        r#"
+use wasi:cli/types;
+use wasi:cli/stdout;
+use wasi:cli/environment;
+
+interface print_test {
+  async func prints() -> result<_, string> {
+    local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();
+    local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
+    stream.write(tx, string.bytes("hello\n"));
+    stream.close(tx);
+    future.read(done);
+    if (list.len(environment::get_arguments()) != 0)
+      return result.err("arguments");
+    return result.ok;
+  }
+}
+"#,
+    );
+    let run = weasel(dir, &["test"]);
+    assert!(run.success, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.stdout, "ok    print_test::prints\n\n1 passed\n");
+    assert_eq!(run.stderr, "hello\n");
+}
