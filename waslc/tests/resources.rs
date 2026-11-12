@@ -164,7 +164,7 @@ fn own_handles_as_parameters() {
     let source = CATALOG.replace(
         "  resource cart {",
         "  func merge(a: cart, b: cart) -> cart {
-    _ = a.add(\"pen\", b.count());
+    a.add(\"pen\", b.count());
     return a;
   }
 

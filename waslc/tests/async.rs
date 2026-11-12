@@ -224,23 +224,23 @@ interface t {
 
   // Calls to async functions of the package.
   async func lengths(name: string) -> u32 {
-    return string::len(greet(name)) + add(1, 2);
+    return string.len(greet(name)) + add(1, 2);
   }
 
   // No result.
   async func tick() {
-    _ = clock::sleep(1);
+    clock::sleep(1);
   }
 
   // A list result.
   async func countdown(n: u32) -> list<u32> {
-    local xs: list<mut u32> = list::filled(n, 0);
+    local xs: list<mut u32> = list.filled(n, 0);
     local i: u32 = 0;
     while (i < n) {
       xs[i] = clock::sleep(n - i) - 1000;
       i = i + 1;
     }
-    return list::freeze(xs);
+    return list.freeze(xs);
   }
 
   // 17 flat values: `task.return` takes a pointer.
@@ -406,9 +406,9 @@ world w {
   export demo:host/run {
     async func run() -> result {
       if (clock::sleep(1) == 1001) {
-        return result::ok;
+        return result.ok;
       }
-      return result::err;
+      return result.err;
     }
   }
 }
@@ -511,7 +511,7 @@ fn errors() {
     );
     // The color of a function of a foreign export block is that of its WIT (E0218).
     fails(
-        "world w { export demo:host/run { func run() -> result { return result::ok; } } }",
+        "world w { export demo:host/run { func run() -> result { return result.ok; } } }",
         Code::ForeignExport,
         "expected `async func run() -> result`, found `func run() -> result`",
     );

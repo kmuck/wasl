@@ -50,7 +50,7 @@ Targets:
 ### 0.4: async and WASI 0.3 (done)
 
 - `async func`, with the async model of the Component Model: a call to an async function waits for its result, without `await`, and only an async function can call one (§ 2.8).
-- `stream<T>`, `future<T>`, their writable ends and their built-in functions (§ 7.13, § 8.21); `task::return` to deliver a result before the end of the function, such as an HTTP response before its body (§ 8.21).
+- `stream<T>`, `future<T>`, their writable ends and their built-in functions (§ 7.13, § 8.21); `task.return` to deliver a result before the end of the function, such as an HTTP response before its body (§ 8.21).
 - Tuple destructuring, `local (a: A, b: B) = e;`, for the tuples of handles that WASI 0.3 returns (§ 9.4).
 - Worlds implementing `wasi:cli/run` and `wasi:http/handler` of WASI 0.3.
 - `weasel run <world>`, `weasel serve <world>` and `weasel init --template cli|http` (§ 14.2).

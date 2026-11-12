@@ -25,19 +25,19 @@ interface invoices {
   }
 
   func total(lines: list<line>) -> result<u64, invoice_error> {
-    if (list::len(lines) == 0) {
-      return result::err(invoice_error::no_lines);
+    if (list.len(lines) == 0) {
+      return result.err(invoice_error::no_lines);
     }
     local sum: u64;
     local i: u32;
-    while (i < list::len(lines)) {
+    while (i < list.len(lines)) {
       if (lines[i].quantity == 0) {
-        return result::err(invoice_error::zero_quantity);
+        return result.err(invoice_error::zero_quantity);
       }
       sum = sum + u64(lines[i].quantity) * lines[i].unit_price;
       i = i + 1;
     }
-    return result::ok(sum);
+    return result.ok(sum);
   }
 
 }

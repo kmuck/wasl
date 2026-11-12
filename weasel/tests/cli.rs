@@ -321,57 +321,57 @@ interface calc {
 
   func check(x: s32) -> result<u32, calc_error> {
     if (x < 0) {
-      return result::err(calc_error::negative);
+      return result.err(calc_error::negative);
     }
     if (x > 100) {
-      return result::err(calc_error::too_big);
+      return result.err(calc_error::too_big);
     }
-    return result::ok(u32(x));
+    return result.ok(u32(x));
   }
 
   func validate(x: s32) -> result<_, calc_error> {
-    _ = check(x)?;
-    return result::ok;
+    check(x)?;
+    return result.ok;
   }
 
   func sum(a: s32, b: s32) -> result<u64, calc_error> {
     validate(a)?;
     local s: u32 = check(a)? + check(b)?;
-    return result::ok(u64(s));
+    return result.ok(u64(s));
   }
 
   func first(xs: list<u32>) -> option<u32> {
-    if (list::len(xs) == 0) {
-      return option::none;
+    if (list.len(xs) == 0) {
+      return option.none;
     }
-    return option::some(xs[0]);
+    return option.some(xs[0]);
   }
 
   func first_plus_one(xs: list<u32>) -> option<u32> {
-    return option::some(first(xs)? + 1);
+    return option.some(first(xs)? + 1);
   }
 
   func name(n: u32) -> option<string> {
     if (n == 0) {
-      return option::none;
+      return option.none;
     }
-    return option::some(\"x\");
+    return option.some(\"x\");
   }
 
   func shout(n: u32) -> option<string> {
-    return option::some(name(n)? + \"!\");
+    return option.some(name(n)? + \"!\");
   }
 
   func flag(ok: bool) -> result {
     if (ok) {
-      return result::ok;
+      return result.ok;
     }
-    return result::err;
+    return result.err;
   }
 
   func twice(ok: bool) -> result<u32> {
     flag(ok)?;
-    return result::ok(2);
+    return result.ok(2);
   }
 }
 ",
@@ -689,7 +689,7 @@ fn several_errors() {
 }
 
 /// Async functions of the package (§ 14.2): `call` prints the result once the task has
-/// ended, and a trap after `task::return` is still an error.
+/// ended, and a trap after `task.return` is still an error.
 #[test]
 fn call_async() {
     let dir = project(&[(
@@ -709,7 +709,7 @@ interface work {
   }
 
   async func early(n: u32) -> u32 {
-    task::return(n * 2);
+    task.return(n * 2);
     local zero: u32 = 0;
     if (n == 0) {
       zero = 1 / zero;
@@ -810,30 +810,30 @@ world args {
       local args: list<string> = environment::get_arguments();
       local text: string = "";
       local i: u32 = 0;
-      while (i < list::len(args)) {
+      while (i < list.len(args)) {
         text = text + "[" + args[i] + "]";
         i = i + 1;
       }
-      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();
       local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
-      _ = stream::write(tx, string::bytes(text + "\n"));
-      stream::close(tx);
-      _ = future::read(done);
+      stream.write(tx, string.bytes(text + "\n"));
+      stream.close(tx);
+      future.read(done);
       local first: string = "";
-      if (list::len(args) > 1) {
+      if (list.len(args) > 1) {
         first = args[1];
       }
       if (first == "fail") {
-        return result::err;
+        return result.err;
       }
       if (first == "exit") {
-        exit::exit(result::err);
+        exit::exit(result.err);
       }
       local zero: u32 = 0;
       if (first == "trap") {
         zero = 1 / zero;
       }
-      return result::ok;
+      return result.ok;
     }
   }
 }
@@ -864,7 +864,7 @@ fn run() {
     // Nothing is written to `build/`.
     assert!(!dir.join("build").exists());
 
-    // `result::err` and `wasi:cli/exit` give the exit code 1, without a message.
+    // `result.err` and `wasi:cli/exit` give the exit code 1, without a message.
     for arg in ["fail", "exit"] {
         let run = weasel(dir, &["run", "args", arg]);
         assert_eq!(run.code, Some(1), "{arg}: {}", run.stderr);
@@ -903,21 +903,21 @@ world service {
         zero = 1 / zero;
       }
       if (path == "/err") {
-        return result::err(types::error_code::internal_error(option::some("boom")));
+        return result.err(types::error_code::internal_error(option.some("boom")));
       }
-      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream.new();
       local (trailers: future<result<option<types::trailers>, types::error_code>>,
-             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future::new();
+             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future.new();
       local (response: types::response, _) =
-        types::response::new(types::fields(), option::some(body), trailers);
-      task::return(result::ok(response));
-      _ = stream::write(body_tx, string::bytes("Hello, "));
+        types::response::new(types::fields(), option.some(body), trailers);
+      task.return(result.ok(response));
+      stream.write(body_tx, string.bytes("Hello, "));
       if (path == "/late") {
         zero = 1 / zero;
       }
-      _ = stream::write(body_tx, string::bytes(path + "!\n"));
-      stream::close(body_tx);
-      _ = future::write(trailers_tx, result::ok(option::none));
+      stream.write(body_tx, string.bytes(path + "!\n"));
+      stream.close(body_tx);
+      future.write(trailers_tx, result.ok(option.none));
     }
   }
 }

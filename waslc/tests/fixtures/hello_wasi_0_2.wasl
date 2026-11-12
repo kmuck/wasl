@@ -9,12 +9,12 @@ world hello {
   export wasi:cli/run {
     func run() -> result {
       local out: streams::output_stream = stdout::get_stdout();
-      match (out.blocking_write_and_flush(string::bytes(greeting::text("world")))) {
+      match (out.blocking_write_and_flush(string.bytes(greeting::text("world")))) {
         case ok {
-          return result::ok;
+          return result.ok;
         }
         case err {
-          return result::err;
+          return result.err;
         }
       }
       // `out` is given back to the host when `run` returns.

@@ -20,8 +20,8 @@ world w {
 
 global greeting: string = "héllo";
 global origin: geo::point = geo::point { x: 1, y: 2 };
-global none_u32: option<u32> = option::none;
-global some_u32: option<u32> = option::some(7);
+global none_u32: option<u32> = option.none;
+global some_u32: option<u32> = option.some(7);
 global shapes: list<geo::shape> = [
   geo::shape::circle(2),
   geo::shape::empty,
@@ -89,10 +89,10 @@ interface geo {
   }
 
   func chain(n: u32) -> node {
-    local head: node = node { value: 0, next: option::none };
+    local head: node = node { value: 0, next: option.none };
     local i: u32 = 1;
     while (i < n) {
-      head = node { value: i, next: option::some(head) };
+      head = node { value: i, next: option.some(head) };
       i = i + 1;
     }
     return head;
@@ -123,7 +123,7 @@ interface geo {
       case branch(children) {
         local sum: u32;
         local i: u32;
-        while (i < list::len(children)) {
+        while (i < list.len(children)) {
           sum = sum + tree_sum(children[i]);
           i = i + 1;
         }
@@ -149,7 +149,7 @@ interface h {
   // ---- Strings ----
 
   func greeting_len() -> u32 {
-    return string::len(greeting);
+    return string.len(greeting);
   }
 
   func str_eq(k: u32) -> bool {
@@ -167,24 +167,24 @@ interface h {
   }
 
   func concat_len() -> u32 {
-    return string::len(greeting + ", " + "monde");
+    return string.len(greeting + ", " + "monde");
   }
 
   func nth_char(i: u32) -> char {
-    return string::chars(greeting)[i];
+    return string.chars(greeting)[i];
   }
 
   func char_count() -> u32 {
-    return list::len(string::chars("a€𝄞é"));
+    return list.len(string.chars("a€𝄞é"));
   }
 
   func roundtrip() -> bool {
     local s: string = "a€𝄞é\u{7f}\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}\u{10ffff}";
-    return string::from_chars(string::chars(s)) == s;
+    return string.from_chars(string.chars(s)) == s;
   }
 
   func bytes_sum() -> u32 {
-    local b: list<u8> = string::bytes("AB");
+    local b: list<u8> = string.bytes("AB");
     return u32(b[0]) + u32(b[1]);
   }
 
@@ -207,9 +207,9 @@ interface h {
       [245, 128, 128, 128],
       [],
     ];
-    match (string::from_bytes(cases[k])) {
+    match (string.from_bytes(cases[k])) {
       case some(s) {
-        return string::len(s) == list::len(cases[k]);
+        return string.len(s) == list.len(cases[k]);
       }
       case none {
         return false;
@@ -217,13 +217,13 @@ interface h {
     }
   }
 
-  // `string::from_bytes` copies its argument.
+  // `string.from_bytes` copies its argument.
   func from_bytes_copies() -> u32 {
-    local b: list<mut u8> = list::filled(3, 97);
-    match (string::from_bytes(b)) {
+    local b: list<mut u8> = list.filled(3, 97);
+    match (string.from_bytes(b)) {
       case some(s) {
         b[0] = 98;
-        return u32(string::chars(s)[0]);
+        return u32(string.chars(s)[0]);
       }
       case none {
         return 0;
@@ -232,7 +232,7 @@ interface h {
   }
 
   func char_ok(n: u32) -> bool {
-    match (char::from_u32(n)) {
+    match (char.from_u32(n)) {
       case some(c) {
         return u32(c) == n;
       }
@@ -248,7 +248,7 @@ interface h {
 
   func long_len() -> u32 {
     local s: string = "LONG";
-    return string::len(s) + string::len("LONG") + string::len(long_global);
+    return string.len(s) + string.len("LONG") + string.len(long_global);
   }
 
   func long_eq() -> bool {
@@ -273,7 +273,7 @@ interface h {
   func tuple_sum() -> u32 {
     local t: tuple<u32, string, bool> = tuple(5, "abc", true);
     if (t.2) {
-      return t.0 + string::len(t.1);
+      return t.0 + string.len(t.1);
     }
     return 0;
   }
@@ -286,7 +286,7 @@ interface h {
     local i: u32;
     while (i < 2) {
       local (s: string, k: u32) = names::measured(name + name);
-      total = total + k + string::len(s);
+      total = total + k + string.len(s);
       i = i + 1;
     }
     if (ok) {
@@ -343,8 +343,8 @@ interface h {
         total = total + 1000;
       }
       c = color::blue;
-      o = option::some(origin);
-      d = option::some(1);
+      o = option.some(origin);
+      d = option.some(1);
       ch = 'a';
       b = true;
       i = i + 1;
@@ -376,7 +376,7 @@ interface h {
     local cs: list<color> = [color::red, color::green, color::blue, color::green];
     local i: u32;
     local count: u32;
-    while (i < list::len(cs)) {
+    while (i < list.len(cs)) {
       local c: color = cs[i];
       i = i + 1;
       match (c) {
@@ -401,7 +401,7 @@ interface h {
   func total_area() -> u32 {
     local sum: u32;
     local i: u32;
-    while (i < list::len(shapes)) {
+    while (i < list.len(shapes)) {
       sum = sum + geo::area(shapes[i]);
       i = i + 1;
     }
@@ -431,14 +431,14 @@ interface h {
   // ---- Lists ----
 
   func list_ops() -> u32 {
-    local xs: list<mut u16> = list::filled(4, 7);
+    local xs: list<mut u16> = list.filled(4, 7);
     xs[1] = 65535;
-    local frozen: list<u16> = list::freeze(xs);
+    local frozen: list<u16> = list.freeze(xs);
     xs[2] = 1;
-    local copy: list<mut u16> = list::copy(frozen);
+    local copy: list<mut u16> = list.copy(frozen);
     copy[0] = 0;
     return u32(frozen[0]) + u32(frozen[1]) + u32(frozen[2]) + u32(xs[2]) + u32(copy[0])
-      + list::len(copy);
+      + list.len(copy);
   }
 
   func signed_elems() -> s32 {
@@ -447,7 +447,7 @@ interface h {
   }
 
   func bools() -> bool {
-    local bs: list<mut bool> = list::filled(2, false);
+    local bs: list<mut bool> = list.filled(2, false);
     bs[1] = true;
     return bs[1] && !bs[0];
   }
@@ -457,17 +457,17 @@ interface h {
     if (k == 1) {
       e = [];
     }
-    local c: list<mut string> = list::copy(e);
+    local c: list<mut string> = list.copy(e);
     if (k == 1) {
-      return list::len(c) == 0;
+      return list.len(c) == 0;
     }
     c[0] = "z";
     return e[0] == "a" && c[0] == "z" && c[1] == "b";
   }
 
-  // `list::filled` shares its element (§ 10.8).
+  // `list.filled` shares its element (§ 10.8).
   func filled_shares() -> s32 {
-    local ps: list<geo::point> = list::filled(3, geo::point { x: 0, y: 0 });
+    local ps: list<geo::point> = list.filled(3, geo::point { x: 0, y: 0 });
     ps[0].y = 5;
     return ps[2].y;
   }
@@ -480,9 +480,9 @@ interface h {
   // ---- Options, results ----
 
   func opt(n: u32) -> u32 {
-    local o: option<u32> = option::none;
+    local o: option<u32> = option.none;
     if (n > 0) {
-      o = option::some(n);
+      o = option.some(n);
     }
     match (o) {
       case some(v) {
@@ -495,12 +495,12 @@ interface h {
   }
 
   func nested_opt(k: u32) -> u32 {
-    local o: option<option<u32>> = option::some(option::none);
+    local o: option<option<u32>> = option.some(option.none);
     if (k == 1) {
-      o = option::none;
+      o = option.none;
     }
     if (k == 2) {
-      o = option::some(option::some(5));
+      o = option.some(option.some(5));
     }
     match (o) {
       case none {
@@ -538,13 +538,13 @@ interface h {
   }
 
   func opt_string(k: u32) -> u32 {
-    local o: option<string> = option::some("four");
+    local o: option<string> = option.some("four");
     if (k == 1) {
-      o = option::none;
+      o = option.none;
     }
     match (o) {
       case some(s) {
-        return string::len(s);
+        return string.len(s);
       }
       case none {
         return 0;
@@ -553,24 +553,24 @@ interface h {
   }
 
   func res(n: u32) -> u32 {
-    local r: result<u32, string> = result::err("bad");
+    local r: result<u32, string> = result.err("bad");
     if (n > 0) {
-      r = result::ok(n);
+      r = result.ok(n);
     }
     match (r) {
       case ok(v) {
         return v;
       }
       case err(e) {
-        return string::len(e) + 100;
+        return string.len(e) + 100;
       }
     }
   }
 
   func res_unit(n: u32) -> bool {
-    local r: result = result::err;
+    local r: result = result.err;
     if (n > 0) {
-      r = result::ok;
+      r = result.ok;
     }
     match (r) {
       case ok {
@@ -585,7 +585,7 @@ interface h {
 
 interface names {
   func measured(s: string) -> tuple<string, u32> {
-    return tuple(s, string::len(s));
+    return tuple(s, string.len(s));
   }
 }
 "#;
@@ -801,7 +801,7 @@ interface p {
       number: inv.number,
       customer: inv.customer,
       lines: inv.lines,
-      discount: option::some(invoices::discount::percent(discount)),
+      discount: option.some(invoices::discount::percent(discount)),
       delivery: inv.delivery,
       status: invoices::status::sent,
     };
@@ -851,7 +851,7 @@ interface p {
   }
 
   func number_text(n: u32) -> u32 {
-    return string::len(text::from_u32(n));
+    return string.len(text::from_u32(n));
   }
 }
 

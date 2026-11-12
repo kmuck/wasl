@@ -102,7 +102,7 @@ waslc/
     ├── foreign_exports.rs # implementations of interfaces of other packages (WASI 0.2)
     ├── async.rs       # async functions and async exports
     ├── streams.rs     # streams and futures, and programs for WASI 0.3
-    ├── task_return.rs # task::return
+    ├── task_return.rs # task.return
     ├── http.rs        # the HTTP target program of 0.4 against wasi:http 0.3
     └── fixtures/      # WaSL sources and WIT used by the tests
 ```

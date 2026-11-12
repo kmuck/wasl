@@ -23,27 +23,27 @@ interface orders {
   func checkout(items: list<item>) -> result<receipt, carts::cart_error> {
     local c: carts::cart = carts::cart();
     local i: u32;
-    while (i < list::len(items)) {
+    while (i < list.len(items)) {
       c.add(items[i].sku, items[i].quantity)?;
       i = i + 1;
     }
-    return result::ok(receipt { items: c.count(), total: c.total() });
+    return result.ok(receipt { items: c.count(), total: c.total() });
   }
 
   func quote(sku: string, quantity: u32) -> result<u64, carts::cart_error> {
     local c: carts::cart = carts::cart::of(sku, quantity)?;
-    return result::ok(c.total());
+    return result.ok(c.total());
   }
 
   // The cart is lent to `describe` for the duration of the call.
   func last_sku(items: list<item>) -> option<string> {
     local c: carts::cart = carts::cart();
     local i: u32;
-    while (i < list::len(items)) {
+    while (i < list.len(items)) {
       match (c.add(items[i].sku, items[i].quantity)) {
         case ok { }
         case err {
-          return option::none;
+          return option.none;
         }
       }
       i = i + 1;
@@ -53,7 +53,7 @@ interface orders {
 
   func describe(c: borrow<carts::cart>) -> option<string> {
     local l: carts::line = c.last_line()?;
-    return option::some(l.sku);
+    return option.some(l.sku);
   }
 
 }

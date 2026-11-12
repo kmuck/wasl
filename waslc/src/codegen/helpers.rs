@@ -1,7 +1,7 @@
 //! Helper functions of the module (§ 12.8): string comparison and concatenation, UTF-8
-//! validation, decoding and encoding, `char::from_u32`, list copies, integer overflow.
+//! validation, decoding and encoding, `char.from_u32`, list copies, integer overflow.
 //!
-//! Strings are always valid UTF-8 (literals, `string::from_bytes` validates, the
+//! Strings are always valid UTF-8 (literals, `string.from_bytes` validates, the
 //! component boundary validates), and lists of chars only hold Unicode scalar values: the
 //! decoder and the encoder do not check their input.
 
@@ -19,16 +19,21 @@ pub(super) enum Helper {
     StrEq,
     /// `(string, string) -> string`
     Concat,
-    /// `string::from_bytes`: `(list<u8>) -> option<string>`
+    /// `string.from_bytes`: `(list<u8>) -> option<string>`
     FromBytes,
-    /// `string::chars`: `(string) -> list<char>`
+    /// `string.chars`: `(string) -> list<char>`
     Chars,
-    /// `string::from_chars`: `(list<char>) -> string`
+    /// `string.from_chars`: `(list<char>) -> string`
     FromChars,
-    /// `char::from_u32`: `(u32) -> option<char>`
+    /// `char.from_u32`: `(u32) -> option<char>`
     CharFromU32,
-    /// `list::copy` and `list::freeze` on an array type.
+    /// `list.copy` and `list.freeze` on an array type.
     Copy(u32),
+    /// `T.to_string`: `(i64) -> string`, the decimal form of an integer extended to 64
+    /// bits, read as signed or not.
+    IntToString { signed: bool },
+    /// `T.parse` for the integer type `T`: `(string) -> option<T>`.
+    IntParse(Type),
     /// `(i64, i64) -> i32`: whether the exact product does not fit in a `u64`
     /// (`signed: false`) or an `s64`, when an operand does not fit in 32 bits (§ 12.9).
     MulOverflow64 { signed: bool },
@@ -107,6 +112,27 @@ impl Helper {
                     vec![ref_type(boxed, true)],
                     Vec::new(),
                     char_from_u32(boxed),
+                )
+            }
+            Helper::IntToString { signed } => (
+                vec![ValType::I64],
+                vec![string],
+                vec![ValType::I32, ValType::I32, ValType::I64, string],
+                int_to_string(bytes, signed),
+            ),
+            Helper::IntParse(int) => {
+                let boxed = cx.option_heap(int);
+                (
+                    vec![string],
+                    vec![ref_type(boxed, true)],
+                    vec![
+                        ValType::I32,
+                        ValType::I32,
+                        ValType::I32,
+                        ValType::I64,
+                        ValType::I64,
+                    ],
+                    int_parse(bytes, boxed, int),
                 )
             }
             Helper::Copy(array) => {
@@ -215,7 +241,7 @@ fn concat(bytes: u32) -> Vec<Instruction<'static>> {
     ]
 }
 
-/// `list::copy`, `list::freeze`: a new array of the same length, then `array.copy`. An
+/// `list.copy`, `list.freeze`: a new array of the same length, then `array.copy`. An
 /// array of non-nullable references has no default value: it is created filled with its
 /// first element. Locals: xs = 0, n = 1, r = 2.
 fn copy(array: u32, defaultable: bool) -> Vec<Instruction<'static>> {
@@ -255,7 +281,192 @@ fn copy(array: u32, defaultable: bool) -> Vec<Instruction<'static>> {
     c
 }
 
-/// `char::from_u32(n)`: `n` boxed if it is a Unicode scalar value (not a surrogate, at
+/// `T.to_string(n)`: the digits of the magnitude of `n`, written from the last one, after
+/// a `-` when `n` is negative. Locals: n = 0, negative = 1, i = 2, rest = 3, r = 4.
+///
+/// The magnitude of a negative `n` is `0 - n`, read as unsigned: it is exact for the
+/// smallest `s64` too.
+fn int_to_string(bytes: u32, signed: bool) -> Vec<Instruction<'static>> {
+    let mut code = Vec::new();
+    if signed {
+        code.extend([
+            get(0),
+            I::I64Const(0),
+            I::I64LtS,
+            I::LocalTee(1),
+            I::If(BlockType::Empty),
+            I::I64Const(0),
+            get(0),
+            I::I64Sub,
+            I::LocalSet(0),
+            I::End,
+        ]);
+    }
+    code.extend([
+        // i = the number of digits, plus one for the sign
+        get(1),
+        I::LocalSet(2),
+        get(0),
+        I::LocalSet(3),
+        I::Loop(BlockType::Empty),
+    ]);
+    code.extend(incr(2));
+    code.extend([
+        get(3),
+        I::I64Const(10),
+        I::I64DivU,
+        I::LocalTee(3),
+        I::I64Const(0),
+        I::I64Ne,
+        I::BrIf(0),
+        I::End,
+        get(2),
+        I::ArrayNewDefault(bytes),
+        I::LocalSet(4),
+        // the digits, from the last one
+        I::Loop(BlockType::Empty),
+        get(4),
+        get(2),
+        I::I32Const(1),
+        I::I32Sub,
+        I::LocalTee(2),
+        get(0),
+        I::I64Const(10),
+        I::I64RemU,
+        I::I32WrapI64,
+        I::I32Const('0' as i32),
+        I::I32Add,
+        I::ArraySet(bytes),
+        get(0),
+        I::I64Const(10),
+        I::I64DivU,
+        I::LocalTee(0),
+        I::I64Const(0),
+        I::I64Ne,
+        I::BrIf(0),
+        I::End,
+        get(1),
+        I::If(BlockType::Empty),
+        get(4),
+        I::I32Const(0),
+        I::I32Const('-' as i32),
+        I::ArraySet(bytes),
+        I::End,
+        get(4),
+    ]);
+    code
+}
+
+/// `T.parse(s)`: the integer that `T.to_string` writes as `s`, boxed, or `none`: an
+/// optional `-` for a signed type, then digits without a leading zero, whose value fits
+/// in `T`. Locals: s = 0, i = 1, len = 2, negative = 3, limit = 4, value = 5.
+///
+/// `limit` is the largest magnitude allowed: the value stays below it at every digit, so
+/// it never overflows the `i64` that holds it.
+fn int_parse(bytes: u32, boxed: u32, int: Type) -> Vec<Instruction<'static>> {
+    let none = || [I::RefNull(HeapType::Concrete(boxed)), I::Return];
+    let digit = [
+        get(0),
+        get(1),
+        I::ArrayGetU(bytes),
+        I::I32Const('0' as i32),
+        I::I32Sub,
+    ];
+    let bits = int.bits();
+    let max: u64 = if int.is_signed() {
+        (1 << (bits - 1)) - 1
+    } else if bits == 64 {
+        u64::MAX
+    } else {
+        (1 << bits) - 1
+    };
+    let mut code = vec![
+        get(0),
+        I::ArrayLen,
+        I::LocalTee(2),
+        I::I32Eqz,
+        I::If(BlockType::Empty),
+    ];
+    code.extend(none());
+    code.extend([I::End, I::I64Const(max as i64), I::LocalSet(4)]);
+    if int.is_signed() {
+        // `-`: one more for the limit, and at least one digit after it
+        code.extend([
+            get(0),
+            I::I32Const(0),
+            I::ArrayGetU(bytes),
+            I::I32Const('-' as i32),
+            I::I32Eq,
+            I::If(BlockType::Empty),
+            I::I32Const(1),
+            I::LocalSet(3),
+            I::I32Const(1),
+            I::LocalSet(1),
+            get(4),
+            I::I64Const(1),
+            I::I64Add,
+            I::LocalSet(4),
+            get(2),
+            I::I32Const(1),
+            I::I32Eq,
+            I::If(BlockType::Empty),
+        ]);
+        code.extend(none());
+        code.extend([I::End, I::End]);
+    }
+    // a leading zero is only the number zero, without sign
+    code.extend(digit.clone());
+    code.extend([
+        I::I32Eqz,
+        get(2),
+        I::I32Const(1),
+        I::I32Ne,
+        I::I32And,
+        I::If(BlockType::Empty),
+    ]);
+    code.extend(none());
+    code.extend([I::End, I::Loop(BlockType::Empty)]);
+    // the digit, on the stack as an i64, once it is checked
+    code.extend(digit.clone());
+    code.extend([I::I32Const(9), I::I32GtU, I::If(BlockType::Empty)]);
+    code.extend(none());
+    code.push(I::End);
+    // value > (limit - digit) / 10: the next value would pass the limit
+    code.extend([get(5), get(4)]);
+    code.extend(digit.clone());
+    code.extend([
+        I::I64ExtendI32U,
+        I::I64Sub,
+        I::I64Const(10),
+        I::I64DivU,
+        I::I64GtU,
+        I::If(BlockType::Empty),
+    ]);
+    code.extend(none());
+    code.extend([I::End, get(5), I::I64Const(10), I::I64Mul]);
+    code.extend(digit);
+    code.extend([I::I64ExtendI32U, I::I64Add, I::LocalSet(5)]);
+    code.extend(incr(1));
+    code.extend([get(1), get(2), I::I32LtU, I::BrIf(0), I::End]);
+    // the value, with its sign, in the Wasm type of `T`
+    code.extend([
+        get(3),
+        I::If(BlockType::Result(ValType::I64)),
+        I::I64Const(0),
+        get(5),
+        I::I64Sub,
+        I::Else,
+        get(5),
+        I::End,
+    ]);
+    if bits < 64 {
+        code.push(I::I32WrapI64);
+    }
+    code.push(I::StructNew(boxed));
+    code
+}
+
+/// `char.from_u32(n)`: `n` boxed if it is a Unicode scalar value (not a surrogate, at
 /// most U+10FFFF), `none` otherwise. Locals: n = 0.
 fn char_from_u32(boxed: u32) -> Vec<Instruction<'static>> {
     vec![
@@ -322,7 +533,7 @@ fn mul_overflow_64(signed: bool) -> Vec<Instruction<'static>> {
     c
 }
 
-/// `string::from_bytes(b)`: validates UTF-8 (Unicode table 3-7: no overlong form, no
+/// `string.from_bytes(b)`: validates UTF-8 (Unicode table 3-7: no overlong form, no
 /// surrogate, nothing above U+10FFFF), then copies the bytes.
 /// Locals: b = 0, n = 1, i = 2, c = 3, need = 4, lo = 5, hi = 6, j = 7, r = 8.
 fn from_bytes(bytes: u32) -> Vec<Instruction<'static>> {
@@ -476,7 +687,7 @@ fn from_bytes(bytes: u32) -> Vec<Instruction<'static>> {
     c
 }
 
-/// `string::chars(s)`: counts the chars (the bytes that are not continuation bytes), then
+/// `string.chars(s)`: counts the chars (the bytes that are not continuation bytes), then
 /// decodes them. Locals: s = 0, n = 1, i = 2, k = 3, c = 4, r = 5.
 fn decode(bytes: u32, chars: u32) -> Vec<Instruction<'static>> {
     // c = c << 6 | (s[i + offset] & 0x3F)
@@ -582,7 +793,7 @@ fn decode(bytes: u32, chars: u32) -> Vec<Instruction<'static>> {
     c
 }
 
-/// `string::from_chars(cs)`: computes the length in bytes, then encodes.
+/// `string.from_chars(cs)`: computes the length in bytes, then encodes.
 /// Locals: cs = 0, n = 1, i = 2, len = 3, c = 4, r = 5, k = 6.
 fn encode(bytes: u32, chars: u32) -> Vec<Instruction<'static>> {
     // r[k] = prefix | (c >> shift) & mask; k += 1

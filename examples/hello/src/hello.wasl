@@ -9,16 +9,16 @@ world hello {
 
   export wasi:cli/run {
     async func run() -> result {
-      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();
       local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
-      _ = stream::write(tx, string::bytes(greeting::text("world")));
-      stream::close(tx);
-      match (future::read(done)) {
+      stream.write(tx, string.bytes(greeting::text("world")));
+      stream.close(tx);
+      match (future.read(done)) {
         case ok {
-          return result::ok;
+          return result.ok;
         }
         case err {
-          return result::err;
+          return result.err;
         }
       }
     }

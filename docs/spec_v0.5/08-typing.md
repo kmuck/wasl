@@ -287,8 +287,8 @@ A small set of functions is part of the language. They are called with the name 
 | `T.wrapping_neg(a)`, signed `T` only | `(T) -> T` | `-a` reduced modulo 2ⁿ: `s8.wrapping_neg(-128)` is `-128` |
 | `T.wrapping_from(x)` | `(integer) -> T` | the low-order bits of `x`, read as a `T`, like the integer conversions of § 10.5: `u8.wrapping_from(n)` is `44` for `n: u32` = 300, `u32.wrapping_from(n)` is `4294967295` for `n: s32` = -1 |
 | `T.checked_add(a, b)`, `T.checked_sub(a, b)`, `T.checked_mul(a, b)` | `(T, T) -> option<T>` | `option.some` of the exact result, or `option.none` if it does not fit in `T` |
-| `T.to_string(n)` | `(T) -> string` | the decimal form of `n`: digits, preceded by `-` when `n` is negative, without leading zero, sign `+` or separator (*specified, not available yet*) |
-| `T.parse(s)` | `(string) -> option<T>` | the integer written in decimal in `s`, as `T.to_string` writes it, or `option.none` if `s` has any other character, is empty, or gives a value that does not fit in `T` (*specified, not available yet*) |
+| `T.to_string(n)` | `(T) -> string` | the decimal form of `n`: digits, preceded by `-` when `n` is negative, without leading zero, sign `+` or separator |
+| `T.parse(s)` | `(string) -> option<T>` | the integer written in decimal in `s`, as `T.to_string` writes it, or `option.none` if `s` has any other character, is empty, or gives a value that does not fit in `T` |
 
 - The type before the `.` is the expected type of the arguments, so literals need no conversion: `u32.wrapping_mul(h, 33)`. An argument of another type is E0400.
 - `T.wrapping_from(x)` takes an integer of any type. Like a conversion (§ 8.5), its argument must not be literal-only (E0402), and a float, a `bool` or a `char` is E0404.

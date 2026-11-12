@@ -174,18 +174,18 @@ interface types {
 
 interface orders {
   func cheapest(items: list<types::item>) -> option<types::item> {
-    if (list::len(items) == 0) {
-      return option::none;
+    if (list.len(items) == 0) {
+      return option.none;
     }
     local best: types::item = items[0];
     local i: u32 = 1;
-    while (i < list::len(items)) {
+    while (i < list.len(items)) {
       if (items[i].price < best.price) {
         best = items[i];
       }
       i = i + 1;
     }
-    return option::some(best);
+    return option.some(best);
   }
 }
 "#;
@@ -321,7 +321,7 @@ interface v {
 
   func seventeen(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, g: u32, h: u32, i: u32,
                  j: u32, k: u32, l: u32, m: u32, n: u32, o: u32, p: u32, q: string) -> u32 {
-    return a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + string::len(q);
+    return a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + string.len(q);
   }
 
   func nested(xs: list<list<string>>) -> list<list<string>> {
@@ -337,9 +337,9 @@ interface v {
   }
 
   func count_bytes(xs: list<u8>) -> u32 {
-    local ys: list<mut u8> = list::copy(xs);
+    local ys: list<mut u8> = list.copy(xs);
     ys[0] = 0;
-    return list::len(ys);
+    return list.len(ys);
   }
 }
 "#;

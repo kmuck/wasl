@@ -114,16 +114,16 @@ world {world} {{
 
   export wasi:cli/run {{
     async func run() -> result {{
-      local (rx: stream<u8>, tx: stream_writer<u8>) = stream::new();
+      local (rx: stream<u8>, tx: stream_writer<u8>) = stream.new();
       local done: future<result<_, types::error_code>> = stdout::write_via_stream(rx);
-      _ = stream::write(tx, string::bytes(greeting::text("world")));
-      stream::close(tx);
-      match (future::read(done)) {{
+      stream.write(tx, string.bytes(greeting::text("world")));
+      stream.close(tx);
+      match (future.read(done)) {{
         case ok {{
-          return result::ok;
+          return result.ok;
         }}
         case err {{
-          return result::err;
+          return result.err;
         }}
       }}
     }}
@@ -158,17 +158,17 @@ world {world} {{
         }}
       }}
 
-      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream::new();
+      local (body: stream<u8>, body_tx: stream_writer<u8>) = stream.new();
       local (trailers: future<result<option<types::trailers>, types::error_code>>,
-             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future::new();
+             trailers_tx: future_writer<result<option<types::trailers>, types::error_code>>) = future.new();
       local (response: types::response, _) =
-        types::response::new(types::fields(), option::some(body), trailers);
+        types::response::new(types::fields(), option.some(body), trailers);
       // The host sends the response, then the handler writes its body.
-      task::return(result::ok(response));
+      task.return(result.ok(response));
 
-      _ = stream::write(body_tx, string::bytes("Hello, " + path + "!\n"));
-      stream::close(body_tx);
-      _ = future::write(trailers_tx, result::ok(option::none));
+      stream.write(body_tx, string.bytes("Hello, " + path + "!\n"));
+      stream.close(body_tx);
+      future.write(trailers_tx, result.ok(option.none));
     }}
   }}
 }}

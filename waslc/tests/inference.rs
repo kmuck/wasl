@@ -46,14 +46,14 @@ interface t {
     return total;
   }
   func from_call(s: string) -> u32 {
-    local bytes = string::bytes(s);
-    local n = list::len(bytes);
+    local bytes = string.bytes(s);
+    local n = list.len(bytes);
     return n;
   }
   func from_values(b: bool) -> string {
     local yes = "yes";
     local flag = !b;
-    local some = option::some("no");
+    local some = option.some("no");
     if (flag) {
       return yes;
     }
@@ -67,7 +67,7 @@ interface t {
     local (n, s) = pair();
     local (m: u32, _) = pair();
     local (_, again) = pair();
-    return n + m + string::len(s) + string::len(again);
+    return n + m + string.len(s) + string.len(again);
   }
 
   // `for (x in xs)`
@@ -120,7 +120,7 @@ interface t {
     return sum + xs[0];
   }
   func mutable() -> u32 {
-    local xs: list<mut u32> = list::filled(3, 1);
+    local xs: list<mut u32> = list.filled(3, 1);
     local sum: u32;
     for (x in xs) {
       xs[2] = 10;
@@ -130,7 +130,7 @@ interface t {
   }
   func chars(s: string) -> u32 {
     local n: u32;
-    for (c in string::chars(s)) {
+    for (c in string.chars(s)) {
       if (c == 'a') {
         n = n + 1;
       }
@@ -271,13 +271,9 @@ fn errors() {
             Code::Syntax,
             "a local needs a type or an initial value",
         ),
-        ("local k = option::none;", Code::CannotInfer, "cannot infer"),
+        ("local k = option.none;", Code::CannotInfer, "cannot infer"),
         ("local xs = [];", Code::CannotInfer, "cannot infer"),
-        (
-            "local r = result::ok(1);",
-            Code::CannotInfer,
-            "cannot infer",
-        ),
+        ("local r = result.ok(1);", Code::CannotInfer, "cannot infer"),
         ("local k = 3000000000;", Code::LiteralOutOfRange, "s32"),
         ("local k = 1; local m: u32 = k;", Code::TypeMismatch, "s32"),
         ("local k = u64(0);", Code::UntypedLiteral, "u64"),
@@ -295,7 +291,7 @@ fn errors() {
         ("local seen = 1;", Code::ShadowsGlobal, "global"),
         ("local q = q;", Code::UnknownName, "`q`"),
         (
-            "local (a, b) = stream::new();",
+            "local (a, b) = stream.new();",
             Code::CannotInfer,
             "cannot infer",
         ),
@@ -304,7 +300,7 @@ fn errors() {
             Code::DuplicateLocal,
             "already declared",
         ),
-        ("for (c in s) { }", Code::ForNotList, "string::chars(s)"),
+        ("for (c in s) { }", Code::ForNotList, "string.chars(s)"),
         ("for (i in 10) { }", Code::CannotInfer, "cannot infer"),
         (
             "for (x in n) { }",

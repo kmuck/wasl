@@ -36,7 +36,7 @@ pub(crate) enum Boundary {
     AsyncAdapter(FuncId),
     /// The callback of the async exports, never called in 0.4 (§ 13.13).
     Callback,
-    /// `(T')`: `task::return(v)` in a function that delivers its result (§ 8.21): lowers
+    /// `(T')`: `task.return(v)` in a function that delivers its result (§ 8.21): lowers
     /// the value and gives it to `task.return`.
     TaskReturn(FuncId),
     /// The reverse adapter of an imported function (§ 13.10): lowers the arguments,
@@ -69,15 +69,15 @@ pub(crate) enum Boundary {
     ReleaseEnd(Type),
     /// `(end) -> code`: the wait of a task for the event of an end (§ 12.12).
     Wait,
-    /// `() -> tuple<R, W>`: `stream::new()` or `future::new()`, of the tuple type.
+    /// `() -> tuple<R, W>`: `stream.new()` or `future.new()`, of the tuple type.
     EndNew(Type),
-    /// `(tx, xs) -> (count, tx)`: `stream::write`, of the list type.
+    /// `(tx, xs) -> (count, tx)`: `stream.write`, of the list type.
     StreamWrite(Type),
-    /// `(rx, n) -> (option<list<T>>, rx)`: `stream::read`, of the option type.
+    /// `(rx, n) -> (option<list<T>>, rx)`: `stream.read`, of the option type.
     StreamRead(Type),
-    /// `(tx, v) -> bool`: `future::write`, of the element type.
+    /// `(tx, v) -> bool`: `future.write`, of the element type.
     FutureWrite(Type),
-    /// `(rx) -> T`: `future::read`, of the element type.
+    /// `(rx) -> T`: `future.read`, of the element type.
     FutureRead(Type),
 }
 
@@ -1316,7 +1316,7 @@ fn async_adapter(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, F
     g.finish(vec![ValType::I32])
 }
 
-/// `task::return(v)` (§ 8.21): lowers `v` into flat values or scratch memory, calls
+/// `task.return(v)` (§ 8.21): lowers `v` into flat values or scratch memory, calls
 /// `task.return`, then sets `$scratch_top` back to where it was, since the task goes on.
 fn task_return(cx: &mut ModuleCx, f: FuncId) -> (Vec<ValType>, Vec<ValType>, Function) {
     let types = cx.types;
