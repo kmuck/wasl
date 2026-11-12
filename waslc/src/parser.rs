@@ -557,6 +557,50 @@ impl Parser {
         Ok(Block { stmts })
     }
 
+    /// The body of `if`, `else`, `while` or `for` (§ 5.3): a block, or a single simple
+    /// statement, an assignment, `break`, `continue`, `return` or a call statement.
+    fn body(&mut self, keyword: &str) -> Result<Block> {
+        if *self.peek() == TokenKind::LBrace {
+            return self.block("`{`");
+        }
+        let start = self.span();
+        let needs_braces = |what: &str| {
+            err(
+                Code::Syntax,
+                start,
+                format!(
+                    "{what} needs braces after `{keyword}`: a body without braces is a simple statement, an assignment, `break`, `continue`, `return` or a call"
+                ),
+            )
+        };
+        match self.peek() {
+            TokenKind::Local => {
+                return err(
+                    Code::Syntax,
+                    start,
+                    format!(
+                        "a `local` alone in the body of `{keyword}` would be useless: write braces around the body"
+                    ),
+                );
+            }
+            TokenKind::If => return needs_braces("an `if`"),
+            TokenKind::While | TokenKind::For => return needs_braces("a loop"),
+            TokenKind::Match => return needs_braces("a `match`"),
+            TokenKind::KwTask => return needs_braces("`task.return`"),
+            _ => {}
+        }
+        let stmt = self.stmt()?;
+        debug_assert!(matches!(
+            stmt.kind,
+            StmtKind::Assign { .. }
+                | StmtKind::Break
+                | StmtKind::Continue
+                | StmtKind::Return(_)
+                | StmtKind::Call(_)
+        ));
+        Ok(Block { stmts: vec![stmt] })
+    }
+
     fn stmt(&mut self) -> Result<Stmt> {
         let start = self.span();
         let kind = match self.peek() {
@@ -616,7 +660,7 @@ impl Parser {
             TokenKind::While => {
                 self.bump();
                 let cond = self.condition("while")?;
-                let body = self.block("`{` (braces are required after `while`)")?;
+                let body = self.body("while")?;
                 StmtKind::While { cond, body }
             }
             TokenKind::For => {
@@ -632,7 +676,7 @@ impl Parser {
                 )?;
                 let list = self.expr()?;
                 self.expect(&TokenKind::RParen, "`)`")?;
-                let body = self.block("`{` (braces are required after `for`)")?;
+                let body = self.body("for")?;
                 StmtKind::For { name, list, body }
             }
             TokenKind::Match => StmtKind::Match(self.match_()?),
@@ -821,14 +865,12 @@ impl Parser {
     fn if_(&mut self) -> Result<If> {
         self.bump();
         let cond = self.condition("if")?;
-        let then = self.block("`{` (braces are required after `if`)")?;
+        let then = self.body("if")?;
         let else_ = if self.eat(&TokenKind::Else) {
             if *self.peek() == TokenKind::If {
                 Some(Else::If(Box::new(self.if_()?)))
             } else {
-                Some(Else::Block(
-                    self.block("`{` or `if` (braces are required after `else`)")?,
-                ))
+                Some(Else::Block(self.body("else")?))
             }
         } else {
             None
@@ -1364,7 +1406,7 @@ mod tests {
     }
 
     fn syntax_error(body: &str) {
-        let e = func_body(body).unwrap_err();
+        let e = func_body(body).expect_err(body);
         assert_eq!(e.code, Code::Syntax, "{body}: {}", e.message);
     }
 
@@ -1464,10 +1506,15 @@ mod tests {
     fn errors() {
         syntax_error("local x;");
         syntax_error("local (a, b);");
-        syntax_error("for (x in xs) return;");
+        syntax_error("if (a) if (b) f();");
+        syntax_error("if (a) local n: u32 = 1;");
+        syntax_error("while (a) match (b) { case x { } }");
+        syntax_error("if (a) return; else while (b) { }");
+        syntax_error("for (x in xs) for (y in ys) { }");
+        syntax_error("if (a) { } else task.return(1);");
+        syntax_error("if (a) return else f();");
         syntax_error("for (x: u32 in xs) { }");
         syntax_error("for x in xs { }");
-        syntax_error("if (n > 0) return n;");
         syntax_error("if n > 0 { return n; }");
         syntax_error("while n > 0 { }");
         syntax_error("if (1 < 2 < 3) { }");

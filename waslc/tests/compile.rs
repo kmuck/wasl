@@ -146,7 +146,6 @@ fn invalid_programs() {
         ("local x: f64 = 1;", Code::TypeMismatch),
         ("local y: u64 = n;", Code::TypeMismatch),
         ("if (n) { }", Code::NonBoolCondition),
-        ("if (n > 0) return;", Code::Syntax),
         ("if n > 0 { }", Code::Syntax),
         ("pi = 3.0;", Code::AssignImmutable),
         ("local pi: f64 = 1.0;", Code::ShadowsGlobal),
