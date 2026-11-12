@@ -4,7 +4,7 @@
 
 `waslc` never touches the filesystem: it receives the package identity and the source texts, and returns the components and the WIT. Finding the project, reading `wasl.toml` and the files under `src/`, and writing `build/` is the job of [`weasel`](../weasel), the build tool.
 
-The language is defined by the [specification](../docs/spec_v0.4/README.md); the compiler output is specified in its chapters 11 to 13. This document describes the architecture of the compiler.
+The language is defined by the [specification](../docs/spec_v0.5/README.md); the compiler output is specified in its chapters 11 to 13. This document describes the architecture of the compiler.
 
 ## API
 

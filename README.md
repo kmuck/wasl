@@ -4,7 +4,7 @@
 
 A compiled WaSL project is a standard **`.wasm` component**: the code as Wasm instructions, with its WIT interfaces embedded. Any Component Model tool can read it, run it, or compose it with components written in other languages.
 
-> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds), v0.2 (data on the WasmGC heap), v0.3 (imports, resources, WASI 0.2 commands) and v0.4 (async, streams and futures, WASI 0.3 commands and HTTP services) are specified and implemented, in the [v0.4 specification](docs/spec_v0.4/README.md), provisional until v0.5.
+> **Status**: early stage. v0.1 (numbers, functions, control flow, interfaces and worlds), v0.2 (data on the WasmGC heap), v0.3 (imports, resources, WASI 0.2 commands) and v0.4 (async, streams and futures, WASI 0.3 commands and HTTP services) are specified and implemented, in the [v0.4 specification](docs/spec_v0.4/README.md). The [v0.5 specification](docs/spec_v0.5/README.md) continues it and is the reference.
 
 ```wasl
 world billing {
@@ -104,7 +104,7 @@ WebAssembly and WasmGC are W3C standards, shipped in every major browser. The Co
 
 | Part | Role |
 |---|---|
-| [`docs/`](docs) | The language specification, one folder per version: [v0.4](docs/spec_v0.4/README.md), complete and provisional until v0.5; [v0.1](docs/spec_v0.1/README.md), [v0.2](docs/spec_v0.2/README.md) and [v0.3](docs/spec_v0.3/README.md), frozen |
+| [`docs/`](docs) | The language specification, one folder per version: [v0.5](docs/spec_v0.5/README.md), complete and in progress; [v0.1](docs/spec_v0.1/README.md) to [v0.4](docs/spec_v0.4/README.md), frozen |
 | [`waslc/`](waslc) | The compiler, a Rust library built on the `wasm-tools` crates. It never touches the filesystem. |
 | [`weasel/`](weasel) | The build tool, in the spirit of `cargo`: `init`, `build`, `check`, `wit`, `call`, `clean`. It runs components with wasmtime. |
 | [`examples/`](examples) | The target program of each version, built and run in CI |

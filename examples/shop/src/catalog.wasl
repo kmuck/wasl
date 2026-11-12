@@ -1,0 +1,35 @@
+use wasl:std/http;
+use wasl:std/json;
+
+/// The catalog service: `GET /products` and `GET /products/{id}`.
+/// Run it with `weasel serve catalog`, then `curl http://127.0.0.1:8080/products/2`.
+world catalog {
+  include wasl:std/service {
+    async func handle(request: request) -> response {
+      if (on(request, method::get, "/products"))
+        return reply(200, "application/json", json::stringify(shop::products_json()));
+      if (on(request, method::get, "/products/*"))
+        return catalog_api::product(segment(request, 1));
+      return not_found();
+    }
+  }
+}
+
+interface catalog_api {
+
+  func product(id: string) -> http::response {
+    match (find(id)) {
+      case some(p) {
+        return http::reply(200, "application/json", json::stringify(shop::product_json(p)));
+      }
+      case none {
+        return http::reply(404, "text/plain", "no product " + id + "\n");
+      }
+    }
+  }
+
+  func find(id: string) -> option<shop::product> {
+    return shop::find(u32.parse(id)?);
+  }
+
+}

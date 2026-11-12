@@ -1,0 +1,4 @@
+[package]
+namespace = "example"
+name = "shop"
+version = "0.1.0"

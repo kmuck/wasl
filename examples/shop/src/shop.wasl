@@ -1,0 +1,172 @@
+use wasl:std/json;
+
+/// The shop: its products, its orders, and their JSON. Every world of the
+/// project compiles it in: it is a library, not a service.
+interface shop {
+
+  /// A price, in cents.
+  type cents = u64;
+
+  record product {
+    id: u32,
+    name: string,
+    price: cents,
+  }
+
+  record order_line {
+    product_id: u32,
+    quantity: u32,
+  }
+
+  record order {
+    customer: string,
+    lines: list<order_line>,
+  }
+
+  variant order_error {
+    empty,
+    unknown_product(u32),
+    zero_quantity(u32),
+  }
+
+  /// The catalog, fixed in the code: WASI has no stable storage yet.
+  func products() -> list<product> {
+    return [
+      product { id: 1, name: "pen", price: 150 },
+      product { id: 2, name: "notebook", price: 420 },
+      product { id: 3, name: "ink", price: 900 },
+    ];
+  }
+
+  func find(id: u32) -> option<product> {
+    for (p in products()) {
+      if (p.id == id)
+        return option.some(p);
+    }
+    return option.none;
+  }
+
+  /// The total of an order, or why it is invalid.
+  func total(order: order) -> result<cents, order_error> {
+    if (list.len(order.lines) == 0)
+      return result.err(order_error::empty);
+    local sum: cents = 0;
+    for (line in order.lines) {
+      if (line.quantity == 0)
+        return result.err(order_error::zero_quantity(line.product_id));
+      match (find(line.product_id)) {
+        case some(p) {
+          sum = sum + u64(line.quantity) * p.price;
+        }
+        case none {
+          return result.err(order_error::unknown_product(line.product_id));
+        }
+      }
+    }
+    return result.ok(sum);
+  }
+
+  func describe(e: order_error) -> string {
+    match (e) {
+      case empty {
+        return "the order has no line";
+      }
+      case unknown_product(id) {
+        return "unknown product " + u32.to_string(id);
+      }
+      case zero_quantity(id) {
+        return "zero quantity for product " + u32.to_string(id);
+      }
+    }
+  }
+
+  /// `1205` is written `12.05`.
+  func format_cents(c: cents) -> string {
+    local rest = c % 100;
+    if (rest < 10)
+      return u64.to_string(c / 100) + ".0" + u64.to_string(rest);
+    return u64.to_string(c / 100) + "." + u64.to_string(rest);
+  }
+
+  func product_json(p: product) -> json::value {
+    return json::value::object([
+      tuple("id", json::from_u64(u64(p.id))),
+      tuple("name", json::value::text(p.name)),
+      tuple("price", json::from_u64(p.price)),
+    ]);
+  }
+
+  func products_json() -> json::value {
+    local all = products();
+    local out: list<mut json::value> = list.filled(list.len(all), json::value::null);
+    local i: u32 = 0;
+    for (p in all) {
+      out[i] = product_json(p);
+      i = i + 1;
+    }
+    return json::value::array(list.freeze(out));
+  }
+
+  /// Reads `{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}`.
+  func order_from_json(body: string) -> result<order, string> {
+    local v = json::parse(body)?;
+    local customer = text_of(field(v, "customer")?)?;
+    local items = array_of(field(v, "lines")?)?;
+    local lines: list<mut order_line> =
+      list.filled(list.len(items), order_line { product_id: 0, quantity: 0 });
+    local i: u32 = 0;
+    for (item in items) {
+      lines[i] = order_line {
+        product_id: u32(number_of(field(item, "product_id")?)?),
+        quantity: u32(number_of(field(item, "quantity")?)?),
+      };
+      i = i + 1;
+    }
+    return result.ok(order { customer: customer, lines: list.freeze(lines) });
+  }
+
+  func field(v: json::value, name: string) -> result<json::value, string> {
+    match (json::field(v, name)) {
+      case some(f) {
+        return result.ok(f);
+      }
+      case none {
+        return result.err("missing field `" + name + "`");
+      }
+    }
+  }
+
+  func text_of(v: json::value) -> result<string, string> {
+    match (json::as_text(v)) {
+      case some(s) {
+        return result.ok(s);
+      }
+      case none {
+        return result.err("expected a string");
+      }
+    }
+  }
+
+  func array_of(v: json::value) -> result<list<json::value>, string> {
+    match (json::as_array(v)) {
+      case some(xs) {
+        return result.ok(xs);
+      }
+      case none {
+        return result.err("expected an array");
+      }
+    }
+  }
+
+  func number_of(v: json::value) -> result<u64, string> {
+    match (json::as_u64(v)) {
+      case some(n) {
+        return result.ok(n);
+      }
+      case none {
+        return result.err("expected a whole number");
+      }
+    }
+  }
+
+}

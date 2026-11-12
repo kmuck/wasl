@@ -29,19 +29,23 @@ Do not re-propose these unless Karim asks.
 
 - **No user-defined generics.** Genericity exists only in the WIT type constructors (`list<T>`, `option<T>`, `result<T, E>`, `tuple<…>`) and in built-in functions, like Go before 1.18. WIT has no generics, so they could not be exported.
 - **No `mut` in the WIT.** WIT has no mutability: a `mut` field or a `list<mut T>` in a type that appears in the WIT is an error (E0214). There is no `with` record update; build a new record.
-- **`list<T>` is immutable for everyone, `list<mut T>` is mutable**, and `list::freeze(xs)` (a copy) is the only conversion. No `vec` or `map` types for now; a growable list waits until a target program needs it, and `map<K, V>` will come from the Component Model.
-- **Integer arithmetic and conversions give the exact result or trap.** Wrapping and checked arithmetic are explicit: `T::wrapping_add`, `T::checked_add`… (§ 10.2).
+- **`list<T>` is immutable for everyone, `list<mut T>` is mutable**, and `list.freeze(xs)` (a copy) is the only conversion. No `vec` or `map` types for now; a growable list waits until a target program needs it, and `map<K, V>` will come from the Component Model.
+- **Integer arithmetic and conversions give the exact result or trap.** Wrapping and checked arithmetic are explicit: `T.wrapping_add`, `T.checked_add`… (§ 10.2).
 - **Locals get the default value of their Wasm type** when they have no initializer: numbers are zero, an enum is its first case, an option is `none`; other heap types need an initializer (E0410). No definite-assignment analysis.
-- **Values are never ignored silently.** A call statement must call a function without a return value (E0413); `_ = f();` is the explicit `drop`.
+- **A call statement discards its value** (0.5): `f();` is enough, the compiler emits the `drop`; `_ = f();` and E0413 were removed for readability (§ 9.6). `_` stays in destructuring.
 - **Recursive types** are accepted when they have a value (E0211), and stay internal, since WIT forbids them (E0208).
 - **Several errors per compilation, without cascades** (§ 11.2): one syntax error per file, then no analysis; the first error of the declarations stops; one error per function body. `weasel` shows the first ten, like Go.
 - **Imported resource handles are released automatically** (0.3): when their local is overwritten and on every exit of the function, unless they were moved; no explicit `drop`. A resource of the package is a plain WasmGC value inside the component.
 - **Resource calls** (0.3): methods are called `c.add(x)`, constructors `carts::cart(…)` like a conversion.
 - **Imports** (0.3) cover interfaces of other packages and interfaces of the same package exported by another world; dependencies are fetched with the `wkg` crates.
-- **Async is the Component Model's** (0.4): `async func` as in WIT; a call to an async function waits for its result, with **no `await`** (written, it is E0101); only an async function calls one (E0416). Revisited only at the spec freeze of 0.5.
-- **Streams and futures** (0.4): `stream<T>`, `future<T>` and the writable ends `stream_writer<T>`, `future_writer<T>` (never in the WIT, E0222) are handle types; built-in functions `stream::new/write/read/close`, `future::new/write/read`, with the reader first in the tuples, as in the Component Model. `stream::write` writes everything. A tuple that holds handles is destructured at once, `local (a: A, _) = e;`.
-- **`task::return(v);`** (0.4) is the Component Model's `task.return`: once, at the top level of an async function's body; after it only `return;` (E0418); a function that contains it is an entry point, never called inside its component (E0419).
+- **Async is the Component Model's** (0.4): `async func` as in WIT; a call to an async function waits for its result, with **no `await`** (written, it is E0101); only an async function calls one (E0416). Revisited once the standard library of 0.5 is written.
+- **Streams and futures** (0.4): `stream<T>`, `future<T>` and the writable ends `stream_writer<T>`, `future_writer<T>` (never in the WIT, E0222) are handle types; built-in functions `stream.new/write/read/close`, `future.new/write/read`, with the reader first in the tuples, as in the Component Model. `stream.write` writes everything. A tuple that holds handles is destructured at once, `local (a: A, _) = e;`.
+- **`task.return(v);`** (0.4) is the Component Model's `task.return`: once, at the top level of an async function's body; after it only `return;` (E0418); a function that contains it is an entry point, never called inside its component (E0419).
 - **Codegen of async** (0.4): callback lift whose callback is never called, the body blocks with `waitable-set.wait`, one region of scratch memory per task (a stack in 0.4, with `$scratch_base`; `context.set` once an instance runs several async tasks); one async task at a time per instance, so `weasel serve` uses one instance per request. Stackful or threaded tasks come later without changing programs; no state-machine transformation.
+- **Built-in names and declared names** (0.5): a built-in function or constructor is written with its type and a `.` (`list.len(xs)`, `result.ok(x)`, `option.none`, `u32.to_string(n)`, `task.return(v)`); `::` only for names declared in code (`pricing::apply`, `status::paid`); `x.m()` only for resource methods, never for built-ins (`xs.len()` is rejected); `case some(p)` stays unprefixed.
+- **Readability of 0.5**: `local x = e;` infers the type of a local (a lone integer literal is `s32`, a float `f64`), also in destructuring; parameters, returns, fields and globals keep their types. `for (x in xs)` on lists, no ranges. A single simple statement (`return`, `break`, `continue`, assignment, call) can replace the braces after `if`, `else`, `while`, `for`, never another `if`/loop; `else` is allowed after it; the compiler ignores whitespace and `weasel fmt` puts it on the next line. `type` only declares aliases. Tests are the functions of `tests/` with no parameter returning `result<_, string>`.
+- **`use`** (0.5) names an interface of another package in one file (`use wasl:std/json;`, `use … as`); `import` stays the world-level import of the component.
+- **The standard library** (0.5) is one package, `wasl:std` (`text`, `json`, `http`, `cli`, `fs`), written in WaSL above WASI, compiled into the components that use it. It gets no special rule: a library interface can declare a function without body, and a library can declare a world that a program includes with WIT's `include`, writing those functions in its block (§ 2.4.3). `world catalog { include wasl:std/service { async func handle(request: request) -> response { … } } }` and `include wasl:std/command { async func run() -> result<_, string> { … } }`: the library's world exports `wasi:http/handler` or `wasi:cli/run` and calls the program's function inside **one component**, with a plain `call`. No adapter component, no composition, no hidden fusion, no manifest field (Karim, 2026-11-12). `cli::args()` is a free function; `print` stays `async` like WASI. HTTP routing is by hand: `if (on(request, method::get, "/products/*")) return …;`, `segment(request, 1)`, `reply`, `not_found()`; `method` is the variant of `wasi:http`; no router (Karim, 2026-11-11). Growable lists and `map` stay deferred.
 
 ## Repository
 
@@ -52,7 +56,7 @@ CHANGELOG.md    Keep a Changelog, with the versioning rules
 docs/spec_vX.Y  the specification of each version, one frozen folder per release
 waslc/          the compiler, a Rust library (lexer → parser → sema → HIR → codegen / wit → component)
 weasel/         the build tool, a Rust executable (init, build, check, wit, call, run, serve, clean), runs components with wasmtime
-examples/       the target programs of each version (calc for 0.1, invoice for 0.2, catalog + checkout and hello for 0.3, hello for WASI 0.3 and hello-http for 0.4), run in CI
+examples/       the target programs of each version (calc for 0.1, invoice for 0.2, catalog + checkout and hello for 0.3, hello for WASI 0.3 and hello-http for 0.4, shop for 0.5), run in CI
 ```
 
 - `waslc` and `weasel` are **separate Cargo projects**, with no root workspace; `weasel` depends on `waslc` by path. Keep it that way.
@@ -63,7 +67,7 @@ examples/       the target programs of each version (calc for 0.1, invoice for 0
 ## Specification
 
 - The specification is the reference. A language change starts in the spec, and the compiler follows; behavior found during implementation is written back into the spec.
-- v0.1, v0.2 and v0.3 are frozen. v0.3 merged v0.1 and v0.2 into one complete specification; [docs/spec_v0.4](docs/spec_v0.4/README.md) continues it with the same section numbers, is the reference, and receives the features of 0.4; it is **provisional until v0.5**. References are written `§ 8.2`, and point to v0.4; its README maps the old `§ v2.x.y` numbers.
+- v0.1 to v0.4 are frozen. v0.3 merged v0.1 and v0.2 into one complete specification; [docs/spec_v0.5](docs/spec_v0.5/README.md) continues v0.4 with the same section numbers, is the reference, and receives the features of 0.5. References are written `§ 8.2`, and point to v0.5; its README maps the old `§ v2.x.y` numbers.
 - Each version is **example-driven**: its target program in `examples/` is written first, and the version is done when that program builds and runs in CI.
 
 ## Workflow
