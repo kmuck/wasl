@@ -85,6 +85,8 @@ struct Analyzer<'a> {
     names: HashMap<String, TopLevel>,
     /// The `use` items of the files (§ 6.6).
     uses: Vec<&'a ast::UseDecl>,
+    /// The interfaces of the standard library, by name (§ 3.5).
+    library: Vec<(String, InterfaceId)>,
     /// The names that `use` gives to interfaces of other packages, by file (§ 6.6).
     used: HashMap<(FileId, String), InterfaceId>,
     /// The interfaces of other packages that the worlds and the files name: their last
@@ -137,12 +139,22 @@ impl<'a> Analyzer<'a> {
         let mut names: HashMap<String, TopLevel> = HashMap::new();
 
         let mut uses = Vec::new();
+        let mut library = Vec::new();
         for item in items {
             if let Item::Use(u) = item {
                 uses.push(u);
                 continue;
             }
             let name = item.name();
+            // The interfaces of the standard library have no top-level name in the
+            // package: a file names them with `use` (§ 3.5).
+            if name.span.file.is_library() {
+                if let Item::Interface(i) = item {
+                    interfaces.push(i);
+                    library.push((name.name.clone(), interfaces.len() - 1));
+                }
+                continue;
+            }
             if let Some(prev) = names.get(name.name.as_str()) {
                 return err(
                     Code::DuplicateItem,
@@ -186,6 +198,7 @@ impl<'a> Analyzer<'a> {
             globals,
             names,
             uses,
+            library,
             used: HashMap::new(),
             foreign_full: Vec::new(),
             impls,
@@ -207,8 +220,17 @@ impl<'a> Analyzer<'a> {
     ///    worlds (§ 2.5, § 3.5, E0215), then the names that `use` gives them, file by
     ///    file (§ 6.6, E0217).
     fn foreign_interfaces(&mut self) -> Result<()> {
+        // The files of the standard library name its interfaces.
+        for (id, _) in crate::source::library() {
+            for (name, iface) in &self.library {
+                self.used.insert((*id, name.clone()), *iface);
+            }
+        }
         let mut used = Vec::new();
         for u in &self.uses {
+            if is_std(&u.iface) {
+                continue;
+            }
             let id = foreign_interface(self.deps, &u.iface)?;
             used.push(id);
             if !self.named_foreign.iter().any(|(i, _)| *i == id) {
@@ -234,9 +256,30 @@ impl<'a> Analyzer<'a> {
             self.foreign_full.push((short.clone(), full));
             self.foreign_names.push((short, hir_id));
         }
-        for (u, id) in self.uses.iter().zip(used) {
-            let hir_id = self.converter.iface(id);
+        let mut used = used.into_iter();
+        for u in &self.uses {
             let full = u.iface.display();
+            let hir_id = if is_std(&u.iface) {
+                match self.library.iter().find(|(n, _)| *n == u.iface.name.name) {
+                    Some(&(_, id)) => id,
+                    None => {
+                        let mut known: Vec<String> =
+                            self.library.iter().map(|(n, _)| format!("`{n}`")).collect();
+                        known.sort();
+                        return err(
+                            Code::ForeignInterface,
+                            u.iface.name.span,
+                            format!(
+                                "the standard library `wasl:std` has no interface `{}`; its interfaces are {}",
+                                u.iface.name.name,
+                                known.join(", ")
+                            ),
+                        );
+                    }
+                }
+            } else {
+                self.converter.iface(used.next().expect("resolved above"))
+            };
             let name = u.name();
             let key = (name.span.file, name.name.clone());
             let clash = |what: String| {
@@ -268,7 +311,10 @@ impl<'a> Analyzer<'a> {
                 );
             }
             if let Some(&other) = self.used.get(&key) {
-                let other = self.converter.ifaces[other - self.interfaces.len()].display();
+                let other = match self.library.iter().find(|(_, i)| *i == other) {
+                    Some((n, _)) => format!("wasl:std/{n}"),
+                    None => self.converter.ifaces[other - self.interfaces.len()].display(),
+                };
                 return clash(format!("`{other}`"));
             }
             self.used.insert(key, hir_id);
@@ -789,6 +835,18 @@ impl<'a> Analyzer<'a> {
                 let span = item.iface.span();
                 let (id, written) = match &item.iface {
                     InterfaceRef::Local(name) => match top(&self.names, &self.used, name) {
+                        Some(TopLevel::Interface(id))
+                            if self.library.iter().any(|&(_, i)| i == id) =>
+                        {
+                            return err(
+                                Code::ForeignExport,
+                                span,
+                                format!(
+                                    "`{}` is an interface of the standard library `wasl:std/{}`: a world never imports or exports it, its functions are compiled into the component that calls them",
+                                    name.name, self.program.interfaces[id].name
+                                ),
+                            );
+                        }
                         Some(TopLevel::Interface(id)) if id < self.interfaces.len() => {
                             (id, name.name.clone())
                         }
@@ -1253,15 +1311,22 @@ impl<'a> Analyzer<'a> {
             scopes: &self.scopes,
             spelled: false,
         };
+        // The functions of the standard library do not see the globals of the package.
+        let no_globals = HashMap::new();
         for (id, func) in self.funcs.iter().enumerate() {
             let iface = self.program.funcs[id].interface;
             let ret = self.program.funcs[id].ret;
+            let globals = if func.name.span.file.is_library() {
+                &no_globals
+            } else {
+                global_ids
+            };
             let checked = (|| {
                 let mut cx = FnCx::new(
                     &self.program,
                     &mut self.types,
                     &resolver,
-                    &global_ids,
+                    globals,
                     Some(iface),
                     ret,
                 );
@@ -1927,6 +1992,11 @@ fn check_boundary_types(
     Ok(())
 }
 
+/// Whether `f` names an interface of the standard library, `wasl:std/…` (§ 3.5).
+fn is_std(f: &ast::ForeignName) -> bool {
+    f.namespace.name == "wasl" && f.package.name == "std"
+}
+
 /// What `name` designates at the top level of its file: a world, an interface or a global
 /// of the package, or an interface that the file uses (§ 6.1, § 6.6).
 fn top(
@@ -1934,7 +2004,13 @@ fn top(
     used: &HashMap<(FileId, String), InterfaceId>,
     name: &Ident,
 ) -> Option<TopLevel> {
-    names.get(name.name.as_str()).copied().or_else(|| {
+    // The files of the standard library do not see the names of the package.
+    let package = if name.span.file.is_library() {
+        None
+    } else {
+        names.get(name.name.as_str()).copied()
+    };
+    package.or_else(|| {
         used.get(&(name.span.file, name.name.clone()))
             .map(|&i| TopLevel::Interface(i))
     })

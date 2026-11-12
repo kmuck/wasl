@@ -1,0 +1,203 @@
+// The standard library `wasl:std` (docs/spec_v0.5, chapter 17): operations on strings.
+// Positions count bytes, as `string.len` does.
+
+/// Operations on strings (§ 17.2). Positions count bytes, and the functions compare
+/// bytes.
+interface text {
+  /// The parts of `s` between the occurrences of `separator`, in order. An empty
+  /// separator gives `[s]`.
+  func split(s: string, separator: string) -> list<string> {
+    local b = string.bytes(s);
+    local sep = string.bytes(separator);
+    if (list.len(sep) == 0) return [s];
+    local count: u32 = 1;
+    local i: u32 = 0;
+    while (i + list.len(sep) <= list.len(b)) {
+      if (internal::bytes_at(b, i, sep)) {
+        count = count + 1;
+        i = i + list.len(sep);
+      } else
+        i = i + 1;
+    }
+    local parts: list<mut string> = list.filled(count, "");
+    local k: u32 = 0;
+    local start: u32 = 0;
+    i = 0;
+    while (i + list.len(sep) <= list.len(b)) {
+      if (internal::bytes_at(b, i, sep)) {
+        parts[k] = internal::cut(b, start, i);
+        k = k + 1;
+        i = i + list.len(sep);
+        start = i;
+      } else
+        i = i + 1;
+    }
+    parts[k] = internal::cut(b, start, list.len(b));
+    return list.freeze(parts);
+  }
+
+  /// The parts, with `separator` between each two.
+  func join(parts: list<string>, separator: string) -> string {
+    local out = "";
+    local first = true;
+    for (p in parts) {
+      if (!first) out = out + separator;
+      out = out + p;
+      first = false;
+    }
+    return out;
+  }
+
+  /// The lines of `s`: split on `"\n"`, without a `"\r"` that ends a line, and without
+  /// the empty line after a final `"\n"`.
+  func lines(s: string) -> list<string> {
+    local parts = split(s, "\n");
+    local n = list.len(parts);
+    if (n > 0 && parts[n - 1] == "") n = n - 1;
+    local out: list<mut string> = list.filled(n, "");
+    local i: u32 = 0;
+    while (i < n) {
+      local line = parts[i];
+      if (ends_with(line, "\r")) {
+        local b = string.bytes(line);
+        line = internal::cut(b, 0, list.len(b) - 1);
+      }
+      out[i] = line;
+      i = i + 1;
+    }
+    return list.freeze(out);
+  }
+
+  /// `s` without the spaces, tabs, carriage returns and line feeds at its start and
+  /// end.
+  func trim(s: string) -> string {
+    local b = string.bytes(s);
+    local start: u32 = 0;
+    local end = list.len(b);
+    while (start < end && internal::is_space(b[start])) start = start + 1;
+    while (end > start && internal::is_space(b[end - 1])) end = end - 1;
+    return internal::cut(b, start, end);
+  }
+
+  /// Whether `s` starts with the bytes of `prefix`.
+  func starts_with(s: string, prefix: string) -> bool {
+    return internal::bytes_at(string.bytes(s), 0, string.bytes(prefix));
+  }
+
+  /// Whether `s` ends with the bytes of `suffix`.
+  func ends_with(s: string, suffix: string) -> bool {
+    local b = string.bytes(s);
+    local x = string.bytes(suffix);
+    if (list.len(x) > list.len(b)) return false;
+    return internal::bytes_at(b, list.len(b) - list.len(x), x);
+  }
+
+  /// Whether `s` contains the bytes of `part`.
+  func contains(s: string, part: string) -> bool {
+    return find(s, part) != option.none;
+  }
+
+  /// The position in bytes of the first occurrence of `part`, or `option.none`.
+  func find(s: string, part: string) -> option<u32> {
+    local b = string.bytes(s);
+    local p = string.bytes(part);
+    local i: u32 = 0;
+    while (i + list.len(p) <= list.len(b)) {
+      if (internal::bytes_at(b, i, p)) return option.some(i);
+      i = i + 1;
+    }
+    return option.none;
+  }
+
+  /// `s` with every occurrence of `from`, from left to right, replaced by `to`. An
+  /// empty `from` gives `s`.
+  func replace(s: string, from: string, to: string) -> string {
+    local b = string.bytes(s);
+    local f = string.bytes(from);
+    if (list.len(f) == 0) return s;
+    local out = "";
+    local start: u32 = 0;
+    local i: u32 = 0;
+    while (i + list.len(f) <= list.len(b)) {
+      if (internal::bytes_at(b, i, f)) {
+        out = out + internal::cut(b, start, i) + to;
+        i = i + list.len(f);
+        start = i;
+      } else
+        i = i + 1;
+    }
+    return out + internal::cut(b, start, list.len(b));
+  }
+
+  /// The bytes from `start` to `end` (excluded), or `option.none` if `start > end`,
+  /// `end` is past the end, or a bound cuts a character in two.
+  func slice(s: string, start: u32, end: u32) -> option<string> {
+    local b = string.bytes(s);
+    if (start > end || end > list.len(b)) return option.none;
+    return string.from_bytes(internal::copy(b, start, end));
+  }
+
+  /// `s` with the ASCII letters in lowercase.
+  func lower(s: string) -> string {
+    return internal::shift_case(s, 65, 90, 32);
+  }
+
+  /// `s` with the ASCII letters in uppercase.
+  func upper(s: string) -> string {
+    return internal::shift_case(s, 97, 122, 224);
+  }
+}
+
+/// Helpers of the library, used by its other interfaces. They are not meant for
+/// programs, and may change in any version.
+interface internal {
+  /// Whether the bytes of `part` are in `b` at position `i`.
+  func bytes_at(b: list<u8>, i: u32, part: list<u8>) -> bool {
+    if (i + list.len(part) > list.len(b)) return false;
+    local k: u32 = 0;
+    while (k < list.len(part)) {
+      if (b[i + k] != part[k]) return false;
+      k = k + 1;
+    }
+    return true;
+  }
+
+  /// The bytes of `b` from `start` to `end` (excluded).
+  func copy(b: list<u8>, start: u32, end: u32) -> list<u8> {
+    local out: list<mut u8> = list.filled(end - start, 0);
+    local k: u32 = 0;
+    while (start + k < end) {
+      out[k] = b[start + k];
+      k = k + 1;
+    }
+    return list.freeze(out);
+  }
+
+  /// The string of the bytes of `b` from `start` to `end`, which are the bounds of
+  /// characters.
+  func cut(b: list<u8>, start: u32, end: u32) -> string {
+    match (string.from_bytes(copy(b, start, end))) {
+      case some(s) { return s; }
+      case none { return ""; }
+    }
+  }
+
+  /// Whether `c` is a space, a tab, a carriage return or a line feed.
+  func is_space(c: u8) -> bool {
+    return c == 32 || c == 9 || c == 13 || c == 10;
+  }
+
+  /// `s` with each byte from `low` to `high` shifted by `delta`, modulo 256.
+  func shift_case(s: string, low: u8, high: u8, delta: u8) -> string {
+    local b = list.copy(string.bytes(s));
+    local i: u32 = 0;
+    while (i < list.len(b)) {
+      if (b[i] >= low && b[i] <= high) b[i] = u8.wrapping_add(b[i], delta);
+      i = i + 1;
+    }
+    match (string.from_bytes(list.freeze(b))) {
+      case some(out) { return out; }
+      case none { return s; }
+    }
+  }
+}

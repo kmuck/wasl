@@ -90,7 +90,7 @@ version = "0.1.0"
 
 **Path dependencies on WaSL projects.** Only the WIT of the dependency is used to compile the project: its interfaces, types and functions, never its source code. The dependency is analyzed like a project of its own (chapter 11), and an error in it stops the build. Its components are built when they are needed to run the project (§ 14.2).
 
-**The standard library.** *Specified, not available yet.* `wasl:std` (chapter 17) is the one **library** of 0.5: a dependency whose source code is compiled with the package. It is shipped inside `weasel`, at the version of the compiler, and every project depends on it without declaring it; `"wasl:std"` in `[dependencies]` is E0200. Its interfaces behave like interfaces of the package that no world imports:
+**The standard library.** `wasl:std` (chapter 17) is the one **library** of 0.5: a dependency whose source code is compiled with the package. It is shipped inside `weasel`, at the version of the compiler, and every project depends on it without declaring it; `"wasl:std"` in `[dependencies]` is E0200. Its interfaces behave like interfaces of the package that no world imports:
 
 - a file names them with `use wasl:std/<interface>;` (§ 6.6);
 - the code of the functions that a world reaches is compiled into its component, as for the interfaces of the package (§ 2.3), and only that code;
