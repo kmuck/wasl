@@ -2,6 +2,9 @@
 // until 0.4, which replaced it with the WASI 0.3 program of § 15.7. Its entry point is
 // `wasi:cli/run`, an interface defined by WASI and implemented in the world (§ 2.4.2).
 
+use wasi:io/streams;
+use wasi:cli/stdout;
+
 world hello {
   import wasi:io/streams;
   import wasi:cli/stdout;

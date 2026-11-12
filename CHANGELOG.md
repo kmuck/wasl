@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A file names the interfaces of other packages it uses** (§ 6.6): `use wasi:cli/stdout;` at the top of a file makes `stdout::…` nameable in that file, and `use wasi:http/types as http_types;` renames it, so `wasi:cli/types` and `wasi:http/types` can be used together. An interface that a world imports or exports is no longer named in every file: a file that names it without `use` gets E0300 or E0305, with the `use` to add. Two names of one file that clash, or one interface used twice, are E0217. `use` and `as` are keywords. The examples and the templates of `weasel init` are converted.
 - **Built-in functions and constructors are written with a `.`** (§ 5.3, § 8.17): `list.len(xs)`, `string.bytes(s)`, `u32.wrapping_add(a, b)`, `option.none`, `result.ok(x)`, `stream.new()`, `task.return(v)`. `::` is only for names declared in code, `status::paid`, `math::fib(n)`. The writing of 0.4, `list::len(xs)`, is E0100, with a message that gives the new one; `xs.len()` is E0100 too, since a built-in function is not a method.
 - **A call statement discards its value** (§ 9.6): `f();` is enough for a function that returns a value. `_ = f();` is E0100 and the error E0413 is retired.
 

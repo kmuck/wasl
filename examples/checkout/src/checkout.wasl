@@ -1,6 +1,8 @@
 // Target program of WaSL v0.3 (docs/spec_v0.3), with examples/catalog: a component
 // that imports the `carts` interface of another package and uses its resource.
 
+use example:catalog/carts;
+
 world checkout {
   import example:catalog/carts;
   export orders;

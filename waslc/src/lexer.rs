@@ -41,6 +41,9 @@ pub enum TokenKind {
     In,
     /// `type`, which declares an alias (§ 7.14).
     KwType,
+    /// `use` and `as`, which name an interface of another package in a file (§ 6.6).
+    Use,
+    As,
     Break,
     Continue,
     Return,
@@ -165,6 +168,8 @@ impl TokenKind {
             TokenKind::For => "for",
             TokenKind::In => "in",
             TokenKind::KwType => "type",
+            TokenKind::Use => "use",
+            TokenKind::As => "as",
             TokenKind::Break => "break",
             TokenKind::Continue => "continue",
             TokenKind::Return => "return",
@@ -244,7 +249,7 @@ pub struct Token {
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
 const RESERVED: &[&str] = &[
-    "package", "use", "map", "own", "await", "subtask", "include", "with", "as",
+    "package", "map", "own", "await", "subtask", "include", "with",
 ];
 
 fn keyword(word: &str) -> Option<TokenKind> {
@@ -270,6 +275,8 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "for" => TokenKind::For,
         "in" => TokenKind::In,
         "type" => TokenKind::KwType,
+        "use" => TokenKind::Use,
+        "as" => TokenKind::As,
         "break" => TokenKind::Break,
         "continue" => TokenKind::Continue,
         "return" => TokenKind::Return,
@@ -831,7 +838,8 @@ mod tests {
         assert_eq!(error_code("x_"), Code::InvalidIdent);
         assert_eq!(error_code("a__b"), Code::InvalidIdent);
         assert_eq!(error_code("a_1"), Code::InvalidIdent);
-        assert_eq!(error_code("use"), Code::ReservedKeyword);
+        assert_eq!(error_code("with"), Code::ReservedKeyword);
+        assert_eq!(kinds("use")[0], TokenKind::Use);
         assert_eq!(error_code("subtask"), Code::ReservedKeyword);
         assert_eq!(error_code("await"), Code::Await);
         assert_eq!(kinds("async")[0], TokenKind::Async);

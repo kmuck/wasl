@@ -10,7 +10,18 @@ use crate::types::EndKind;
 pub fn parse(tokens: Vec<Token>) -> Result<Vec<Item>> {
     let mut parser = Parser { tokens, pos: 0 };
     let mut items = Vec::new();
+    // The `use` items come first (§ 6.6).
+    while *parser.peek() == TokenKind::Use {
+        items.push(Item::Use(parser.use_()?));
+    }
     while *parser.peek() != TokenKind::Eof {
+        if *parser.peek() == TokenKind::Use {
+            return err(
+                Code::Syntax,
+                parser.span(),
+                "`use` comes before the declarations of the file: move it to the top",
+            );
+        }
         items.push(parser.item()?);
     }
     Ok(items)
@@ -241,6 +252,33 @@ impl Parser {
             TokenKind::Global => self.global().map(|g| Item::Global(Box::new(g))),
             _ => Err(self.unexpected("`world`, `interface` or `global`")),
         }
+    }
+
+    /// `use namespace:package/interface [as name];` (§ 6.6).
+    fn use_(&mut self) -> Result<UseDecl> {
+        self.bump();
+        let namespace = self.ident("a package namespace, `use wasi:cli/stdout;`")?;
+        self.expect(
+            &TokenKind::Colon,
+            "`:`: `use` names an interface of another package, `use wasi:cli/stdout;`; the interfaces of the package need no `use`",
+        )?;
+        let package = self.ident("a package name")?;
+        self.expect(&TokenKind::Slash, "`/` and the name of an interface")?;
+        let name = self.ident("an interface name")?;
+        let alias = if self.eat(&TokenKind::As) {
+            Some(self.ident("the name of the interface in this file")?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Semi, "`;`")?;
+        Ok(UseDecl {
+            iface: ForeignName {
+                namespace,
+                package,
+                name,
+            },
+            alias,
+        })
     }
 
     fn world(&mut self) -> Result<World> {

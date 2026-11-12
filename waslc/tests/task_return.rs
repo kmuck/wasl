@@ -234,6 +234,8 @@ fn borrows_given_back() {
     // The Component Model traps at `task.return` while the task holds a borrow: the
     // borrowed handle is given back before the result is delivered.
     let source = r#"
+use demo:host/data;
+
         world w {
           import demo:host/data;
           export sizes;
@@ -283,7 +285,8 @@ fn wit() {
 /// An async function `f` of interface `t` exported by world `w`, with `body`.
 fn program(body: &str) -> String {
     format!(
-        "world w {{
+        "use demo:host/data;
+world w {{
            import demo:host/data;
            export t;
          }}

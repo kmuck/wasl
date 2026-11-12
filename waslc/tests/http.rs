@@ -80,6 +80,8 @@ fn hello_http_wit() {
 
 /// A handler that answers the scheme of the request and the error `DNS-timeout`.
 const SCHEMES: &str = r#"
+use wasi:http/types;
+
 world schemes {
   import wasi:http/types;
   export wasi:http/handler {
