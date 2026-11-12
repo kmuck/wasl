@@ -145,6 +145,35 @@ interface t {
     }
     return false;
   }
+  // Bodies without braces (§ 5.3)
+  func sign(n: s32) -> s32 {
+    if (n < 0)
+      return -1;
+    else if (n == 0) return 0;
+    else
+      return 1;
+  }
+  func count_odd(xs: list<u32>) -> u32 {
+    local n: u32;
+    for (x in xs)
+      if_odd(x);
+    for (x in xs) {
+      if (x == 0)
+        continue;
+      if (x > 100) break;
+      if (x % 2 == 1)
+        n = n + 1;
+      else
+        n = n + 0;
+    }
+    local i: u32;
+    while (i < 3) i = i + 1;
+    return n * 10 + i + seen;
+  }
+  func if_odd(x: u32) {
+    if (x % 2 == 1)
+      seen = seen + 100;
+  }
   func siblings(xs: list<u32>) -> u32 {
     local n: u32;
     for (x in xs) {
@@ -264,6 +293,19 @@ fn for_loops() {
 }
 
 #[test]
+fn bodies_without_braces() {
+    assert_eq!(call("sign", &[Val::S32(-5)]), Val::S32(-1));
+    assert_eq!(call("sign", &[Val::S32(0)]), Val::S32(0));
+    assert_eq!(call("sign", &[Val::S32(9)]), Val::S32(1));
+    // Two odd elements before the `break`: 200 from `if_odd` for 1 and 3 (and 100 for
+    // 101, after the `break` of the second loop), 20 from the count, 3 from the `while`.
+    assert_eq!(
+        call("count-odd", &[u32s(&[1, 0, 2, 3, 101, 5])]),
+        Val::U32(20 + 3 + 400)
+    );
+}
+
+#[test]
 fn errors() {
     let cases: &[(&str, Code, &str)] = &[
         (
@@ -310,7 +352,28 @@ fn errors() {
         ("for (x in []) { }", Code::CannotInfer, "cannot infer"),
         ("for x in xs { }", Code::Syntax, "`(`"),
         ("for (x: u32 in xs) { }", Code::Syntax, "`in`"),
-        ("for (x in xs) return;", Code::Syntax, "braces are required"),
+        (
+            "if (n > 0) if (n > 1) return;",
+            Code::Syntax,
+            "an `if` needs braces after `if`",
+        ),
+        (
+            "if (n > 0) local k: u32 = 1;",
+            Code::Syntax,
+            "would be useless",
+        ),
+        (
+            "for (x in xs) while (true) { }",
+            Code::Syntax,
+            "a loop needs braces after `for`",
+        ),
+        (
+            "if (n > 0) return; else match (n) { }",
+            Code::Syntax,
+            "a `match` needs braces after `else`",
+        ),
+        ("if (n > 0) break;", Code::BreakOutsideLoop, "inside"),
+        ("if (n > 0) n = 1 else n = 2;", Code::Syntax, "`;`"),
         (
             "for (n in xs) { }",
             Code::DuplicateLocal,

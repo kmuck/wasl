@@ -81,13 +81,13 @@ With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and
 **Added in 0.5**, available:
 
 - locals without a type, `local x = e;`, and in destructurings (§ 9.4);
-- `for (x in xs)` on lists (§ 9.10), with braces until bodies without braces are available;
+- `for (x in xs)` on lists (§ 9.10);
+- bodies without braces: a single simple statement after `if`, `else`, `while` and `for` (§ 5.3);
 - built-in functions written `type.f(…)`, with `T.to_string` and `T.parse` on integers (§ 8.17);
 - call statements that discard their value, without `_ =` (§ 9.6).
 
 **Added in 0.5** (*specified, not available yet*):
 
-- bodies without braces: a single simple statement after `if`, `else`, `while` and `for` (§ 5.3);
 - structural `==` on records, tuples, lists, variants, options and results (§ 8.3);
 - type aliases, `type name = T;` (§ 7.14), and doc comments, `///` (§ 4.2);
 - `use` and `use … as`, which name the interfaces of other packages in a file (§ 6.6);
