@@ -237,6 +237,9 @@ impl TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+    /// The doc comments right before the token, `///` (§ 4.2), one line each, without
+    /// the `///`. Only the parser of declarations reads them.
+    pub doc: Option<String>,
 }
 
 /// Words reserved for future versions and for compatibility with WIT (§ 4.4).
@@ -320,12 +323,13 @@ impl Lexer<'_> {
     fn run(mut self) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
         loop {
-            self.skip_whitespace_and_comments();
+            let doc = self.skip_whitespace_and_comments();
             let start = self.pos;
             let Some(&c) = self.bytes.get(self.pos) else {
                 tokens.push(Token {
                     kind: TokenKind::Eof,
                     span: self.span(start, start),
+                    doc: None,
                 });
                 return Ok(tokens);
             };
@@ -342,6 +346,7 @@ impl Lexer<'_> {
             tokens.push(Token {
                 kind,
                 span: self.span(start, self.pos),
+                doc,
             });
         }
     }
@@ -354,19 +359,37 @@ impl Lexer<'_> {
         self.bytes.get(self.pos + offset).copied()
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
+    /// Skips whitespace and comments, and returns the run of doc comments right before
+    /// the next token: `///`, but not `////`, with no other comment after it (§ 4.2).
+    fn skip_whitespace_and_comments(&mut self) -> Option<String> {
+        let mut doc: Option<String> = None;
         loop {
             match self.peek(0) {
                 Some(b' ' | b'\t' | b'\n' | b'\r') => self.pos += 1,
                 Some(b'/') if self.peek(1) == Some(b'/') => {
+                    let start = self.pos;
                     while let Some(c) = self.peek(0) {
                         if c == b'\n' {
                             break;
                         }
                         self.pos += 1;
                     }
+                    let line = &self.text[start..self.pos];
+                    match line.strip_prefix("///") {
+                        Some(text) if !text.starts_with('/') => {
+                            let text = text.trim_end_matches('\r');
+                            match &mut doc {
+                                Some(doc) => {
+                                    doc.push('\n');
+                                    doc.push_str(text);
+                                }
+                                None => doc = Some(text.to_string()),
+                            }
+                        }
+                        _ => doc = None,
+                    }
                 }
-                _ => return,
+                _ => return doc,
             }
         }
     }

@@ -28,6 +28,8 @@ impl Item {
 
 #[derive(Debug)]
 pub struct World {
+    /// Its doc comment, `///` (§ 4.2).
+    pub doc: Option<String>,
     pub name: Ident,
     /// `import` and `export` items, in source order.
     pub items: Vec<WorldItem>,
@@ -79,6 +81,7 @@ impl ForeignName {
 
 #[derive(Debug)]
 pub struct Interface {
+    pub doc: Option<String>,
     pub name: Ident,
     /// Functions and type declarations, in declaration order.
     pub items: Vec<InterfaceItem>,
@@ -111,6 +114,7 @@ pub enum InterfaceItem {
 /// `type name = T;` (§ 7.14): another name for a type.
 #[derive(Debug)]
 pub struct AliasDecl {
+    pub doc: Option<String>,
     pub name: Ident,
     pub ty: TypeExpr,
 }
@@ -119,6 +123,7 @@ pub struct AliasDecl {
 /// methods and static functions, in declaration order.
 #[derive(Debug)]
 pub struct ResourceDecl {
+    pub doc: Option<String>,
     pub name: Ident,
     pub fields: Vec<Field>,
     pub funcs: Vec<ResourceFunc>,
@@ -141,8 +146,11 @@ pub enum ResourceFuncKind {
 /// Declaration of a `record`, `enum`, `variant` or `flags` type (§ 7.7).
 #[derive(Debug)]
 pub struct TypeDecl {
+    pub doc: Option<String>,
     pub name: Ident,
     pub kind: TypeDeclKind,
+    /// The doc comment of each field, case or flag, in order.
+    pub member_docs: Vec<Option<String>>,
 }
 
 #[derive(Debug)]
@@ -223,6 +231,7 @@ pub struct Global {
 
 #[derive(Debug)]
 pub struct Func {
+    pub doc: Option<String>,
     /// `async func` (§ 2.8).
     pub is_async: bool,
     pub name: Ident,

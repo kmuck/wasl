@@ -237,6 +237,13 @@ impl<'a> Analyzer<'a> {
             .map(|i| i.name.name.clone())
             .collect();
         for (iface_id, iface) in self.interfaces.iter().enumerate() {
+            let docs = &mut self.program.docs;
+            let mut document = |target: hir::Doc, doc: &Option<String>| {
+                if let Some(doc) = doc {
+                    docs.insert(target, doc.clone());
+                }
+            };
+            document(hir::Doc::Interface(iface_id), &iface.doc);
             let mut scope = InterfaceScope::default();
             let mut func_ids = Vec::new();
             let mut decl_ids = Vec::new();
@@ -283,6 +290,7 @@ impl<'a> Analyzer<'a> {
                 match item {
                     ast::InterfaceItem::Func(func) => {
                         let id = self.funcs.len();
+                        document(hir::Doc::Func(id), &func.doc);
                         self.funcs.push(func);
                         self.func_kinds.push(hir::FuncKind::Free);
                         scope.funcs.insert(func.name.name.clone(), id);
@@ -302,12 +310,14 @@ impl<'a> Analyzer<'a> {
                         }
                         check_resource_members(res)?;
                         let id = self.decls.len();
+                        document(hir::Doc::Decl(id), &res.doc);
                         self.decls.push(&res.name);
                         scope.types.insert(res.name.name.clone(), id);
                         decl_ids.push(id);
                         let mut def = ResourceDef::default();
                         for rf in &res.funcs {
                             let f = self.funcs.len();
+                            document(hir::Doc::Func(f), &rf.func.doc);
                             self.funcs.push(&rf.func);
                             func_ids.push(f);
                             let name = rf.func.name.name.clone();
@@ -348,6 +358,10 @@ impl<'a> Analyzer<'a> {
                         }
                         check_members(decl)?;
                         let id = self.decls.len();
+                        document(hir::Doc::Decl(id), &decl.doc);
+                        for (k, doc) in decl.member_docs.iter().enumerate() {
+                            document(hir::Doc::Member(id, k), doc);
+                        }
                         self.decls.push(&decl.name);
                         scope.types.insert(decl.name.name.clone(), id);
                         decl_ids.push(id);
@@ -382,6 +396,7 @@ impl<'a> Analyzer<'a> {
                             );
                         }
                         let id = self.types.aliases.len();
+                        document(hir::Doc::Alias(id), &alias.doc);
                         scope.alias_ids.insert(alias.name.name.clone(), id);
                         alias_ids.push(id);
                         self.aliases.push(alias);
@@ -708,6 +723,9 @@ impl<'a> Analyzer<'a> {
     /// 5. Worlds (§ 6.2).
     fn worlds(&mut self) -> Result<()> {
         for (w, world) in self.worlds.iter().enumerate() {
+            if let Some(doc) = &world.doc {
+                self.program.docs.insert(hir::Doc::World(w), doc.clone());
+            }
             let mut def = hir::WorldDef {
                 name: world.name.name.clone(),
                 exports: Vec::new(),

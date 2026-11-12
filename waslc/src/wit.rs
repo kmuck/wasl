@@ -11,7 +11,7 @@ use wit_parser::{PackageId, Resolve, WorldId};
 
 use crate::deps::Dependencies;
 use crate::diag::{Code, Diagnostic, Result};
-use crate::hir::{FuncKind, InterfaceId, Program, Spelling};
+use crate::hir::{Doc, FuncKind, InterfaceId, Program, Spelling};
 use crate::package::Package;
 use crate::types::{DeclId, DeclKind, Type, TypeKind, Types};
 
@@ -162,7 +162,9 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
             continue;
         }
         let exported = program.has_wit_funcs(id);
-        writeln!(text, "\ninterface %{} {{", kebab(&iface.name)).unwrap();
+        text.push('\n');
+        doc(&mut text, program, Doc::Interface(id), "");
+        writeln!(text, "interface %{} {{", kebab(&iface.name)).unwrap();
 
         // Types of other interfaces: `use other.{a, b as other-b};`. A name is renamed
         // when it collides with a type of this interface or with another used type.
@@ -218,6 +220,7 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
         for &a in &iface.aliases {
             let alias = &types.aliases[a];
             if in_wit(types, alias.ty) {
+                doc(&mut text, program, Doc::Alias(a), "  ");
                 writeln!(
                     text,
                     "  type %{} = {};",
@@ -231,10 +234,12 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
         for &d in &iface.types {
             let decl = &types.decls[d];
             let name = kebab(&decl.name);
+            doc(&mut text, program, Doc::Decl(d), "  ");
             match &decl.kind {
                 DeclKind::Record(fields) => {
                     writeln!(text, "  record %{name} {{").unwrap();
                     for (k, f) in fields.iter().enumerate() {
+                        doc(&mut text, program, Doc::Member(d, k), "    ");
                         let ty = program.spelled(Spelling::Member(d, k), f.ty);
                         writeln!(
                             text,
@@ -248,6 +253,7 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                 DeclKind::Variant(cases) => {
                     writeln!(text, "  variant %{name} {{").unwrap();
                     for (k, c) in cases.iter().enumerate() {
+                        doc(&mut text, program, Doc::Member(d, k), "    ");
                         match c.payload {
                             Some(p) => writeln!(
                                 text,
@@ -276,6 +282,7 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                         let params = wit_params(types, program, f, skip, &names);
                         let ret = wit_ret(types, program, f, &names);
                         let func_kw = if func.is_async { "async func" } else { "func" };
+                        doc(&mut text, program, Doc::Func(f), "    ");
                         match func.kind {
                             FuncKind::Constructor(_) => {
                                 writeln!(text, "    constructor({params});").unwrap()
@@ -297,7 +304,8 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                 }
                 DeclKind::Enum(cases) | DeclKind::Flags(cases) => {
                     writeln!(text, "  {} %{name} {{", decl.kind.keyword()).unwrap();
-                    for c in cases {
+                    for (k, c) in cases.iter().enumerate() {
+                        doc(&mut text, program, Doc::Member(d, k), "    ");
                         writeln!(text, "    %{},", kebab(c)).unwrap();
                     }
                 }
@@ -314,6 +322,7 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
                 let params = wit_params(types, program, f, 0, &names);
                 let ret = wit_ret(types, program, f, &names);
                 let func_kw = if func.is_async { "async func" } else { "func" };
+                doc(&mut text, program, Doc::Func(f), "  ");
                 writeln!(text, "  %{}: {func_kw}({params}){ret};", kebab(&func.name)).unwrap();
             }
         }
@@ -321,8 +330,10 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
     }
 
     let mut imports = HashMap::new();
-    for world in &program.worlds {
-        writeln!(text, "\nworld %{} {{", kebab(&world.name)).unwrap();
+    for (w, world) in program.worlds.iter().enumerate() {
+        text.push('\n');
+        doc(&mut text, program, Doc::World(w), "");
+        writeln!(text, "world %{} {{", kebab(&world.name)).unwrap();
         let mut written = Vec::new();
         for &(import, iface) in &world.items {
             let foreign = match program.interfaces[iface].implements {
@@ -353,6 +364,15 @@ pub fn generate(program: &Program, package: &Package, deps: &Dependencies) -> Re
         package,
         imports,
     })
+}
+
+/// Writes the doc comment of `target`, if it has one, line by line (§ 4.2, § 13.1).
+fn doc(text: &mut String, program: &Program, target: Doc, indent: &str) {
+    if let Some(doc) = program.docs.get(&target) {
+        for line in doc.split('\n') {
+            writeln!(text, "{indent}///{line}").unwrap();
+        }
+    }
 }
 
 /// Which interfaces appear in the WIT (§ 13.1): those exported by a world, and those

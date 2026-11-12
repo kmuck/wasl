@@ -27,6 +27,20 @@ pub struct Program {
     /// The types of the WIT written with an alias of the package (§ 7.14), where they
     /// differ from the type the analysis uses.
     pub spellings: HashMap<Spelling, Type>,
+    /// The doc comments of the package, `///` (§ 4.2), copied into the WIT (§ 13.1).
+    pub docs: HashMap<Doc, String>,
+}
+
+/// What a doc comment documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Doc {
+    World(usize),
+    Interface(InterfaceId),
+    Func(FuncId),
+    Decl(DeclId),
+    /// A field, a case or a flag of a declared type, by index.
+    Member(DeclId, usize),
+    Alias(usize),
 }
 
 /// A place of the WIT where a type is written: a parameter or the return type of a
