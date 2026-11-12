@@ -13,23 +13,30 @@ use wasl:std/json;
 |---|---|---|
 | `text` | operations on strings (§ 17.2) | nothing |
 | `json` | the JSON value, parsing and printing (§ 17.3) | nothing |
-| `http` | an HTTP service: its request, its response, `handle` and a few helpers (§ 17.4) | `wasi:http` 0.3, through its adapter |
+| `http` | an HTTP service: its request, its response, `handle` and a few helpers (§ 17.4) | `wasi:http` 0.3 |
 | `cli` | a command: `run`, its arguments, its standard streams (§ 17.5) | `wasi:cli` 0.3 |
 | `fs` | files as text or bytes (§ 17.6) | `wasi:filesystem` 0.3 |
 
-The library sits above WASI as the standard library of other languages sits above the system calls. It is a program like the others, which gets no special treatment from the compiler: its interfaces follow the rules of the language, its functions are compiled into the components that call them (§ 3.5), and what it does with WASI, a program can do too, by importing WASI itself.
+It also declares two worlds, which a program includes (§ 17.1):
+
+| World | Exports | Calls |
+|---|---|---|
+| `service` | `wasi:http/handler` | `http::handle`, written by the program |
+| `command` | `wasi:cli/run` | `cli::run`, written by the program |
+
+The library sits above WASI as the standard library of other languages sits above the system calls. It is a library like the others, which gets no special treatment from the compiler: its interfaces and its worlds follow the rules of the language (§ 2.4.3), its functions are compiled into the components that call them (§ 3.5), and what it does with WASI, a program can do too, by importing WASI itself.
 
 The functions below are listed with their signatures; their bodies belong to the library. A parameter or result written `string` is UTF-8 text, as everywhere in WaSL.
 
-## 17.1 Entry points and adapters
+## 17.1 Entry points
 
-`wasl:std/http` and `wasl:std/cli` each declare one function without body (§ 2.4.3): `handle` and `run`. A world that exports one of them writes that function, and only it:
+`wasl:std/http` and `wasl:std/cli` each declare one function without body (§ 2.4.3): `handle` and `run`. The worlds `wasl:std/service` and `wasl:std/command` export the entry point of WASI and call that function. A world of the program includes one of them, and writes the function:
 
 ```wasl
 use wasl:std/cli;
 
 world hello {
-  export wasl:std/cli {
+  include wasl:std/command {
     async func run() -> result<_, string> {
       print("Hello, world!\n");
       return result.ok;
@@ -38,12 +45,11 @@ world hello {
 }
 ```
 
-**The adapter.** The host does not know `wasl:std/cli`: it runs `wasi:cli/run`. The library contains, for each of the two interfaces, a world written in WaSL, the **adapter**, which imports the interface and exports the interface of WASI:
+The two worlds are written in WaSL, in the library:
 
 ```wasl
 // in wasl:std, simplified
-world cli_adapter {
-  import cli;
+world command {
   export wasi:cli/run {
     async func run() -> result {
       match (cli::run()) {
@@ -58,36 +64,44 @@ world cli_adapter {
     }
   }
 }
+
+world service {
+  export wasi:http/handler {
+    async func handle(req: types::request) -> result<types::response, types::error_code> {
+      local answer = http::handle(receive(req));
+      local (response, body) = start(answer);
+      task.return(result.ok(response));
+      finish(body, answer);
+    }
+  }
+}
 ```
 
-`weasel build` builds the component of the world of the program, builds the component of the adapter, and composes the two: the adapter's import of `wasl:std/cli` is wired to the program's export (§ 14.2). The built file exports `wasi:cli/run` or `wasi:http/handler`, and imports what the program and the adapter import from WASI. It is a plain WASI 0.3 command or service: wasmtime, or any other host, runs it as it is.
+**In the binary.** One component, which exports `wasi:cli/run` or `wasi:http/handler` and imports what the library and the program import from WASI. The exported function is the one of the library; it calls the function of the program, an internal function of the same module, with a plain `call` (§ 2.4.3). The WIT of the world says exactly this (§ 13.1), and wasmtime, or any other host, runs the file as it is.
 
 ```
-build/hello.wasm
+build/hello.wasm, one component
 ┌──────────────────────────────────────────────────────────────┐
-│  adapter of wasl:std                 component of `hello`     │
-│  export wasi:cli/run ──calls──▶ export wasl:std/cli (run)     │
+│  export wasi:cli/run (code of wasl:std) ──call──▶ run (hello) │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**In the binary.** Two components, each with its own instance, its own heap and its own scratch memory; a call from one to the other is a call of the Component Model, whose values are copied through linear memory (§ 13.5). The request and its body are copied once more than in a program that exports `wasi:http/handler` itself. A later compiler may build the two in one component, without any change to the programs; this is why the program never names the adapter.
+**Why the library writes the export.** `handle` of `wasi:http/handler` must deliver its response with `task.return` before it writes the body (§ 8.21), and works on streams, futures and resources. A function that returns a `response` record is simpler to write, and the library does the rest once for every program. The price is that the whole body is in memory, in both directions (§ 17.7). A program that wants the streams exports `wasi:http/handler` itself, as in 0.4.
 
-**Why an adapter.** `handle` of `wasi:http/handler` must deliver its response with `task.return` before it writes the body (§ 8.21), and works on streams, futures and resources. A function that returns a `response` record is simpler to write and to test, and the adapter does the rest once for every program. The price is that the whole body is in memory, in both directions (§ 17.7).
+### The world `service`
 
-### The HTTP adapter
-
-For each request, the adapter:
+For each request, the code of `service`:
 
 1. reads the method, the path, the query and the headers of the request of `wasi:http`; a header whose value is not valid UTF-8 is left out;
 2. reads the whole body, up to **10 MiB**; a longer body gets the response `413` without calling `handle`;
 3. calls `handle` with the `request` record (§ 17.4), and waits for its `response`;
 4. delivers a response of `wasi:http` with the status, the headers in their order, and a `content-length` header unless the program gave one, then writes the body.
 
-A trap in `handle` ends the request with the status `500` (§ 14.2). A status outside `100` to `599`, or a header that `wasi:http` refuses, is a trap of the adapter.
+A trap in `handle` ends the request with the status `500` (§ 14.2). A status outside `100` to `599`, or a header that `wasi:http` refuses, is a trap.
 
-### The CLI adapter
+### The world `command`
 
-The adapter calls `run`. When it returns `result.ok`, the command exits with the code `0`. When it returns `result.err(message)`, the adapter writes `error: <message>` and a line feed on the standard error, and the command exits with the code `1`. A trap exits with the code `1` and the message of the host (§ 14.2).
+The code of `command` calls `run`. When it returns `result.ok`, the command exits with the code `0`. When it returns `result.err(message)`, the library writes `error: <message>` and a line feed on the standard error, and the command exits with the code `1`. A trap exits with the code `1` and the message of the host (§ 14.2).
 
 ## 17.2 `text`
 
@@ -175,8 +189,13 @@ interface shop {
 
 ```wasl
 interface http {
+  variant method {
+    get, head, post, put, delete, connect, options, trace, patch,
+    other(string),
+  }
+
   record request {
-    method: string,
+    method: method,
     path: string,
     query: option<string>,
     headers: list<tuple<string, string>>,
@@ -191,51 +210,36 @@ interface http {
 
   async func handle(request: request) -> response;
 
+  func on(request: request, m: method, pattern: string) -> bool { … }
+  func segment(request: request, index: u32) -> string { … }
   func reply(status: u16, content_type: string, body: string) -> response { … }
+  func not_found() -> response { … }
   func header(request: request, name: string) -> option<string> { … }
   func query_param(request: request, name: string) -> option<string> { … }
   func body_text(request: request) -> option<string> { … }
-  func segments(request: request) -> list<string> { … }
-  func not_found() -> response { … }
 }
 ```
 
 - `handle` is the function that a service writes (§ 17.1). It always returns a response: a request that the service does not handle gets a `404` or a `400` that the code returns, and a bug is a trap, which the host turns into a `500`.
-- **The request.** `method` is the method in uppercase, `"GET"`, `"POST"`… `path` is the path as received, without the query: `"/products/2"`. `query` is what follows the `?`, without it, or `option.none`. `headers` are the headers in their order, with their names in lowercase, as `wasi:http` gives them. `body` is the whole body (§ 17.1).
-- `reply(status, content_type, body)` is a response with the header `content-type` and the bytes of `body`. A response with other headers is written as a record literal.
+- **The method** is the `method` variant of `wasi:http`, with the same cases: a method that has no case of its own is `other("PURGE")`. A misspelled case, `method::gte`, is a compile-time error (E0307). Two methods are compared with `==` (§ 8.3): for a case without payload, this compares the tags.
+- **The request.** `path` is the path as received, without the query: `"/products/2"`. `query` is what follows the `?`, without it, or `option.none`. `headers` are the headers in their order, with their names in lowercase, as `wasi:http` gives them. `body` is the whole body (§ 17.1).
+- `reply(status, content_type, body)` is a response with the header `content-type` and the bytes of `body`. A response with other headers is written as a record literal. `not_found()` is `reply(404, "text/plain", "not found\n")`.
 - `header(request, name)` is the value of the first header named `name`, compared without case. `query_param(request, name)` is the value of the first parameter `name` of the query, with `+` and the `%XX` escapes decoded, or `option.none`. `body_text(request)` is the body if it is valid UTF-8.
 
-A service compares the method and the path itself, with `if`:
-
-```wasl
-use wasl:std/http;
-
-world hello_http {
-  export wasl:std/http {
-    async func handle(request: request) -> response {
-      if (request.method == "GET" && request.path == "/")
-        return reply(200, "text/plain", "Hello, world!\n");
-      return reply(404, "text/plain", "not found\n");
-    }
-  }
-}
-```
-
-A path with a parameter, such as `/products/2`, is read with `segments`, and compared with `==` on lists (§ 8.3):
+**Routes.** A service chooses what to do with `if`s, tried in the order of the code: the first that matches wins.
 
 ```wasl
 use wasl:std/http;
 use wasl:std/json;
 
 world catalog {
-  export wasl:std/http {
+  include wasl:std/service {
     async func handle(request: request) -> response {
-      local parts = segments(request);
-      if (request.method == "GET" && parts == ["products"])
+      if (on(request, method::get, "/products"))
         return reply(200, "application/json", json::stringify(api::all()));
-      if (request.method == "GET" && list.len(parts) == 2 && parts[0] == "products")
-        return api::one(parts[1]);
-      if (request.method == "POST" && parts == ["products"])
+      if (on(request, method::get, "/products/*"))
+        return api::one(segment(request, 1));
+      if (on(request, method::post, "/products"))
         return api::create(request.body);
       return not_found();
     }
@@ -243,9 +247,9 @@ world catalog {
 }
 ```
 
-- `segments(request)` is the path split on `/`, without empty segments and with the `%XX` escapes decoded: `/products/2/` gives `["products", "2"]`, `/` gives `[]`.
-- `not_found()` is `reply(404, "text/plain", "not found\n")`.
-- The routes are `if`s, tried in the order of the code: the first that matches wins. Each one calls an ordinary function with its parameters, which a test calls directly (§ 3.6).
+- `on(request, m, pattern)` is true when the method of the request is `m` and its path matches the pattern. The path and the pattern are split on `/`, without empty segments: they match when they have the same number of segments and each segment of the pattern is `*`, which stands for any one segment, or equals the segment of the path, with its `%XX` escapes decoded. `"/products/*"` matches `/products/2` and `/products/2/`, not `/products` or `/products/2/reviews`; `"/"` matches `/`.
+- `segment(request, index)` is the segment of the path at `index`, counted from 0, with its `%XX` escapes decoded: for `/products/2`, `segment(request, 1)` is `"2"`. An index past the last segment is a trap, like an index past the end of a list (§ 8.13); after an `on` whose pattern has that segment, it cannot happen.
+- A route calls an ordinary function of an interface of the package with its parameters, which a test calls directly (§ 3.6). `request.method == method::get` and `request.path == "/"` remain available for what `on` does not express.
 
 ## 17.5 `cli`
 
@@ -275,7 +279,7 @@ use wasl:std/text;
 
 // wc: counts the words of the standard input, `weasel run wc < notes.txt`
 world wc {
-  export wasl:std/cli {
+  include wasl:std/command {
     async func run() -> result<_, string> {
       if (list.len(args()) > 1)
         return result.err("usage: wc < file");
@@ -300,7 +304,7 @@ use wasl:std/cli;
 
 // Run it with `weasel run hello` or `weasel run hello Karim`.
 world hello {
-  export wasl:std/cli {
+  include wasl:std/command {
     async func run() -> result<_, string> {
       local args = args();
       if (list.len(args) > 1)
@@ -336,4 +340,3 @@ What the library of 0.5 does not do, and what to do instead:
 - **Streaming.** The body of a request and of a response is in memory, whole, and limited to 10 MiB for a request (§ 17.1). A service that streams, such as a large download or server-sent events, exports `wasi:http/handler` itself (§ 15.8), with streams, futures and `task.return`.
 - **Outgoing requests.** `wasl:std/http` serves requests but does not send them. A service that calls another HTTP service imports `wasi:http/client` itself, until the library offers it.
 - **The rest of WASI.** Clocks, random numbers, sockets and the other interfaces of WASI are imported directly (§ 2.5).
-- **Two components.** A program that exports `wasl:std/http` or `wasl:std/cli` is built as two components composed into one file (§ 17.1), which costs a second instance and a copy of the values per call, until the compiler builds them as one.

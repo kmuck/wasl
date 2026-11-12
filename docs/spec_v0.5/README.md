@@ -58,7 +58,7 @@ The number of a chapter is the number of its sections: § 8.2 is section 2 of ch
 | § | Chapter | Content |
 |---|---|---|
 | 1 | [Overview](01-overview.md) | Goals, design principles and decisions, scope, glossary, changes from v0.1 to v0.4 |
-| 2 | [Component Model](02-component-model.md) | How WaSL maps onto packages, interfaces, worlds and components; the two kinds of exports; functions without body; imports; entry points; resources; async functions and tasks; the standard library |
+| 2 | [Component Model](02-component-model.md) | How WaSL maps onto packages, interfaces, worlds and components; the two kinds of exports; functions without body and `include`; imports; entry points; resources; async functions and tasks; the standard library |
 | 3 | [Projects](03-projects.md) | Project layout, manifest, source files, outputs, dependencies, the standard library, tests |
 | 4 | [Lexical structure](04-lexical.md) | Characters, comments, identifiers, keywords, literals, punctuation |
 | 5 | [Grammar](05-grammar.md) | Complete EBNF grammar and syntactic rules |
@@ -73,7 +73,7 @@ The number of a chapter is the number of its sections: § 8.2 is section 2 of ch
 | 14 | [Tooling](14-tooling.md) | The `weasel` commands, including `run`, `serve`, `test` and `fmt`, values in WAVE, the `waslc` library API |
 | 15 | [Examples](15-examples.md) | The target programs, invalid programs |
 | 16 | [Open questions](16-open-questions.md) | What this specification leaves undecided |
-| 17 | [Standard library](17-standard-library.md) | `wasl:std`: `text`, `json`, `http`, `cli`, `fs`, the entry points `handle` and `run`, and their adapters |
+| 17 | [Standard library](17-standard-library.md) | `wasl:std`: `text`, `json`, `http`, `cli`, `fs`, the worlds `service` and `command`, and the entry points `handle` and `run` |
 
 The direction of the language from one version to the next is in [ROADMAP.md](../../ROADMAP.md), which replaces chapter 16 of v0.1.
 

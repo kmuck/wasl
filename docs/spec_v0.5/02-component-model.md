@@ -100,32 +100,48 @@ world main {
 }
 ```
 
-### 2.4.3 Functions without body
+### 2.4.3 Functions without body and `include`
 
 *Specified, not available yet.*
 
-An interface written in WaSL can declare a function **without body**: its signature followed by `;`. Such a function is part of the contract of the interface, and its implementation is written by each world that exports the interface, in the block of a foreign export, exactly like a function of a WIT interface (§ 2.4.2). This is how a library asks the program that uses it to provide a function: the standard library declares `handle` in `wasl:std/http` and `run` in `wasl:std/cli` (chapter 17).
+A **library** is a dependency written in WaSL whose source code is compiled with the package (§ 3.5). Two things let a library write an entry point once, for every program:
+
+- an interface of the library can declare a function **without body**: its signature followed by `;`. The program writes its body;
+- the library can declare a **world**, which a world of the program **includes**. `include` is the `include` of WIT: the imports and the exports of the included world become those of the world that includes it.
+
+The standard library uses both for HTTP services and commands (chapter 17):
 
 ```wasl
-// in wasl:std/http (chapter 17)
+// in wasl:std (chapter 17), simplified
 interface http {
-  record request { method: string, path: string, … }
+  record request { method: method, path: string, … }
   record response { status: u16, … }
 
-  async func handle(request: request) -> response;      // written by the program
+  async func handle(request: request) -> response;      // without body: written by the program
 
   func reply(status: u16, content_type: string, body: string) -> response { … }
+}
+
+world service {
+  export wasi:http/handler {
+    async func handle(req: types::request) -> result<types::response, types::error_code> {
+      local answer = http::handle(receive(req));        // calls the function of the program
+      local (response, body) = start(answer);
+      task.return(result.ok(response));
+      finish(body, answer);
+    }
+  }
 }
 ```
 
 ```wasl
 // in the program
 world catalog {
-  export wasl:std/http {
+  include wasl:std/service {
     async func handle(request: request) -> response {
-      if (request.method == "GET" && request.path == "/products")
+      if (on(request, method::get, "/products"))
         return reply(200, "application/json", products::all());
-      return reply(404, "text/plain", "not found\n");
+      return not_found();
     }
   }
 }
@@ -133,12 +149,15 @@ world catalog {
 
 Rules:
 
-- Only an interface of a **library**, a dependency written in WaSL whose sources are compiled with the package (§ 3.5), can declare a function without body. In an interface of the package, a function without body is an error (E0224): the package would have no implementation for it.
-- A world that exports such an interface writes `export <foreign name> { … }`, and its block contains exactly the functions without body, with their signatures (E0218). The functions that have a body belong to the library: they are compiled into the component with the block, and the block does not repeat them. Inside the block, all the names of the interface are written without path (§ 2.4.2): `request`, `response`, `reply`.
-- The functions written in the block have no name outside it, as every function of a foreign export block: they are entry points, called by the host or by another component. The other functions of the interface are called with a path anywhere in the package, `http::reply(…)`, when the file uses the interface (§ 6.6).
-- In the WIT, the interface is exported with all its functions, with and without body, like an interface of the package (§ 13.1): its types and signatures must therefore follow § 7.11.
+- Only an interface of a library can declare a function without body. In an interface of the package, it is an error (E0224): the package would have no implementation for it.
+- `include <foreign name>;` names a world of a library (E0215). The world gets the imports and the exports of the included world, as if they were written at the place of the `include`, with the code of their export blocks, which belongs to the library. A world includes at most one world in 0.5 (E0204), and cannot export or import an interface that the included world already exports or imports (E0204, E0216).
+- The block after `include` contains exactly the functions without body that the code of the included world reaches (§ 12.1), with their signatures (E0218). When there is none, the item is written `include <foreign name>;`.
+- Inside a function of the block, the names of the interface that declares the function are written without path, as in a foreign export block (§ 2.4.2): `request`, `response`, `reply`, `on`.
+- A function without body is called by the code of the library only, like any function: `http::handle(…)`. It has no name in the package, so the package cannot call it (E0301), and a test cannot either (§ 3.6).
+- A world of a library is only a part of the worlds that include it: `weasel` never builds it alone, and the interfaces of a library cannot be exported by a world of the package (E0218).
+- In the WIT, the `include` is expanded: the world of the program is written with the imports and the exports of the included world (§ 13.1). The function without body does not appear: it is not exported.
 
-**In the binary.** The component of the world exports the interface of the library, under the library's name (`wasl:std/http@0.5.0`), with the functions of the block and the functions of the library. Nothing else changes: a function without body is the `func` of a WIT interface, whose implementation a component provides. What makes the standard library useful is the component it composes with it (§ 17.1), which turns `wasl:std/http` into `wasi:http/handler`.
+**In the binary.** One component. The export blocks of the included world are compiled into it like the export blocks of the world itself, with the functions of the library that they reach (§ 3.5), and each function of the `include` block is an internal function of the module, which the code of the library calls with a plain `call`. The values that cross are WasmGC references: nothing is copied, and no other component or instance is involved. Two worlds that include the same world each compile their own function into their own component.
 
 ## 2.5 Imports
 
@@ -293,7 +312,7 @@ The standard library is a WaSL package, `wasl:std`, shipped with `weasel` and ve
 use wasl:std/cli;
 
 world hello {
-  export wasl:std/cli {
+  include wasl:std/command {
     async func run() -> result<_, string> {
       if (list.len(args()) < 2)
         return result.err("usage: hello <name>");
@@ -305,5 +324,5 @@ world hello {
 ```
 
 - **A library compiled in.** The interfaces of `wasl:std` are compiled into each component that uses them, like the interfaces of the package (§ 3.5). A program pays only for what it calls.
-- **Entry points.** `wasl:std/http` and `wasl:std/cli` each declare one function without body, `handle` and `run` (§ 2.4.3). A world that exports one of them is an HTTP service or a command. `weasel build` composes its component with a small component of the library, the **adapter**, written in WaSL, which exports `wasi:http/handler` or `wasi:cli/run` and calls `handle` or `run` (§ 17.1). The built file is a plain WASI 0.3 service or command.
+- **Entry points.** The library declares two worlds, `service` and `command`, which export `wasi:http/handler` and `wasi:cli/run`, and two functions without body, `handle` in `wasl:std/http` and `run` in `wasl:std/cli` (§ 2.4.3). A world that includes `wasl:std/service` and writes `handle` is an HTTP service; one that includes `wasl:std/command` and writes `run` is a command. The code of the library is compiled into the same component and calls the function of the program: the built file is a plain WASI 0.3 service or command, in one component (§ 17.1).
 - **WASI stays available.** A program can still import WASI interfaces and export `wasi:http/handler` or `wasi:cli/run` itself, for what the library does not cover, such as streaming a body.

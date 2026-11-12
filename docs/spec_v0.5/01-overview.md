@@ -88,8 +88,8 @@ With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and
 - structural `==` on records, tuples, lists, variants, options and results (§ 8.3);
 - type aliases, `type name = T;` (§ 7.14), and doc comments, `///` (§ 4.2);
 - `use` and `use … as`, which name the interfaces of other packages in a file (§ 6.6);
-- functions without body in the interfaces of a library, written by the world that exports them (§ 2.4.3);
-- the standard library `wasl:std`: `text`, `json`, `http`, `cli` and `fs`, with the entry points `handle` and `run` (§ 2.9, chapter 17);
+- functions without body in the interfaces of a library and worlds of a library, which a world includes with `include` and whose functions it writes (§ 2.4.3);
+- the standard library `wasl:std`: `text`, `json`, `http`, `cli` and `fs`, with the worlds `service` and `command` and their entry points `handle` and `run` (§ 2.9, chapter 17);
 - `weasel build --all`, `weasel test` with the tests of `tests/`, `weasel fmt` and `fmt --check`, `weasel run --dir` (§ 3.6, § 14.2).
 
 **Not yet available** ([ROADMAP.md](../../ROADMAP.md), chapter 16): libraries written by users, concurrency inside a task (`async f(x)`, § 16), cancellation, string formatting, a growable list and `map<K, V>`, outgoing HTTP requests in the standard library.

@@ -69,12 +69,12 @@ Compiles the world `<world>` into its component (§ 2.3, § 3.4).
 
 1. The dependencies are resolved (§ 3.5), fetched if needed, and `wkg.lock` is written if it changed.
 2. The whole package is analyzed; any error stops the command.
-3. The component of `<world>` is generated. If the world exports `wasl:std/http` or `wasl:std/cli`, it is composed with the adapter of the standard library (§ 17.1).
+3. The component of `<world>` is generated.
 4. It is written to `build/<world>.wasm` (the `build/` directory is created if needed), and `Built \`build/<world>.wasm\`` is printed on standard error.
 
 `--all` builds every world of the package, in declaration order, after one analysis; it takes no world. Giving both is an invalid command line.
 
-Apart from the adapter of the standard library, which belongs to the program, the component keeps its imports: `build` never composes it with the components that provide them, so that the same file can be deployed and composed by any tool (`wac`, a host). `weasel call` composes in memory (below).
+The component keeps its imports: `build` never composes it with the components that provide them, so that the same file can be deployed and composed by any tool (`wac`, a host). `weasel call` composes in memory (below).
 
 The world is always given explicitly, even when the project has a single world: a world is an entry point, and one build produces one component. An unknown world is an error (E9001):
 
@@ -88,7 +88,7 @@ Resolves the dependencies like `build`, analyzes the whole package without gener
 
 ### `weasel wit`
 
-Prints the WIT of the package (§ 13.1) on standard output. The worlds show the imports that the standard library adds (§ 3.5) and their exports as the program writes them, `export wasl:std/http@0.5.0;`; a comment after a world that exports `wasl:std/http` or `wasl:std/cli` says what the built file exports after composition: `// built: export wasi:http/handler@0.3.0;`.
+Prints the WIT of the package (§ 13.1) on standard output. The worlds show the imports that the standard library adds (§ 3.5), and an `include` is expanded: a world that includes `wasl:std/service` is printed with `export wasi:http/handler@0.3.0;`, which is what its component exports.
 
 ### `weasel call <world> <function> [<arguments>…]`
 
@@ -130,9 +130,9 @@ Every instance of the composition is fresh for each `call`. Only the functions o
 
 ### `weasel run [--dir <dir>]… <world> [<arguments>…]`
 
-Compiles the world `<world>` in memory and runs it as a command: it calls the `run` function of its export of `wasi:cli/run`, of WASI 0.2 or 0.3, or of `wasl:std/cli` through its adapter (§ 17.1). Nothing is written to `build/`.
+Compiles the world `<world>` in memory and runs it as a command: it calls the `run` function of its export of `wasi:cli/run`, of WASI 0.2 or 0.3, written by the world or by the world `wasl:std/command` that it includes (§ 17.1). Nothing is written to `build/`.
 
-- The world must export `wasi:cli/run` or `wasl:std/cli`: ``error: world `app` does not export `wasi:cli/run` or `wasl:std/cli`; its exports are `math` ``.
+- The world must export `wasi:cli/run`: ``error: world `app` does not export `wasi:cli/run`; its exports are `math` ``.
 - Every argument after the world is given to the program, unchanged, even `--help` or `--`. The program receives the name of the world as its first argument, followed by `<arguments>`, as a command receives its own name first: `weasel run args a --help` gives `["args", "a", "--help"]` to `get-arguments` of `wasi:cli/environment`, and to `cli::args()` (§ 17.5).
 - The standard input, output and error of the program are those of `weasel`. The program has no environment variables and no access to the network.
 - `--dir <dir>` gives the program access to the directory `<dir>`, relative to the current directory, with the same name: `--dir .` lets `fs::read_text("notes.txt")` read `./notes.txt` (§ 17.6). It can be repeated. Without it, the program has no access to the filesystem. It is written before the world, since everything after the world belongs to the program.
@@ -147,9 +147,9 @@ weasel run hello
 
 ### `weasel serve <world> [--addr <host>:<port>]`
 
-Compiles the world `<world>` in memory and serves it as an HTTP service: each request is given to the `handle` function of its export of `wasi:http/handler`, of WASI 0.3, or of `wasl:std/http` through its adapter (§ 17.1). Nothing is written to `build/`.
+Compiles the world `<world>` in memory and serves it as an HTTP service: each request is given to the `handle` function of its export of `wasi:http/handler`, of WASI 0.3, written by the world or by the world `wasl:std/service` that it includes (§ 17.1). Nothing is written to `build/`.
 
-- The world must export `wasi:http/handler` or `wasl:std/http`: ``error: world `app` does not export `wasi:http/handler` or `wasl:std/http`; its exports are `math` ``.
+- The world must export `wasi:http/handler`: ``error: world `app` does not export `wasi:http/handler`; its exports are `math` ``.
 - The service listens on `127.0.0.1:8080`, or on the address of `--addr`, and prints ``Serving `hello_http` on http://127.0.0.1:8080`` on standard error, once it accepts connections. With the port `0`, the system chooses a free port, which this line shows. The service runs until it is interrupted (`SIGINT`, Ctrl-C) or asked to terminate (`SIGTERM`), then exits with the code `0`.
 - **Each request gets a new instance**, which no other request uses: globals start from their initial values for every request, and a request never waits for another one (§ 13.13). The instance lives until the task of `handle` has ended, after its response, while it writes the body.
 - A trap ends the request, which receives the status 500 without a body if no response was delivered yet; after the response, the body ends where the trap happened. The trap is printed on standard error (``error: request `GET /` trapped: integer divide by zero``), and the service goes on.

@@ -9,7 +9,7 @@ The core module of a world that uses heap types requires the WebAssembly **GC** 
 For a world `w`, the module contains:
 
 - **types**: the type definitions of § 12.5 used by the included functions and globals, then one function type per distinct signature;
-- **functions**: every function of the interfaces exported by `w`, plus every function they call, directly or transitively, whatever its interface. Other functions of the package are not included. To these are added the helpers they use (§ 12.8) and the boundary adapters of the exported functions (§ 13.8);
+- **functions**: every function of the interfaces exported by `w`, of its export blocks, and of the export blocks and the `include` block of the world it includes (§ 2.4.3), plus every function they call, directly or transitively, whatever its interface. Other functions of the package are not included. To these are added the helpers they use (§ 12.8) and the boundary adapters of the exported functions (§ 13.8);
 - **globals**: every global read or assigned by those functions, one immutable global per distinct string literal and per shared case without payload (§ 12.6), then the globals of § 13.7 when the module has a memory;
 - **imports**: the functions of the interfaces imported by `w` that the included functions call, and the `resource.drop` of each imported resource they use, with the names of § 13.10, then the built-in functions of the Component Model that async functions, streams and futures use (§ 12.12, § 13.13); they come first in the function index space;
 - **exports**: one export per function of each interface exported by `w`, with the name of § 13.3, and the functions of the resources of these interfaces (§ 13.11);

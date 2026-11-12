@@ -1351,15 +1351,12 @@ use wasl:std/json;
 /// The catalog service: `GET /products` and `GET /products/{id}`.
 /// Run it with `weasel serve catalog`, then `curl http://127.0.0.1:8080/products/2`.
 world catalog {
-  export wasl:std/http {
+  include wasl:std/service {
     async func handle(request: request) -> response {
-      local parts = segments(request);
-      if (request.method != "GET")
-        return reply(405, "text/plain", "method not allowed\n");
-      if (parts == ["products"])
+      if (on(request, method::get, "/products"))
         return reply(200, "application/json", json::stringify(shop::products_json()));
-      if (list.len(parts) == 2 && parts[0] == "products")
-        return catalog_api::product(parts[1]);
+      if (on(request, method::get, "/products/*"))
+        return catalog_api::product(segment(request, 1));
       return not_found();
     }
   }
@@ -1394,9 +1391,9 @@ use wasl:std/http;
 /// Run it with `weasel serve orders`, then
 /// `curl -d '{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}' http://127.0.0.1:8080/orders`.
 world orders {
-  export wasl:std/http {
+  include wasl:std/service {
     async func handle(request: request) -> response {
-      if (request.method == "POST" && request.path == "/orders")
+      if (on(request, method::post, "/orders"))
         return checkout::quote(request);
       return not_found();
     }
@@ -1445,7 +1442,7 @@ use wasl:std/cli;
 /// Reads an order in JSON on the standard input and prints its total:
 /// `echo '{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}' | weasel run shopctl`.
 world shopctl {
-  export wasl:std/cli {
+  include wasl:std/command {
     async func run() -> result<_, string> {
       local order = shop::order_from_json(read_all()?)?;
       match (shop::total(order)) {
@@ -1545,7 +1542,7 @@ weasel serve catalog --addr 127.0.0.1:8081 &
 curl -s http://127.0.0.1:8081/products/2
 # {"id":2,"name":"notebook","price":420}
 curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:8081/products/2
-# 405
+# 404
 
 weasel serve orders --addr 127.0.0.1:8082 &
 curl -s -d '{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}' http://127.0.0.1:8082/orders
@@ -1558,8 +1555,8 @@ echo '{"customer": "ada", "lines": [{"product_id": 3, "quantity": 2}]}' | weasel
 What the program shows:
 
 - **One logic, three components.** `shop` is exported by no world: each component compiles the part it reaches (§ 2.3). `json::value` appears in its signatures, which is possible because it never reaches a WIT (§ 7.11).
-- **Entry points without WASI.** The three worlds export `wasl:std/http` or `wasl:std/cli`, and write only `handle` or `run`; the built files are WASI 0.3 services and commands (§ 17.1).
-- **The routes are `if`s.** `handle` compares the method and the segments of the path, with `==` on lists, and only chooses a function; the work is in `catalog_api` and `checkout`, which tests could call. A route that needs a helper puts it in an interface, since the block of a foreign export only holds the functions without body (§ 2.4.3).
+- **Entry points without WASI.** The three worlds include `wasl:std/service` or `wasl:std/command`, and write only `handle` or `run`; each built file is one component, a WASI 0.3 service or command (§ 17.1).
+- **The routes are `if`s.** `handle` tests the method and the path with `on`, reads a segment with `segment`, and only chooses a function; the work is in `catalog_api` and `checkout`, which tests could call. A route that needs a helper puts it in an interface, since the `include` block only holds the functions without body (§ 2.4.3).
 - **What stays verbose.** Converting JSON to a record takes a helper per JSON type, to turn an `option` into a `result` with a message, and building a list from another one takes a `list<mut T>` and an index. These are the places where function values, a growable list, or code generated from records would help (§ 16).
 
 ## 15.11 Invalid programs of 0.5
@@ -1585,9 +1582,9 @@ Each line is written in `examples/shop` (§ 15.10), unless it says otherwise.
 | `use wasl:std/http;` with an `interface http` in the package | E0217: `http` already names `wasl:std/http`; write `use wasl:std/http as std_http;` |
 | `type cents = cents;` | E0225: an alias cannot name itself |
 | `func quote(request: http::request) -> http::response;` in `checkout` | E0224: a function of the package needs a body |
-| `async func handle(request: request) -> response { … }` and `func reply(…) { … }` in `export wasl:std/http` | E0218: the block only writes `handle`; `reply` belongs to the library |
-| `export wasl:std/http { }` | E0218: `handle` is missing |
-| `func handle(request: request) -> response { … }` in `export wasl:std/http` | E0218: `handle` is an `async func` |
+| `async func handle(request: request) -> response { … }` and `func reply(…) { … }` in `include wasl:std/service` | E0218: the block only writes `handle`; `reply` belongs to the library |
+| `include wasl:std/service { }` | E0218: `handle` is missing |
+| `func handle(request: request) -> response { … }` in `include wasl:std/service` | E0218: `handle` is an `async func` |
 | `if (order == other)` with a type that has a `mut` field | E0403: a value that can change has no equality |
 | `func show(c: shop::cents) { cli::print(…); }` | E0416: `print` is async, and `show` is not |
 | `world helpers { }` in `tests/shop_test.wasl` | E0226: a test file only declares interfaces |

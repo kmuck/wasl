@@ -55,7 +55,7 @@ version = "0.1.0"
 
 - `weasel build <world>` writes the component of the world `<world>` to `build/<world>.wasm`, where `<world>` is the WaSL name of the world (`build/calculator.wasm`). `weasel build --all` builds every world.
 - Each world is built separately (§ 2.3): a project with three worlds produces three files, with three builds.
-- A world that exports `wasl:std/http` or `wasl:std/cli` is written to `build/<world>.wasm` already composed with the adapter of the standard library (§ 17.1): the file is a WASI 0.3 HTTP service or command, ready for wasmtime.
+- A world that includes `wasl:std/service` or `wasl:std/command` (§ 17.1) is built like the others, in one component: the file is a WASI 0.3 HTTP service or command, ready for wasmtime.
 - `build/` only contains generated files; `weasel clean` removes it.
 - A component is a standard WebAssembly component: it can be inspected with `wasm-tools`, run with wasmtime and composed with other components.
 
@@ -90,15 +90,15 @@ version = "0.1.0"
 
 **Path dependencies on WaSL projects.** Only the WIT of the dependency is used to compile the project: its interfaces, types and functions, never its source code. The dependency is analyzed like a project of its own (chapter 11), and an error in it stops the build. Its components are built when they are needed to run the project (§ 14.2).
 
-**The standard library.** *Specified, not available yet.* `wasl:std` (chapter 17) is the one **library**: a dependency whose source code is compiled with the package. It is shipped inside `weasel`, at the version of the compiler, and every project depends on it without declaring it; `"wasl:std"` in `[dependencies]` is E0200. Its interfaces behave like interfaces of the package that no world imports:
+**The standard library.** *Specified, not available yet.* `wasl:std` (chapter 17) is the one **library** of 0.5: a dependency whose source code is compiled with the package. It is shipped inside `weasel`, at the version of the compiler, and every project depends on it without declaring it; `"wasl:std"` in `[dependencies]` is E0200. Its interfaces behave like interfaces of the package that no world imports:
 
 - a file names them with `use wasl:std/<interface>;` (§ 6.6);
 - the code of the functions that a world reaches is compiled into its component, as for the interfaces of the package (§ 2.3), and only that code;
 - the interfaces of WASI that this code calls are imported by the component without being written in the world, at the version that the standard library uses: they are part of the library, as a call to `libc` is part of a C program. `weasel wit` shows them (§ 14.2). The packages of WASI that the standard library needs are resolved with it and need no entry in `[dependencies]`;
-- a world can export `wasl:std/http` and `wasl:std/cli`, which declare functions without body (§ 2.4.3); the other interfaces of the library are never exported (E0218);
+- a world can include `wasl:std/service` or `wasl:std/command`, the worlds of the library, and write the functions without body that they call (§ 2.4.3); the interfaces of the library are never exported (E0218);
 - its errors are bugs of the library: the package is analyzed with the library as if it were part of it, and an error located in the library is reported with the path `wasl:std/<file>`.
 
-Libraries other than `wasl:std`, written by users, come later ([ROADMAP.md](../../ROADMAP.md)): they will follow the same rules, declared in `[dependencies]`.
+Libraries other than `wasl:std`, written by users, come later ([ROADMAP.md](../../ROADMAP.md)): they will follow the same rules, declared in `[dependencies]`: nothing in the language is reserved to `wasl:std`.
 
 ## 3.6 Tests
 

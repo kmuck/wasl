@@ -31,9 +31,10 @@ world orders_service {
 }
 ```
 
-- A world contains `import` and `export` items, in any order. Their order is the order of the WIT (§ 13.1).
+- A world contains `import`, `export` and `include` items, in any order. Their order is the order of the WIT (§ 13.1).
 - `export <name>;` names an interface of the package. An unknown name, or the name of a world or a global, is an error (E0203). An interface can be exported only once per world (E0204). The same interface can be exported by several worlds.
-- `export <foreign name> { … }` implements an interface of a dependency for this world (§ 2.4.2). The interface must exist in a dependency (E0215), and the block must match its WIT (E0218). For an interface of a library with functions without body, the block contains exactly those functions (§ 2.4.3).
+- `export <foreign name> { … }` implements an interface of a dependency for this world (§ 2.4.2). The interface must exist in a dependency (E0215), and the block must match its WIT (E0218).
+- `include <foreign name> { … }` adds the imports and the exports of a world of a library, and writes the functions without body that it calls (§ 2.4.3). The world must exist in a library (E0215), and the block must contain exactly those functions (E0218); without any, the item ends with `;`. A world has at most one `include` (E0204).
 - `import <name>;` names an interface of the package (unknown name: E0203); `import <foreign name>;` an interface of a dependency (E0215). A world imports an interface at most once, and never imports an interface it exports (E0216).
 - A world can be empty; it then produces a component without imports or exports.
 - Each world is compiled into its own component (§ 2.3); the interfaces it imports are not compiled into it (§ 2.5).
@@ -80,7 +81,7 @@ func reset() { … }
 
 - A function has zero or more parameters and zero or one return value. The type of each parameter and of the return value is required: a signature is the contract of the WIT, never inferred.
 - Two parameters of the same function cannot have the same name (E0304).
-- A function is declared inside an interface, inside a resource (a method or a static function, § 7.12) or inside the foreign export block of a world (§ 2.4.2); there are no free functions at the top level.
+- A function is declared inside an interface, inside a resource (a method or a static function, § 7.12) or inside the foreign export block or the `include` block of a world (§ 2.4.2, § 2.4.3); there are no free functions at the top level.
 - The rules of the body are in chapters 8 (typing) and 9 (names).
 - A function has no limit on its number of parameters: in an exported function, parameters beyond 16 flat values go through linear memory (§ 13.6).
 - Functions can call each other freely, including recursively and across interfaces.

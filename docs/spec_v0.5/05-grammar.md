@@ -23,7 +23,8 @@ declaration       = world | interface | global ;
 world             = "world" identifier "{" { world_item } "}" ;
 world_item        = "import" interface_name ";"
                   | "export" identifier ";"
-                  | "export" foreign_name "{" { function } "}" ;
+                  | "export" foreign_name "{" { function } "}"
+                  | "include" foreign_name ( ";" | "{" { function } "}" ) ;
 interface_name    = identifier | foreign_name ;
 foreign_name      = identifier ":" identifier "/" identifier ;
 
@@ -191,7 +192,7 @@ for (p in products)
 - The `use` items of a file come before its declarations (§ 6.6).
 - A `global` is declared at the top level, never inside an interface.
 - A **type alias** `type name = T;` is declared inside an interface, like the other types (§ 7.14).
-- A function without body ends with `;` after its signature: `async func handle(request: request) -> response;` (§ 2.4.3). A method, a static function, a constructor and a function of a foreign export block always have a body.
+- A function without body ends with `;` after its signature: `async func handle(request: request) -> response;` (§ 2.4.3). A method, a static function, a constructor and a function of a foreign export block or of an `include` block always have a body.
 - An interface contains functions and type declarations, in any order. A type can be used before its declaration.
 - A `world` only contains `import` and `export` items: types are not declared in worlds. The block of a foreign export only contains functions (§ 2.4.2).
 - A foreign name is written `namespace:package/interface`, with WaSL identifiers and no version: `wasi:cli/run`, `example:catalog/carts`. An interface of the package is written with its name alone; `export` of an interface of the package ends with `;`, `export` of a foreign interface is followed by its implementation in braces.

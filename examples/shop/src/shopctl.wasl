@@ -3,7 +3,7 @@ use wasl:std/cli;
 /// Reads an order in JSON on the standard input and prints its total:
 /// `echo '{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}' | weasel run shopctl`.
 world shopctl {
-  export wasl:std/cli {
+  include wasl:std/command {
     async func run() -> result<_, string> {
       local order = shop::order_from_json(read_all()?)?;
       match (shop::total(order)) {

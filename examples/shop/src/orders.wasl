@@ -4,9 +4,9 @@ use wasl:std/http;
 /// Run it with `weasel serve orders`, then
 /// `curl -d '{"customer": "ada", "lines": [{"product_id": 1, "quantity": 3}]}' http://127.0.0.1:8080/orders`.
 world orders {
-  export wasl:std/http {
+  include wasl:std/service {
     async func handle(request: request) -> response {
-      if (request.method == "POST" && request.path == "/orders")
+      if (on(request, method::post, "/orders"))
         return checkout::quote(request);
       return not_found();
     }
