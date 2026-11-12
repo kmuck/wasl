@@ -10,8 +10,8 @@ use crate::diag::{Code, Diagnostic, Result, err};
 use crate::hir::{self, FuncId, InterfaceId};
 use crate::source::Span;
 use crate::types::{
-    CaseDef, DeclId, DeclKind, EndKind, FieldDef, Mutable, ResourceDef, Type, TypeDecl, TypeKind,
-    Types,
+    AliasDef, CaseDef, DeclId, DeclKind, EndKind, FieldDef, Mutable, ResourceDef, Type, TypeDecl,
+    TypeKind, Types,
 };
 use crate::wit::kebab;
 
@@ -96,6 +96,8 @@ struct Analyzer<'a> {
     funcs: Vec<&'a ast::Func>,
     /// The name of each declared type of the package, by id.
     decls: Vec<&'a Ident>,
+    /// The type aliases of the package, by id (§ 7.14).
+    aliases: Vec<&'a ast::AliasDecl>,
     /// The kind of each function of the package, by id.
     func_kinds: Vec<hir::FuncKind>,
     /// The functions of the interfaces of other packages, whose ids come after those of
@@ -177,6 +179,7 @@ impl<'a> Analyzer<'a> {
             types: Types::default(),
             funcs: Vec::new(),
             decls: Vec::new(),
+            aliases: Vec::new(),
             func_kinds: Vec::new(),
             foreign_funcs: Vec::new(),
             scopes: Vec::new(),
@@ -237,15 +240,19 @@ impl<'a> Analyzer<'a> {
             let mut scope = InterfaceScope::default();
             let mut func_ids = Vec::new();
             let mut decl_ids = Vec::new();
+            let mut alias_ids = Vec::new();
             for item in &iface.items {
                 let name = match item {
                     ast::InterfaceItem::Func(f) => &f.name,
                     ast::InterfaceItem::Type(t) => &t.name,
                     ast::InterfaceItem::Resource(r) => &r.name,
+                    ast::InterfaceItem::Alias(a) => &a.name,
                 };
                 let previous = if scope.funcs.contains_key(name.name.as_str()) {
                     Some("a function")
-                } else if scope.types.contains_key(name.name.as_str()) {
+                } else if scope.types.contains_key(name.name.as_str())
+                    || scope.alias_ids.contains_key(name.name.as_str())
+                {
                     Some("a type")
                 } else {
                     None
@@ -362,6 +369,30 @@ impl<'a> Analyzer<'a> {
                         });
                         self.types.decl_type(id);
                     }
+                    ast::InterfaceItem::Alias(alias) => {
+                        if let Some(top) = self.names.get(alias.name.name.as_str()) {
+                            return err(
+                                Code::TypeNamedLikeTopLevel,
+                                alias.name.span,
+                                format!(
+                                    "type `{}` has the name of {} of the package",
+                                    alias.name.name,
+                                    top.describe()
+                                ),
+                            );
+                        }
+                        let id = self.types.aliases.len();
+                        scope.alias_ids.insert(alias.name.name.clone(), id);
+                        alias_ids.push(id);
+                        self.aliases.push(alias);
+                        // The type is resolved in step 4, in the order of the aliases.
+                        self.types.aliases.push(AliasDef {
+                            name: alias.name.name.clone(),
+                            interface: iface_id,
+                            ty: Type::STRING,
+                            spelled: Type::STRING,
+                        });
+                    }
                 }
             }
             self.scopes.push(scope);
@@ -369,6 +400,7 @@ impl<'a> Analyzer<'a> {
                 name: iface.name.name.clone(),
                 funcs: func_ids,
                 types: decl_ids,
+                aliases: alias_ids,
                 foreign: None,
                 implements: None,
             });
@@ -416,18 +448,138 @@ impl<'a> Analyzer<'a> {
                 name: self.converter.short_name(id),
                 funcs: func_ids,
                 types: decl_ids,
+                aliases: Vec::new(),
                 foreign: Some(f.clone()),
                 implements: None,
             });
         }
     }
 
+    /// 4a. Type aliases (§ 7.14), each after the aliases it names; an alias that names
+    ///     itself is E0225.
+    fn alias_types(&mut self) -> Result<()> {
+        if self.aliases.is_empty() {
+            return Ok(());
+        }
+        let deps: Vec<Vec<usize>> = self
+            .aliases
+            .iter()
+            .enumerate()
+            .map(|(k, alias)| {
+                let mut names = Vec::new();
+                type_names(&alias.ty, &mut names);
+                let resolver = Resolver {
+                    names: &self.names,
+                    scopes: &self.scopes,
+                    spelled: true,
+                };
+                names
+                    .into_iter()
+                    .filter_map(|n| resolver.alias_id(n, Some(self.types.aliases[k].interface)))
+                    .collect()
+            })
+            .collect();
+        // Depth-first search; `state`: 0 not visited, 1 on the current path, 2 done.
+        fn visit(
+            k: usize,
+            deps: &[Vec<usize>],
+            state: &mut [u8],
+            path: &mut Vec<usize>,
+            order: &mut Vec<usize>,
+        ) -> Option<Vec<usize>> {
+            state[k] = 1;
+            path.push(k);
+            for &d in &deps[k] {
+                if state[d] == 1 {
+                    let start = path.iter().position(|&j| j == d).unwrap();
+                    return Some(path[start..].to_vec());
+                }
+                if state[d] == 0
+                    && let Some(cycle) = visit(d, deps, state, path, order)
+                {
+                    return Some(cycle);
+                }
+            }
+            path.pop();
+            state[k] = 2;
+            order.push(k);
+            None
+        }
+        let mut state = vec![0u8; deps.len()];
+        let mut order = Vec::new();
+        for k in 0..deps.len() {
+            if state[k] != 0 {
+                continue;
+            }
+            if let Some(mut cycle) = visit(k, &deps, &mut state, &mut Vec::new(), &mut order) {
+                let first = (0..cycle.len()).min_by_key(|&j| cycle[j]).unwrap();
+                cycle.rotate_left(first);
+                let name = &self.aliases[cycle[0]].name;
+                let through = if cycle.len() == 1 {
+                    String::new()
+                } else {
+                    let others: Vec<String> = cycle[1..]
+                        .iter()
+                        .map(|&j| format!("`{}`", self.types.aliases[j].name))
+                        .collect();
+                    format!(" through {}", others.join(", "))
+                };
+                return err(
+                    Code::AliasCycle,
+                    name.span,
+                    format!(
+                        "type alias `{}` names itself{through}: an alias is another name of a type, not a new type; for a recursive type, declare a `variant` or a `record`",
+                        name.name
+                    ),
+                );
+            }
+        }
+        for k in order {
+            let iface = self.types.aliases[k].interface;
+            let written = &self.aliases[k].ty;
+            let resolver = Resolver {
+                names: &self.names,
+                scopes: &self.scopes,
+                spelled: false,
+            };
+            let ty = resolver.resolve(&mut self.types, written, Some(iface))?;
+            // Like a parameter, an alias can be `borrow<T>`, which it cannot contain (E0219).
+            match self.types.kind(ty) {
+                TypeKind::Borrow(inner) => no_borrow(&self.types, *inner, written.span)?,
+                _ => no_borrow(&self.types, ty, written.span)?,
+            }
+            let spelled = Resolver {
+                spelled: true,
+                ..resolver
+            }
+            .resolve(&mut self.types, written, Some(iface))?;
+            let name = self.aliases[k].name.name.clone();
+            self.types.aliases[k].ty = ty;
+            self.types.aliases[k].spelled = spelled;
+            // An alias of a declared type also names it in a literal and a `borrow`.
+            if let TypeKind::Decl(d) = self.types.kind(ty) {
+                self.scopes[iface].types.insert(name.clone(), *d);
+            }
+            self.scopes[iface].aliases.insert(name, ty);
+        }
+        Ok(())
+    }
+
     /// 4. Types: fields, payloads and signatures, interface by interface (§ 11.2).
     fn signatures(&mut self) -> Result<()> {
+        self.alias_types()?;
         let resolver = Resolver {
             names: &self.names,
             scopes: &self.scopes,
+            spelled: false,
         };
+        // The types of the WIT keep the aliases they name (§ 7.14).
+        let speller = Resolver {
+            spelled: true,
+            ..resolver
+        };
+        let speller = (!self.types.aliases.is_empty()).then_some(&speller);
+        let spellings = &mut self.program.spellings;
         for (iface_id, iface) in self.interfaces.iter().enumerate() {
             for item in &iface.items {
                 match item {
@@ -436,10 +588,18 @@ impl<'a> Analyzer<'a> {
                         match &decl.kind {
                             ast::TypeDeclKind::Record(fields) => {
                                 let mut defs = Vec::new();
-                                for f in fields {
+                                for (k, f) in fields.iter().enumerate() {
                                     let ty =
                                         resolver.resolve(&mut self.types, &f.ty, Some(iface_id))?;
                                     no_borrow(&self.types, ty, f.ty.span)?;
+                                    spell(
+                                        speller,
+                                        &mut self.types,
+                                        spellings,
+                                        hir::Spelling::Member(id, k),
+                                        (&f.ty, iface_id),
+                                        ty,
+                                    )?;
                                     defs.push(FieldDef {
                                         name: f.name.name.clone(),
                                         mutable: f.mutable,
@@ -450,7 +610,7 @@ impl<'a> Analyzer<'a> {
                             }
                             ast::TypeDeclKind::Variant(cases) => {
                                 let mut defs = Vec::new();
-                                for c in cases {
+                                for (k, c) in cases.iter().enumerate() {
                                     let payload = match &c.payload {
                                         Some(ty) => {
                                             let t = resolver.resolve(
@@ -459,6 +619,14 @@ impl<'a> Analyzer<'a> {
                                                 Some(iface_id),
                                             )?;
                                             no_borrow(&self.types, t, ty.span)?;
+                                            spell(
+                                                speller,
+                                                &mut self.types,
+                                                spellings,
+                                                hir::Spelling::Member(id, k),
+                                                (ty, iface_id),
+                                                t,
+                                            )?;
                                             Some(t)
                                         }
                                         None => None,
@@ -475,14 +643,16 @@ impl<'a> Analyzer<'a> {
                     }
                     ast::InterfaceItem::Func(func) => {
                         let def = signature(
-                            &resolver,
+                            (&resolver, speller),
                             &mut self.types,
+                            spellings,
                             func,
-                            hir::FuncKind::Free,
+                            (hir::FuncKind::Free, self.program.funcs.len()),
                             iface_id,
                         )?;
                         self.program.funcs.push(def);
                     }
+                    ast::InterfaceItem::Alias(_) => {}
                     ast::InterfaceItem::Resource(res) => {
                         let id = self.scopes[iface_id].types[res.name.name.as_str()];
                         let mut fields = Vec::new();
@@ -499,9 +669,15 @@ impl<'a> Analyzer<'a> {
                             def.fields = fields;
                         }
                         for rf in &res.funcs {
-                            let kind = self.func_kinds[self.program.funcs.len()];
-                            let def =
-                                signature(&resolver, &mut self.types, &rf.func, kind, iface_id)?;
+                            let id = self.program.funcs.len();
+                            let def = signature(
+                                (&resolver, speller),
+                                &mut self.types,
+                                spellings,
+                                &rf.func,
+                                (self.func_kinds[id], id),
+                                iface_id,
+                            )?;
                             self.program.funcs.push(def);
                         }
                     }
@@ -762,7 +938,7 @@ impl<'a> Analyzer<'a> {
                             "a resource",
                         )
                     }
-                    ast::InterfaceItem::Func(_) => continue,
+                    ast::InterfaceItem::Func(_) | ast::InterfaceItem::Alias(_) => continue,
                 };
                 for (ty, span) in fields {
                     if let Some(h) = handle_in(&self.types, &self.program.handles, ty, None) {
@@ -820,6 +996,8 @@ impl<'a> Analyzer<'a> {
                         },
                     )?;
                 }
+                // The aliases the WIT names, like the types (§ 7.14).
+                self.wit_aliases(world, iface_id)?;
                 // The types of an exported interface all appear in the WIT (§ 13.1).
                 for &d in &self.program.interfaces[iface_id].types {
                     let ty = self.types.decl_type_of(d);
@@ -844,12 +1022,11 @@ impl<'a> Analyzer<'a> {
             let steps: Vec<String> = cycle
                 .iter()
                 .map(|&(i, d)| {
-                    let decl = &self.types.decls[d];
                     format!(
                         "`{}` uses `{}::{}`",
                         self.program.interfaces[i].name,
-                        self.program.interfaces[decl.interface].name,
-                        decl.name
+                        self.program.interfaces[d.interface(&self.types)].name,
+                        d.name(&self.types)
                     )
                 })
                 .collect();
@@ -865,11 +1042,81 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
+    /// The aliases that the WIT of interface `iface_id` names in its signatures and the
+    /// members of its types, in `world`: like a declared type, an alias of an interface
+    /// with functions needs the world to export or import it (E0209).
+    fn wit_aliases(&self, world: &hir::WorldDef, iface_id: InterfaceId) -> Result<()> {
+        if self.types.aliases.is_empty() {
+            return Ok(());
+        }
+        let iface = &self.program.interfaces[iface_id];
+        let mut written: Vec<(Type, &Ident)> = Vec::new();
+        for &f in &iface.funcs {
+            let def = &self.program.funcs[f];
+            for (k, (_, t)) in def.params.iter().enumerate() {
+                written.push((
+                    self.program.spelled(hir::Spelling::Param(f, k), *t),
+                    &self.funcs[f].name,
+                ));
+            }
+            if let Some(t) = def.ret {
+                written.push((
+                    self.program.spelled(hir::Spelling::Ret(f), t),
+                    &self.funcs[f].name,
+                ));
+            }
+        }
+        let mut members: Vec<(&hir::Spelling, &Type)> = self
+            .program
+            .spellings
+            .iter()
+            .filter(|(place, _)| {
+                matches!(place, hir::Spelling::Member(d, _) if iface.types.contains(d))
+            })
+            .collect();
+        members.sort();
+        for (place, &t) in members {
+            if let hir::Spelling::Member(d, _) = place {
+                written.push((t, self.decls[*d]));
+            }
+        }
+        for (ty, at) in written {
+            let mut stack = vec![ty];
+            while let Some(t) = stack.pop() {
+                if let TypeKind::Alias(a) = self.types.kind(t) {
+                    let other = self.types.aliases[*a].interface;
+                    if other != iface_id
+                        && !world.exports.contains(&other)
+                        && !world.imports.contains(&other)
+                        && !self.program.interfaces[other].funcs.is_empty()
+                    {
+                        return err(
+                            Code::UnexportedTypeInterface,
+                            at.span,
+                            format!(
+                                "`{}` uses the type `{}`, but world `{}` does not export interface `{}`, which has functions: export it, or move the type to an interface without functions",
+                                at.name,
+                                self.types.display(t),
+                                world.name,
+                                self.program.interfaces[other].name
+                            ),
+                        );
+                    }
+                }
+                if !matches!(self.types.kind(t), TypeKind::Decl(_)) {
+                    stack.extend(self.types.children(t));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 7. Globals (§ 6.4, § 8.18): returns the id of each global by name.
     fn globals(&mut self) -> Result<HashMap<&'a str, hir::GlobalId>> {
         let resolver = Resolver {
             names: &self.names,
             scopes: &self.scopes,
+            spelled: false,
         };
         let mut global_ids = HashMap::new();
         for global in &self.globals {
@@ -929,6 +1176,7 @@ impl<'a> Analyzer<'a> {
         let resolver = Resolver {
             names: &self.names,
             scopes: &self.scopes,
+            spelled: false,
         };
         for (id, func) in self.funcs.iter().enumerate() {
             let iface = self.program.funcs[id].interface;
@@ -1181,6 +1429,8 @@ pub(super) struct InterfaceScope {
     /// Types of another package that are aliases of a type that is not declared:
     /// `type instant = u64` (§ 13.2).
     aliases: HashMap<String, Type>,
+    /// Type aliases of the package (§ 7.14), by name: their index in [`Types::aliases`].
+    alias_ids: HashMap<String, usize>,
     /// Items of another package that code cannot use, with the reason (E0215).
     unavailable: HashMap<String, String>,
     /// An interface of another package.
@@ -1246,12 +1496,14 @@ fn foreign_interface(deps: &Dependencies, f: &ast::ForeignName) -> Result<wit_pa
 }
 
 /// The signature of a function: its parameters, with `self` first for a method, and its
-/// return type, the resource for a constructor.
+/// return type, the resource for a constructor. With a speller, the types that name an
+/// alias of the package are also kept as written, for the WIT (§ 7.14).
 fn signature(
-    resolver: &Resolver,
+    (resolver, speller): (&Resolver, Option<&Resolver>),
     types: &mut Types,
+    spellings: &mut HashMap<hir::Spelling, Type>,
     func: &ast::Func,
-    kind: hir::FuncKind,
+    (kind, id): (hir::FuncKind, FuncId),
     iface: InterfaceId,
 ) -> Result<hir::FuncDef> {
     let mut params = Vec::new();
@@ -1267,6 +1519,8 @@ fn signature(
         } else {
             no_borrow(types, ty, p.ty.span)?;
         }
+        let place = hir::Spelling::Param(id, params.len());
+        spell(speller, types, spellings, place, (&p.ty, iface), ty)?;
         params.push((p.name.name.clone(), ty));
     }
     let ret = match (&func.ret, kind) {
@@ -1274,6 +1528,14 @@ fn signature(
         (Some(ty), _) => {
             let t = resolver.resolve(types, ty, Some(iface))?;
             no_borrow(types, t, ty.span)?;
+            spell(
+                speller,
+                types,
+                spellings,
+                hir::Spelling::Ret(id),
+                (ty, iface),
+                t,
+            )?;
             Some(t)
         }
         (None, _) => None,
@@ -1294,6 +1556,36 @@ fn signature(
         locals: Vec::new(),
         body: Vec::new(),
     })
+}
+
+/// Keeps the type written at `place` with its aliases, when it names one (§ 7.14).
+fn spell(
+    speller: Option<&Resolver>,
+    types: &mut Types,
+    spellings: &mut HashMap<hir::Spelling, Type>,
+    place: hir::Spelling,
+    (written, iface): (&ast::TypeExpr, InterfaceId),
+    ty: Type,
+) -> Result<()> {
+    if let Some(speller) = speller {
+        let spelled = speller.resolve(types, written, Some(iface))?;
+        if spelled != ty {
+            spellings.insert(place, spelled);
+        }
+    }
+    Ok(())
+}
+
+/// The names of declared types and aliases written in a type.
+fn type_names<'t>(ty: &'t ast::TypeExpr, names: &mut Vec<&'t ast::TypeName>) {
+    use ast::TypeExprKind as K;
+    match &ty.kind {
+        K::Prim(_) | K::Char | K::String => {}
+        K::List { elem, .. } | K::Option(elem) | K::End(_, elem) => type_names(elem, names),
+        K::Tuple(elems) => elems.iter().for_each(|e| type_names(e, names)),
+        K::Result { ok, err } => ok.iter().chain(err).for_each(|e| type_names(e, names)),
+        K::Named(name) | K::Borrow(name) => names.push(name),
+    }
 }
 
 /// `borrow<T>` anywhere in `ty`, which is not the type of a parameter (E0219).
@@ -1423,6 +1715,7 @@ fn has_value(types: &Types, inhabited: &[bool], ty: Type) -> bool {
                 || err.is_none_or(|t| has_value(types, inhabited, t))
         }
         TypeKind::Decl(d) => inhabited[*d],
+        TypeKind::Alias(a) => has_value(types, inhabited, types.aliases[*a].ty),
     }
 }
 
@@ -1563,6 +1856,9 @@ fn check_boundary_types(
 struct Resolver<'a> {
     names: &'a HashMap<String, TopLevel>,
     scopes: &'a [InterfaceScope],
+    /// Keep the aliases of the package, as written, for the WIT (§ 7.14), rather than
+    /// the types they name.
+    spelled: bool,
 }
 
 impl Resolver<'_> {
@@ -1609,6 +1905,11 @@ impl Resolver<'_> {
                     .transpose()?,
             },
             K::Named(name) => {
+                if self.spelled
+                    && let Some(a) = self.alias_id(name, iface)
+                {
+                    return Ok(types.intern(TypeKind::Alias(a)));
+                }
                 if let Some(&t) = self.alias(name, iface) {
                     return Ok(t);
                 }
@@ -1646,6 +1947,22 @@ impl Resolver<'_> {
             None => current?,
         };
         self.scopes[iface].aliases.get(name.name.name.as_str())
+    }
+
+    /// The alias of the package named `name` (§ 7.14), by its index in [`Types::aliases`].
+    fn alias_id(&self, name: &ast::TypeName, current: Option<InterfaceId>) -> Option<usize> {
+        let iface = match &name.iface {
+            Some(iface) => match self.names.get(iface.name.as_str()) {
+                Some(TopLevel::Interface(id)) => *id,
+                _ => return None,
+            },
+            None => current?,
+        };
+        self.scopes
+            .get(iface)?
+            .alias_ids
+            .get(name.name.name.as_str())
+            .copied()
     }
 
     /// The declared type named `name`.
@@ -1756,7 +2073,7 @@ pub(super) fn ends_in(types: &Types, ty: Type) -> Vec<(EndKind, Type)> {
 }
 
 /// The first `stream_writer<T>` or `future_writer<T>` in `ty`, at any depth (E0222).
-fn writable_end(types: &Types, ty: Type) -> Option<Type> {
+pub(crate) fn writable_end(types: &Types, ty: Type) -> Option<Type> {
     let mut seen = Vec::new();
     let mut stack = vec![ty];
     while let Some(t) = stack.pop() {

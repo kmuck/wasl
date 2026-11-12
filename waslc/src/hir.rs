@@ -3,6 +3,8 @@
 //! The HIR is produced by semantic analysis: every name is resolved, every expression is
 //! typed and every language rule is checked. Code generation has nothing left to verify.
 
+use std::collections::HashMap;
+
 use crate::ast::{BinOp, UnaryOp};
 use crate::types::{DeclId, Prim, Type, Types};
 
@@ -22,9 +24,27 @@ pub struct Program {
     /// The handle types (§ 7.12), by declaration: the resources of the interfaces of
     /// other packages and of the interfaces of the package that a world imports.
     pub handles: Vec<bool>,
+    /// The types of the WIT written with an alias of the package (§ 7.14), where they
+    /// differ from the type the analysis uses.
+    pub spellings: HashMap<Spelling, Type>,
+}
+
+/// A place of the WIT where a type is written: a parameter or the return type of a
+/// function, or a field or a case payload of a declared type, by index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Spelling {
+    Param(FuncId, usize),
+    Ret(FuncId),
+    Member(DeclId, usize),
 }
 
 impl Program {
+    /// The type written at `place`, with its aliases, for the WIT; `ty` is the type the
+    /// analysis uses.
+    pub fn spelled(&self, place: Spelling, ty: Type) -> Type {
+        self.spellings.get(&place).copied().unwrap_or(ty)
+    }
+
     /// Whether an interface is exported by at least one world.
     pub fn is_exported(&self, iface: InterfaceId) -> bool {
         self.worlds.iter().any(|w| w.exports.contains(&iface))
@@ -168,6 +188,8 @@ pub struct InterfaceDef {
     pub funcs: Vec<FuncId>,
     /// Declared types, in declaration order. Empty for an interface of another package.
     pub types: Vec<DeclId>,
+    /// Type aliases (§ 7.14), by index in [`Types::aliases`], in declaration order.
+    pub aliases: Vec<usize>,
     /// For an interface of another package, where it comes from.
     pub foreign: Option<Foreign>,
     /// For the implementation of an interface of another package in a world (§ 2.4.2),

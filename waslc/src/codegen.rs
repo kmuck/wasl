@@ -1093,6 +1093,7 @@ impl<'a> ModuleCx<'a> {
             TypeKind::Prim(_) | TypeKind::Char | TypeKind::Option(_) | TypeKind::End(..) => {
                 unreachable!("not a heap type")
             }
+            TypeKind::Alias(_) => unreachable!("aliases are only spelled in the WIT"),
         };
         self.heap.insert(ty, index);
         index

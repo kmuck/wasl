@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Type aliases (§ 7.14): `type price = u64;` in an interface names a type without making a new one, so a `price` is a `u64` without conversion. The WIT declares the alias and keeps its name in signatures and fields, `total: func(lines: lines) -> price;`. An alias that names itself, `type a = list<a>;`, is the new error E0225. `type`, reserved until now, is a keyword.
 - Bodies without braces (§ 5.3): after `if`, `else`, `while` and `for`, a single simple statement can replace the block, an assignment, `break`, `continue`, `return` or a call: `if (n == 0) return 1;`. A `local`, an `if`, a loop, a `match` or `task.return` still needs braces (E0100), so an `else` always belongs to the nearest `if`.
 - `T.to_string(n)` and `T.parse(s)` on the integer types (§ 8.17): the decimal form of an integer, and the integer that it writes, or `option.none`.
 - Locals without type (§ 8.2, § 9.4): `local x = e;` takes the type of `e`, and a literal alone is an `s32` or an `f64`; a destructuring names its positions with or without a type, `local (count, total) = stats(lines);`. A value that cannot give its type, such as `option::none` or `[]`, is E0408, and `local x;` is E0100.

@@ -241,6 +241,21 @@ pub enum TypeKind {
     Borrow(Type),
     /// An end of a stream or a future of elements of the type (§ 7.13): a handle.
     End(EndKind, Type),
+    /// A type alias of the package, `type price = u64;` (§ 7.14), by its index in
+    /// [`Types::aliases`]. It only appears in the types that keep the names written for
+    /// the WIT ([`crate::hir::Spellings`]): everywhere else an alias is the type it names.
+    Alias(usize),
+}
+
+/// A type alias of the package (§ 7.14).
+#[derive(Debug)]
+pub struct AliasDef {
+    pub name: String,
+    pub interface: usize,
+    /// The type it names, as the analysis uses it.
+    pub ty: Type,
+    /// The same type with the aliases it names, for the WIT.
+    pub spelled: Type,
 }
 
 /// The four ends of streams and futures (§ 7.13).
@@ -358,6 +373,7 @@ pub struct Types {
     kinds: Vec<TypeKind>,
     ids: HashMap<TypeKind, Type>,
     pub decls: Vec<TypeDecl>,
+    pub aliases: Vec<AliasDef>,
     /// Interface names, to display declared types with their path.
     pub interface_names: Vec<String>,
 }
@@ -368,6 +384,7 @@ impl Default for Types {
             kinds: Vec::new(),
             ids: HashMap::new(),
             decls: Vec::new(),
+            aliases: Vec::new(),
             interface_names: Vec::new(),
         };
         for p in Prim::ALL {
@@ -437,6 +454,7 @@ impl Types {
             TypeKind::Result { ok, err } => ok.iter().chain(err).copied().collect(),
             TypeKind::Borrow(inner) => vec![*inner],
             TypeKind::End(_, elem) => vec![*elem],
+            TypeKind::Alias(a) => vec![self.aliases[*a].spelled],
             TypeKind::Decl(id) => match &self.decls[*id].kind {
                 DeclKind::Record(fields) => fields.iter().map(|f| f.ty).collect(),
                 DeclKind::Variant(cases) => cases.iter().filter_map(|c| c.payload).collect(),
@@ -594,13 +612,20 @@ impl Types {
             },
             TypeKind::Decl(id) => {
                 let decl = &self.decls[*id];
-                match self.interface_names.get(decl.interface) {
-                    Some(name) if iface != Some(decl.interface) => {
-                        format!("{name}::{}", decl.name)
-                    }
-                    _ => decl.name.clone(),
-                }
+                self.path(&decl.name, decl.interface, iface)
             }
+            TypeKind::Alias(a) => {
+                let alias = &self.aliases[*a];
+                self.path(&alias.name, alias.interface, iface)
+            }
+        }
+    }
+
+    /// The name of a type of interface `of`, with its path outside it.
+    fn path(&self, name: &str, of: usize, iface: Option<usize>) -> String {
+        match self.interface_names.get(of) {
+            Some(path) if iface != Some(of) => format!("{path}::{name}"),
+            _ => name.to_string(),
         }
     }
 }

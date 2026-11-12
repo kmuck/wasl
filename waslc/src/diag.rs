@@ -42,6 +42,7 @@ pub enum Code {
     HandlePosition,
     WriterInWit,
     UncarriedEnd,
+    AliasCycle,
     // Names
     UnknownName,
     UnknownFunc,
@@ -124,6 +125,7 @@ impl Code {
             Code::HandlePosition => "E0220",
             Code::WriterInWit => "E0222",
             Code::UncarriedEnd => "E0223",
+            Code::AliasCycle => "E0225",
             Code::UnknownName => "E0300",
             Code::UnknownFunc => "E0301",
             Code::ArgCount => "E0302",

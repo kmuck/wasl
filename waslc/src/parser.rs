@@ -321,6 +321,17 @@ impl Parser {
                     InterfaceItem::Type(self.type_decl()?)
                 }
                 TokenKind::Resource => InterfaceItem::Resource(self.resource()?),
+                TokenKind::KwType => {
+                    self.bump();
+                    let name = self.ident("the name of the alias")?;
+                    self.expect(
+                        &TokenKind::Eq,
+                        "`=` (`type` declares an alias: `type name = T;`)",
+                    )?;
+                    let ty = self.ty()?;
+                    self.expect(&TokenKind::Semi, "`;`")?;
+                    InterfaceItem::Alias(AliasDecl { name, ty })
+                }
                 TokenKind::Global => {
                     return err(
                         Code::Syntax,
@@ -330,7 +341,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(self.unexpected(
-                        "`func`, `async func`, `record`, `enum`, `variant`, `flags`, `resource` or `}`",
+                        "`func`, `async func`, `record`, `enum`, `variant`, `flags`, `resource`, `type` or `}`",
                     ));
                 }
             };
