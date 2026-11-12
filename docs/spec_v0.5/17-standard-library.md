@@ -1,6 +1,6 @@
 # 17. Standard library
 
-*Specified, not available yet.*
+*Available in part:* the library itself and `text` (§ 17.2). The other interfaces and the worlds are *specified, not available yet*.
 
 The standard library is the package `wasl:std`, written in WaSL, shipped inside `weasel` and versioned with the compiler: `weasel` 0.5 ships `wasl:std@0.5.0`. Every project depends on it without declaring it (§ 3.5), and a file names one of its interfaces with `use` (§ 6.6):
 
@@ -25,6 +25,8 @@ It also declares two worlds, which a program includes (§ 17.1):
 | `command` | `wasi:cli/run` | `cli::run`, written by the program |
 
 The library sits above WASI as the standard library of other languages sits above the system calls. It is a library like the others, which gets no special treatment from the compiler: its interfaces and its worlds follow the rules of the language (§ 2.4.3), its functions are compiled into the components that call them (§ 3.5), and what it does with WASI, a program can do too, by importing WASI itself.
+
+The library also has an interface `internal`, the helpers that its other interfaces share. It is not meant for programs, and can change in any version.
 
 The functions below are listed with their signatures; their bodies belong to the library. A parameter or result written `string` is UTF-8 text, as everywhere in WaSL.
 

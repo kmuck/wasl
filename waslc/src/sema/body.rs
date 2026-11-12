@@ -206,10 +206,7 @@ impl<'a> FnCx<'a> {
     }
 
     pub(super) fn declare(&mut self, name: &Ident, ty: Type) -> Result<LocalId> {
-        if matches!(
-            self.resolver.names.get(name.name.as_str()),
-            Some(TopLevel::Global)
-        ) {
+        if matches!(self.resolver.top(name), Some(TopLevel::Global)) {
             return err(
                 Code::ShadowsGlobal,
                 name.span,

@@ -2,9 +2,39 @@
 
 use std::path::PathBuf;
 
-/// Identifier of a file in a [`SourceMap`].
+/// Identifier of a file in a [`SourceMap`], or of a file of the standard library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
+
+/// The first id of the files of the standard library (§ 3.5): they are not in the
+/// [`SourceMap`] of the package, and every map shows them.
+const LIBRARY: u32 = 1 << 31;
+
+impl FileId {
+    /// Whether the file belongs to the standard library `wasl:std`.
+    pub fn is_library(self) -> bool {
+        self.0 >= LIBRARY
+    }
+}
+
+/// The source files of `wasl:std` (chapter 17), shipped inside the compiler.
+const STD: &[(&str, &str)] = &[("wasl:std/text.wasl", include_str!("../std/text.wasl"))];
+
+/// The files of the standard library, with their ids.
+pub fn library() -> &'static [(FileId, SourceFile)] {
+    static FILES: std::sync::OnceLock<Vec<(FileId, SourceFile)>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| {
+        STD.iter()
+            .enumerate()
+            .map(|(k, (path, text))| {
+                (
+                    FileId(LIBRARY + k as u32),
+                    SourceFile::new(path.into(), text.to_string()),
+                )
+            })
+            .collect()
+    })
+}
 
 /// A byte range `[start, end)` in a source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,6 +107,9 @@ impl SourceMap {
     }
 
     pub fn get(&self, id: FileId) -> &SourceFile {
+        if id.is_library() {
+            return &library()[(id.0 - LIBRARY) as usize].1;
+        }
         &self.files[id.0 as usize]
     }
 

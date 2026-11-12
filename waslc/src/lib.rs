@@ -85,10 +85,21 @@ pub fn analyze(
     }
     // Each file is parsed even when another one has a syntax error, but a package with
     // a syntax error is not analyzed: its missing declarations would cause false errors.
+    if deps.names().any(|name| name == "wasl:std") {
+        return Err(vec![Diagnostic::without_span(
+            Code::Manifest,
+            "`wasl:std` is in `[dependencies]`, but every project depends on the standard library without declaring it: remove it",
+        )]);
+    }
+    // The files of the package, then those of the standard library (§ 3.5).
     let mut items = Vec::new();
     let mut errors = Vec::new();
-    for id in sources.ids() {
-        match lexer::tokenize(id, &sources.get(id).text).and_then(parser::parse) {
+    let files = sources
+        .ids()
+        .map(|id| (id, sources.get(id)))
+        .chain(source::library().iter().map(|(id, file)| (*id, file)));
+    for (id, file) in files {
+        match lexer::tokenize(id, &file.text).and_then(parser::parse) {
             Ok(file) => items.extend(file),
             Err(d) => errors.push(d),
         }
