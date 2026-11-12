@@ -564,7 +564,7 @@ fn invalid_v2_programs() {
             Code::RedundantCase,
         ),
         ("match (s) { case lost { } else { } }", Code::UnknownCase),
-        ("if (inv == other) { }", Code::InvalidOperator),
+        ("if (inv < other) { }", Code::InvalidOperator),
         ("if (inv.customer < \"M\") { }", Code::InvalidOperator),
         ("local c: u8 = inv.customer[0];", Code::InvalidOperator),
         (

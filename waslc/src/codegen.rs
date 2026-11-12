@@ -2187,6 +2187,20 @@ impl<'g, 'a> FuncGen<'g, 'a> {
             }
             return;
         }
+        // Structural equality (§ 8.3): a helper generated for the type.
+        if matches!(op, BinOp::Eq | BinOp::Ne)
+            && ty.as_prim().is_none()
+            && !self.types().is_scalar(ty)
+        {
+            self.expr(lhs);
+            self.expr(rhs);
+            let index = self.cx.helper(Helper::Eq(ty));
+            self.emit(Instruction::Call(index));
+            if op == BinOp::Ne {
+                self.emit(Instruction::I32Eqz);
+            }
+            return;
+        }
         // Chars, enums and flags compare and combine as unsigned 32-bit integers.
         let ty = if ty.as_prim().is_some() {
             ty

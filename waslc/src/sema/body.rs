@@ -1358,26 +1358,18 @@ impl<'a> FnCx<'a> {
         };
 
         let ty = l.value_ty();
-        let (is_enum, is_flags) = match self.types.decl(ty) {
-            Some((_, decl)) => (
-                matches!(decl.kind, DeclKind::Enum(_)),
-                matches!(decl.kind, DeclKind::Flags(_)),
-            ),
-            None => (false, false),
-        };
+        let is_flags = self
+            .types
+            .decl(ty)
+            .is_some_and(|(_, decl)| matches!(decl.kind, DeclKind::Flags(_)));
         let allowed = match op {
             BinOp::Add => ty.is_numeric() || ty == Type::STRING,
             BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric(),
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => ty.is_numeric() || ty == Type::CHAR,
             BinOp::BitAnd | BinOp::BitOr => ty.is_int() || is_flags,
             BinOp::Rem | BinOp::BitXor | BinOp::Shl | BinOp::Shr => ty.is_int(),
-            BinOp::Eq | BinOp::Ne => {
-                ty.as_prim().is_some()
-                    || ty == Type::CHAR
-                    || ty == Type::STRING
-                    || is_enum
-                    || is_flags
-            }
+            // Scalars, strings, and the values built from them (§ 8.3).
+            BinOp::Eq | BinOp::Ne => self.types.equatable(ty),
             BinOp::And | BinOp::Or => unreachable!(),
         };
         if !allowed {
@@ -1386,7 +1378,7 @@ impl<'a> FnCx<'a> {
             } else if op.is_comparison() && ty == Type::STRING {
                 " (strings have no order: ordering them is the job of a library)"
             } else if matches!(op, BinOp::Eq | BinOp::Ne) {
-                " (compare their fields, or use `match`)"
+                " (it contains a `mut` field, a `list<mut T>`, a resource, a handle or a writable end: a value that can change, or that has an identity, has no equality that stays true; compare what matters with a function)"
             } else {
                 ""
             };

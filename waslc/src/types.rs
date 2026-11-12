@@ -568,6 +568,33 @@ impl Types {
         }
     }
 
+    /// Whether `==` and `!=` apply to `ty` (§ 8.3): nothing in it, at any depth, can
+    /// change or has an identity: no `mut` field, `list<mut T>`, resource, `borrow` or
+    /// end of a stream or a future.
+    pub fn equatable(&self, ty: Type) -> bool {
+        let mut seen = Vec::new();
+        let mut stack = vec![ty];
+        while let Some(t) = stack.pop() {
+            if seen.contains(&t) {
+                continue;
+            }
+            seen.push(t);
+            match self.kind(t) {
+                TypeKind::List { mutable: true, .. } | TypeKind::Borrow(_) | TypeKind::End(..) => {
+                    return false;
+                }
+                TypeKind::Decl(id) => match &self.decls[*id].kind {
+                    DeclKind::Resource(_) => return false,
+                    DeclKind::Record(fields) if fields.iter().any(|f| f.mutable) => return false,
+                    _ => {}
+                },
+                _ => {}
+            }
+            stack.extend(self.children(t));
+        }
+        true
+    }
+
     /// Displays a type as written in WaSL: `list<mut u8>`, `invoices::line`.
     pub fn display(&self, ty: Type) -> String {
         self.display_in(ty, None)
