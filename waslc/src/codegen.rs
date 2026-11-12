@@ -760,7 +760,7 @@ fn mark_assigned_globals(stmts: &[Stmt], used: &mut [bool]) {
                 mark_assigned_globals(then, used);
                 mark_assigned_globals(else_, used);
             }
-            Stmt::While { body, .. } => mark_assigned_globals(body, used),
+            Stmt::While { body, .. } | Stmt::Block(body) => mark_assigned_globals(body, used),
             Stmt::Match { arms, else_, .. } => {
                 for arm in arms {
                     mark_assigned_globals(&arm.body, used);
@@ -1532,6 +1532,7 @@ impl<'g, 'a> FuncGen<'g, 'a> {
                 self.frames.pop();
                 self.emit(Instruction::End);
             }
+            Stmt::Block(body) => self.block(body),
             Stmt::Match {
                 scrutinee,
                 arms,

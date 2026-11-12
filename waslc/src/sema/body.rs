@@ -63,6 +63,16 @@ enum PathTarget {
     Func(FuncId),
 }
 
+/// Whether a literal-only expression contains a float literal (§ 8.2).
+fn has_float_literal(e: &ast::Expr) -> bool {
+    match &e.kind {
+        ExprKind::Float(_) => true,
+        ExprKind::Paren(inner) | ExprKind::Unary { expr: inner, .. } => has_float_literal(inner),
+        ExprKind::Binary { lhs, rhs, .. } => has_float_literal(lhs) || has_float_literal(rhs),
+        _ => false,
+    }
+}
+
 /// Expression made only of numeric literals: its type comes from the context (§ 8.2).
 fn needs_type_context(e: &ast::Expr) -> bool {
     match &e.kind {
@@ -320,7 +330,22 @@ impl<'a> FnCx<'a> {
         Ok(match &stmt.kind {
             StmtKind::Local {
                 name,
-                ty: written,
+                ty: None,
+                init,
+            } => {
+                let init = init
+                    .as_ref()
+                    .expect("a local without type has an initial value");
+                let init = self.inferred(init)?;
+                let local = self.declare(name, init.value_ty())?;
+                hir::Stmt::Local {
+                    local,
+                    init: Some(init),
+                }
+            }
+            StmtKind::Local {
+                name,
+                ty: Some(written),
                 init,
             } => {
                 let ty = self.resolver.resolve(self.types, written, self.iface)?;
@@ -389,6 +414,7 @@ impl<'a> FnCx<'a> {
                 self.loop_depth -= 1;
                 hir::Stmt::While { cond, body }
             }
+            StmtKind::For { name, list, body } => self.for_(name, list, body)?,
             StmtKind::Break | StmtKind::Continue => {
                 if self.loop_depth == 0 {
                     let kw = if matches!(stmt.kind, StmtKind::Break) {
@@ -399,7 +425,7 @@ impl<'a> FnCx<'a> {
                     return err(
                         Code::BreakOutsideLoop,
                         stmt.span,
-                        format!("`{kw}` can only be used inside a `while`"),
+                        format!("`{kw}` can only be used inside a `while` or a `for`"),
                     );
                 }
                 if matches!(stmt.kind, StmtKind::Break) {
@@ -568,20 +594,132 @@ impl<'a> FnCx<'a> {
 
     /// `local (a: A, _) = e;` (§ 9.4): `e` is a tuple with one element per position, and
     /// each written type is the type of its element.
+    /// The initial value of `local x = e;` (§ 8.2): `e` has no expected type, and a
+    /// literal-only `e` is an `s32` when it is an integer, an `f64` when it is a float.
+    fn inferred(&mut self, init: &ast::Expr) -> Result<hir::Expr> {
+        if needs_type_context(init) {
+            let ty = if has_float_literal(init) {
+                Type::F64
+            } else {
+                Type::S32
+            };
+            return self.expr(init, Some(ty));
+        }
+        if !self_typed(init) {
+            return cannot_infer(init.span);
+        }
+        self.expr(init, None)
+    }
+
+    /// `for (x in xs) { … }` (§ 9.10), written as the loop that Wasm runs on the array
+    /// (§ 12.8): `xs` is evaluated once into a hidden local, a hidden index goes from 0
+    /// to its length, and `x` is declared at the start of the body. The index moves on
+    /// before the body, so that `continue` goes to the next element.
+    fn for_(&mut self, name: &Ident, list: &ast::Expr, body: &ast::Block) -> Result<hir::Stmt> {
+        if !self_typed(list) {
+            return cannot_infer(list.span);
+        }
+        let list_span = list.span;
+        let list = self.expr(list, None)?;
+        let list_ty = list.value_ty();
+        let TypeKind::List { elem, .. } = *self.types.kind(list_ty) else {
+            let advice = if list_ty == Type::STRING {
+                ": write `string::chars(s)` or `string::bytes(s)`"
+            } else {
+                ""
+            };
+            return err(
+                Code::ForNotList,
+                list_span,
+                format!(
+                    "`for` goes through a list, and this value is a `{}`{advice}",
+                    self.show(list_ty)
+                ),
+            );
+        };
+        let hidden = |this: &mut Self, ty: Type| {
+            this.locals.push(ty);
+            (this.locals.len() - 1) as LocalId
+        };
+        let xs = hidden(self, list_ty);
+        let index = hidden(self, Type::U32);
+        let get = |local: LocalId, ty: Type| typed(hir::ExprKind::Local(local), ty);
+
+        self.scopes.push(Vec::new());
+        let x = self.declare(name, elem)?;
+        self.loop_depth += 1;
+        let statements = self.block(body);
+        self.loop_depth -= 1;
+        self.scopes.pop();
+
+        let mut inner = vec![
+            hir::Stmt::Local {
+                local: x,
+                init: Some(typed(
+                    hir::ExprKind::Index {
+                        expr: Box::new(get(xs, list_ty)),
+                        index: Box::new(get(index, Type::U32)),
+                    },
+                    elem,
+                )),
+            },
+            hir::Stmt::Assign {
+                place: Place::Local(index),
+                value: typed(
+                    hir::ExprKind::Binary {
+                        op: BinOp::Add,
+                        lhs: Box::new(get(index, Type::U32)),
+                        rhs: Box::new(typed(hir::ExprKind::Const(Const::I32(1)), Type::U32)),
+                    },
+                    Type::U32,
+                ),
+            },
+        ];
+        inner.extend(statements?);
+        Ok(hir::Stmt::Block(vec![
+            hir::Stmt::Local {
+                local: xs,
+                init: Some(list),
+            },
+            hir::Stmt::Local {
+                local: index,
+                init: None,
+            },
+            hir::Stmt::While {
+                cond: typed(
+                    hir::ExprKind::Binary {
+                        op: BinOp::Lt,
+                        lhs: Box::new(get(index, Type::U32)),
+                        rhs: Box::new(typed(
+                            hir::ExprKind::Builtin {
+                                func: hir::Builtin::ListLen,
+                                args: vec![get(xs, list_ty)],
+                            },
+                            Type::U32,
+                        )),
+                    },
+                    Type::BOOL,
+                ),
+                body: inner,
+            },
+        ]))
+    }
+
     fn destructure(
         &mut self,
-        bindings: &[Option<(Ident, ast::TypeExpr)>],
+        bindings: &[Option<(Ident, Option<ast::TypeExpr>)>],
         init: &ast::Expr,
     ) -> Result<hir::Stmt> {
         let mut written = Vec::with_capacity(bindings.len());
         for binding in bindings {
             written.push(match binding {
-                Some((_, ty)) => {
+                Some((_, Some(ty))) => {
                     let t = self.resolver.resolve(self.types, ty, self.iface)?;
                     super::no_borrow(self.types, t, ty.span)?;
                     Some(t)
                 }
-                None => None,
+                // A name without type and a `_` give no expected type (§ 9.4).
+                Some((_, None)) | None => None,
             });
         }
         // The expected type of `e` is the tuple of the written types; a `_` gives no
@@ -677,7 +815,7 @@ impl<'a> FnCx<'a> {
             );
         }
         for ((binding, written), &elem) in bindings.iter().zip(&written).zip(&elems) {
-            if let (Some((name, ty)), Some(written)) = (binding, *written)
+            if let (Some((name, Some(ty))), Some(written)) = (binding, *written)
                 && written != elem
             {
                 return err(

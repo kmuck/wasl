@@ -242,15 +242,17 @@ pub struct Stmt {
 
 #[derive(Debug)]
 pub enum StmtKind {
+    /// `local x: T = e;`, `local x: T;` or `local x = e;` (§ 9.4): the type or the
+    /// initial value is present.
     Local {
         name: Ident,
-        ty: TypeExpr,
+        ty: Option<TypeExpr>,
         init: Option<Expr>,
     },
-    /// `local (a: A, _) = e;` (§ 9.4): one local per element of a tuple, or `None` for
-    /// an element written `_`.
+    /// `local (a: A, b, _) = e;` (§ 9.4): one local per element of a tuple, with or
+    /// without its type, or `None` for an element written `_`.
     Destructure {
-        bindings: Vec<Option<(Ident, TypeExpr)>>,
+        bindings: Vec<Option<(Ident, Option<TypeExpr>)>>,
         init: Expr,
     },
     Assign {
@@ -260,6 +262,12 @@ pub enum StmtKind {
     If(If),
     While {
         cond: Expr,
+        body: Block,
+    },
+    /// `for (x in xs) { … }` (§ 9.10).
+    For {
+        name: Ident,
+        list: Expr,
         body: Block,
     },
     Match(Match),

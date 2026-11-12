@@ -78,10 +78,13 @@ With these, every WIT type except async types (`stream`, `future`) has its WaSL 
 
 With these, every WIT type except `map<K, V>`, `error-context`, and `stream` and `future` without an element type has its WaSL equivalent, and a WaSL component can run as a WASI 0.3 command (§ 15.7) or HTTP service (§ 15.8).
 
-**Added in 0.5** (*specified, not available yet*):
+**Added in 0.5**, available:
 
 - locals without a type, `local x = e;`, and in destructurings (§ 9.4);
-- `for (x in xs)` on lists (§ 9.10);
+- `for (x in xs)` on lists (§ 9.10), with braces until bodies without braces are available.
+
+**Added in 0.5** (*specified, not available yet*):
+
 - bodies without braces: a single simple statement after `if`, `else`, `while` and `for` (§ 5.3);
 - built-in functions written `type.f(…)`, with `T.to_string` and `T.parse` on integers (§ 8.17);
 - call statements that discard their value, without `_ =` (§ 9.6);

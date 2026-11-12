@@ -113,6 +113,7 @@ pub fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
                 visit_expr(cond, f);
                 visit_stmts(body, f);
             }
+            Stmt::Block(body) => visit_stmts(body, f),
             Stmt::Return(value) => value.iter().for_each(|e| visit_expr(e, f)),
             Stmt::TaskReturn(e) | Stmt::Call(e) => visit_expr(e, f),
             Stmt::Break | Stmt::Continue => {}
@@ -279,6 +280,9 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    /// Statements in a block of their own. The analysis writes a `for` (§ 9.10) as the
+    /// block of its hidden locals and its `while`.
+    Block(Vec<Stmt>),
     /// `match` (§ 8.16). Exactly one arm or the `else` block runs.
     Match {
         scrutinee: Expr,
